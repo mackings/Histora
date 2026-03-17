@@ -980,6 +980,11 @@ textarea {
   max-width: 280px;
 }
 
+.transcription-indicator button {
+  justify-self: end;
+  white-space: nowrap;
+}
+
 .hidden-media-input {
   display: none;
 }
@@ -1696,6 +1701,23 @@ textarea {
 
   .topbar-copy strong {
     font-size: 1.2rem;
+  }
+
+  .transcription-indicator {
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 8px;
+    align-items: start;
+  }
+
+  .transcription-indicator button {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .transcription-language-row label {
+    max-width: none;
+    width: 100%;
   }
 }
 

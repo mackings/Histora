@@ -1413,9 +1413,14 @@ function StudioPage() {
     });
   };
 
-  const startMobileRelayTranscription = (AudioContextConstructor: typeof AudioContext) => {
+  const startRelayTranscription = (
+    AudioContextConstructor: typeof AudioContext,
+    mode: "mobile" | "desktop" = "mobile"
+  ) => {
     setTranscriptionStatus("Preparing live transcription...");
-    setStudioMessage("Starting Histora mobile transcription relay...");
+    setStudioMessage(
+      mode === "mobile" ? "Starting Histora mobile transcription relay..." : "Starting Histora transcription relay..."
+    );
     transcriptionManualStopRef.current = false;
     transcriptionCommittedTurnsRef.current.clear();
     transcriptionFallbackTriggeredRef.current = false;
@@ -1466,7 +1471,9 @@ function StudioPage() {
           setIsTranscribing(true);
           const selectedLanguageLabel =
             transcriptionLanguages.find((language) => language.value === transcriptionLanguage)?.label ?? transcriptionLanguage;
-          setStudioMessage(`Histora relay transcription started in ${selectedLanguageLabel}.`);
+          setStudioMessage(
+            `${mode === "mobile" ? "Histora mobile relay" : "Histora relay"} transcription started in ${selectedLanguageLabel}.`
+          );
           setTranscriptionStatus(`Listening live in ${selectedLanguageLabel}...`);
         };
 
@@ -1486,10 +1493,10 @@ function StudioPage() {
           }
 
           if (payload.type === "Error") {
-            cleanupStreamingTranscription({ nextStatus: "Voice transcription connection failed", markManual: false });
-            setStudioMessage(payload.error || "The mobile transcription relay failed.");
-            return;
-          }
+          cleanupStreamingTranscription({ nextStatus: "Voice transcription connection failed", markManual: false });
+          setStudioMessage(payload.error || `The ${mode} transcription relay failed.`);
+          return;
+        }
 
           if (payload.type === "Begin") {
             setTranscriptionStatus("Live transcription connected");
@@ -1532,7 +1539,7 @@ function StudioPage() {
           }
 
           cleanupStreamingTranscription({ nextStatus: "Voice transcription connection failed", markManual: false });
-          setStudioMessage("The mobile transcription relay connection failed.");
+          setStudioMessage(`The ${mode} transcription relay connection failed.`);
         };
 
         relaySocket.onclose = (event) => {
@@ -1543,7 +1550,7 @@ function StudioPage() {
           }
 
           cleanupStreamingTranscription({ nextStatus: "Voice transcription disconnected", markManual: false });
-          setStudioMessage(`The mobile transcription relay disconnected (code ${event.code}).`);
+          setStudioMessage(`The ${mode} transcription relay disconnected (code ${event.code}).`);
         };
       } catch {
         if (typeof MediaRecorder === "undefined") {
@@ -1552,7 +1559,7 @@ function StudioPage() {
           return;
         }
 
-        setStudioMessage("The mobile relay was unavailable. Falling back to chunk transcription.");
+        setStudioMessage(`The ${mode} relay was unavailable. Falling back to chunk transcription.`);
         startChunkTranscription();
       }
     })();
@@ -1586,7 +1593,7 @@ function StudioPage() {
         return;
       }
 
-      startMobileRelayTranscription(AudioContextConstructor);
+      startRelayTranscription(AudioContextConstructor, "mobile");
       return;
     }
 
@@ -1610,187 +1617,7 @@ function StudioPage() {
       return;
     }
 
-    setTranscriptionStatus("Preparing live transcription...");
-    setStudioMessage("Starting AssemblyAI live transcription...");
-    transcriptionManualStopRef.current = false;
-    transcriptionCommittedTurnsRef.current.clear();
-
-    void (async () => {
-      try {
-        const tokenResponse = await fetch(
-          `${apiBaseUrl}/transcriptions/token?expiresInSeconds=300&maxSessionDurationSeconds=1800`
-        );
-
-        if (!tokenResponse.ok) {
-          const errorText = await tokenResponse.text();
-          throw new Error(errorText || "Streaming token request failed.");
-        }
-
-        const tokenPayload = (await tokenResponse.json()) as { token?: string };
-
-        if (!tokenPayload.token) {
-          throw new Error("Streaming token was not returned.");
-        }
-
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
-          }
-        });
-
-        const audioContext = new AudioContextConstructor();
-        await audioContext.resume();
-
-        const sourceNode = audioContext.createMediaStreamSource(stream);
-        const socketUrl = new URL("wss://streaming.assemblyai.com/v3/ws");
-        socketUrl.searchParams.set("token", tokenPayload.token);
-        socketUrl.searchParams.set("sample_rate", "16000");
-        socketUrl.searchParams.set("encoding", "pcm_s16le");
-        socketUrl.searchParams.set("format_turns", "true");
-        socketUrl.searchParams.set("speech_model", streamingConfig?.speechModel ?? "universal-streaming-english");
-        socketUrl.searchParams.set("inactivity_timeout", "60");
-        if (streamingConfig?.languageDetection) {
-          socketUrl.searchParams.set("language_detection", "true");
-        }
-
-        const socket = new WebSocket(socketUrl);
-        socket.binaryType = "arraybuffer";
-
-        transcriptionStreamRef.current = stream;
-        transcriptionAudioContextRef.current = audioContext;
-        transcriptionSourceNodeRef.current = sourceNode;
-        transcriptionSocketRef.current = socket;
-
-        const streamAudioChunk = (inputData: Float32Array) => {
-          if (socket.readyState !== WebSocket.OPEN) {
-            return;
-          }
-
-          const downsampled = downsampleAudioBuffer(inputData, audioContext.sampleRate, 16000);
-
-          if (downsampled.length === 0) {
-            return;
-          }
-
-          socket.send(encodePcm16(downsampled));
-        };
-
-        const processorNode = audioContext.createScriptProcessor(4096, 1, 1);
-        processorNode.onaudioprocess = (event) => {
-          streamAudioChunk(event.inputBuffer.getChannelData(0));
-        };
-
-        sourceNode.connect(processorNode);
-        processorNode.connect(audioContext.destination);
-        transcriptionProcessorRef.current = processorNode;
-
-        socket.onopen = () => {
-          setIsTranscribing(true);
-          const selectedLanguageLabel =
-            transcriptionLanguages.find((language) => language.value === transcriptionLanguage)?.label ?? transcriptionLanguage;
-          setStudioMessage(`AssemblyAI live transcription started in ${selectedLanguageLabel}.`);
-          setTranscriptionStatus(`Listening live in ${selectedLanguageLabel}...`);
-        };
-
-        socket.onmessage = (event) => {
-          const payload = JSON.parse(String(event.data)) as {
-            type?: string;
-            transcript?: string;
-            end_of_turn?: boolean;
-            turn_order?: number;
-            turn_is_formatted?: boolean;
-            error?: string;
-            message?: string;
-          };
-
-          if (payload.type === "Error") {
-            cleanupStreamingTranscription({ nextStatus: "Voice transcription connection failed", markManual: false });
-            setStudioMessage(payload.error || "AssemblyAI live transcription failed.");
-            return;
-          }
-
-          if (payload.type === "Begin") {
-            setTranscriptionStatus("Live transcription connected");
-            return;
-          }
-
-          if (payload.type === "Termination") {
-            cleanupStreamingTranscription({ nextStatus: "Voice transcription ended", markManual: false });
-            setStudioMessage(payload.message || "AssemblyAI ended the streaming session.");
-            return;
-          }
-
-          if (payload.type !== "Turn") {
-            return;
-          }
-
-          const transcript = payload.transcript?.trim();
-
-          if (!transcript) {
-            return;
-          }
-
-          if (payload.end_of_turn && typeof payload.turn_order === "number") {
-            if (!transcriptionCommittedTurnsRef.current.has(payload.turn_order)) {
-              transcriptionCommittedTurnsRef.current.add(payload.turn_order);
-              commitTranscript(transcript);
-              setStudioMessage("Voice transcription updated the chapter body.");
-            }
-
-            setTranscriptionStatus(`Captured: ${transcript}`);
-            return;
-          }
-
-          setTranscriptionStatus(`Hearing: ${transcript}`);
-        };
-
-        socket.onerror = () => {
-          if (transcriptionManualStopRef.current) {
-            return;
-          }
-
-          cleanupStreamingTranscription({ nextStatus: "Voice transcription connection failed", markManual: false });
-          if (!transcriptionFallbackTriggeredRef.current && typeof MediaRecorder !== "undefined") {
-            transcriptionFallbackTriggeredRef.current = true;
-            setStudioMessage("Live transcription dropped on this device. Falling back to mobile-safe transcription.");
-            startChunkTranscription();
-            return;
-          }
-
-          setStudioMessage("AssemblyAI live transcription connection failed.");
-        };
-
-        socket.onclose = (event) => {
-          if (transcriptionManualStopRef.current) {
-            transcriptionManualStopRef.current = false;
-            setIsTranscribing(false);
-            return;
-          }
-
-          cleanupStreamingTranscription({ nextStatus: "Voice transcription disconnected", markManual: false });
-          if (!transcriptionFallbackTriggeredRef.current && typeof MediaRecorder !== "undefined") {
-            transcriptionFallbackTriggeredRef.current = true;
-            setStudioMessage("Live transcription disconnected on this device. Falling back to mobile-safe transcription.");
-            startChunkTranscription();
-            return;
-          }
-
-          setStudioMessage(`AssemblyAI live transcription disconnected (code ${event.code}).`);
-        };
-      } catch {
-        if (typeof MediaRecorder === "undefined") {
-          setStudioMessage("Voice transcription could not be started.");
-          setTranscriptionStatus("Voice transcription unavailable");
-          return;
-        }
-
-        setStudioMessage("AssemblyAI streaming was unavailable. Falling back to chunk transcription.");
-        startChunkTranscription();
-      }
-    })();
+    startRelayTranscription(AudioContextConstructor, "desktop");
   };
 
   const stopVoiceTranscription = () => {
