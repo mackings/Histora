@@ -1375,6 +1375,14 @@ function StudioPage() {
     return null;
   };
 
+  const getRelaySocketUrl = (language: string) => {
+    const apiUrl = new URL(apiBaseUrl);
+    const protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
+    const relayUrl = new URL(`${protocol}//${apiUrl.host}/ws/transcription`);
+    relayUrl.searchParams.set("language", language);
+    return relayUrl;
+  };
+
   const startChunkTranscription = () => {
     navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
       const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
@@ -1405,6 +1413,151 @@ function StudioPage() {
     });
   };
 
+  const startMobileRelayTranscription = (AudioContextConstructor: typeof AudioContext) => {
+    setTranscriptionStatus("Preparing live transcription...");
+    setStudioMessage("Starting Histora mobile transcription relay...");
+    transcriptionManualStopRef.current = false;
+    transcriptionCommittedTurnsRef.current.clear();
+    transcriptionFallbackTriggeredRef.current = false;
+
+    void (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+
+        const audioContext = new AudioContextConstructor();
+        await audioContext.resume();
+
+        const sourceNode = audioContext.createMediaStreamSource(stream);
+        const processorNode = audioContext.createScriptProcessor(4096, 1, 1);
+        const relaySocket = new WebSocket(getRelaySocketUrl(transcriptionLanguage));
+        relaySocket.binaryType = "arraybuffer";
+
+        transcriptionStreamRef.current = stream;
+        transcriptionAudioContextRef.current = audioContext;
+        transcriptionSourceNodeRef.current = sourceNode;
+        transcriptionProcessorRef.current = processorNode;
+        transcriptionSocketRef.current = relaySocket;
+
+        processorNode.onaudioprocess = (event) => {
+          if (relaySocket.readyState !== WebSocket.OPEN) {
+            return;
+          }
+
+          const inputData = event.inputBuffer.getChannelData(0);
+          const downsampled = downsampleAudioBuffer(inputData, audioContext.sampleRate, 16000);
+
+          if (downsampled.length === 0) {
+            return;
+          }
+
+          relaySocket.send(encodePcm16(downsampled));
+        };
+
+        relaySocket.onopen = () => {
+          sourceNode.connect(processorNode);
+          processorNode.connect(audioContext.destination);
+          setIsTranscribing(true);
+          const selectedLanguageLabel =
+            transcriptionLanguages.find((language) => language.value === transcriptionLanguage)?.label ?? transcriptionLanguage;
+          setStudioMessage(`Histora relay transcription started in ${selectedLanguageLabel}.`);
+          setTranscriptionStatus(`Listening live in ${selectedLanguageLabel}...`);
+        };
+
+        relaySocket.onmessage = (event) => {
+          const payload = JSON.parse(String(event.data)) as {
+            type?: string;
+            transcript?: string;
+            end_of_turn?: boolean;
+            turn_order?: number;
+            error?: string;
+            message?: string;
+          };
+
+          if (payload.type === "RelayReady") {
+            setTranscriptionStatus("Mobile transcription relay connected");
+            return;
+          }
+
+          if (payload.type === "Error") {
+            cleanupStreamingTranscription({ nextStatus: "Voice transcription connection failed", markManual: false });
+            setStudioMessage(payload.error || "The mobile transcription relay failed.");
+            return;
+          }
+
+          if (payload.type === "Begin") {
+            setTranscriptionStatus("Live transcription connected");
+            return;
+          }
+
+          if (payload.type === "Termination") {
+            cleanupStreamingTranscription({ nextStatus: "Voice transcription ended", markManual: false });
+            setStudioMessage(payload.message || "The transcription session ended.");
+            return;
+          }
+
+          if (payload.type !== "Turn") {
+            return;
+          }
+
+          const transcript = payload.transcript?.trim();
+
+          if (!transcript) {
+            return;
+          }
+
+          if (payload.end_of_turn && typeof payload.turn_order === "number") {
+            if (!transcriptionCommittedTurnsRef.current.has(payload.turn_order)) {
+              transcriptionCommittedTurnsRef.current.add(payload.turn_order);
+              commitTranscript(transcript);
+              setStudioMessage("Voice transcription updated the chapter body.");
+            }
+
+            setTranscriptionStatus(`Captured: ${transcript}`);
+            return;
+          }
+
+          setTranscriptionStatus(`Hearing: ${transcript}`);
+        };
+
+        relaySocket.onerror = () => {
+          if (transcriptionManualStopRef.current) {
+            return;
+          }
+
+          cleanupStreamingTranscription({ nextStatus: "Voice transcription connection failed", markManual: false });
+          setStudioMessage("The mobile transcription relay connection failed.");
+        };
+
+        relaySocket.onclose = (event) => {
+          if (transcriptionManualStopRef.current) {
+            transcriptionManualStopRef.current = false;
+            setIsTranscribing(false);
+            return;
+          }
+
+          cleanupStreamingTranscription({ nextStatus: "Voice transcription disconnected", markManual: false });
+          setStudioMessage(`The mobile transcription relay disconnected (code ${event.code}).`);
+        };
+      } catch {
+        if (typeof MediaRecorder === "undefined") {
+          setStudioMessage("Voice transcription could not be started.");
+          setTranscriptionStatus("Voice transcription unavailable");
+          return;
+        }
+
+        setStudioMessage("The mobile relay was unavailable. Falling back to chunk transcription.");
+        startChunkTranscription();
+      }
+    })();
+  };
+
   const startVoiceTranscription = () => {
     if (!navigator.mediaDevices?.getUserMedia) {
       setStudioMessage("Live transcription recording is not supported in this browser.");
@@ -1418,13 +1571,22 @@ function StudioPage() {
       (window.navigator.maxTouchPoints > 1 && /Macintosh/i.test(window.navigator.userAgent));
     transcriptionFallbackTriggeredRef.current = false;
 
+    const AudioContextConstructor =
+      window.AudioContext ||
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
     if (isMobileBrowser) {
-      if (typeof MediaRecorder === "undefined") {
-        setStudioMessage("Voice transcription is not supported in this browser.");
+      if (!AudioContextConstructor) {
+        if (typeof MediaRecorder === "undefined") {
+          setStudioMessage("Voice transcription is not supported in this browser.");
+          return;
+        }
+
+        startChunkTranscription();
         return;
       }
 
-      startChunkTranscription();
+      startMobileRelayTranscription(AudioContextConstructor);
       return;
     }
 
@@ -1437,10 +1599,6 @@ function StudioPage() {
       startChunkTranscription();
       return;
     }
-
-    const AudioContextConstructor =
-      window.AudioContext ||
-      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
 
     if (!AudioContextConstructor) {
       if (typeof MediaRecorder === "undefined") {

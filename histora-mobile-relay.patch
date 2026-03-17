@@ -1,0 +1,488 @@
+--- a/apps/api/package.json
++++ b/apps/api/package.json
+@@ -11,6 +11,7 @@
+     "typecheck": "tsc -p tsconfig.json --noEmit"
+   },
+   "dependencies": {
++    "@types/ws": "^8.18.1",
+     "bcryptjs": "^3.0.2",
+     "cookie-parser": "^1.4.7",
+     "cors": "^2.8.5",
+@@ -21,6 +22,7 @@
+     "jsonwebtoken": "^9.0.2",
+     "mongoose": "^8.13.2",
+     "morgan": "^1.10.0",
++    "ws": "^8.19.0",
+     "zod": "^3.24.2"
+   },
+   "devDependencies": {
+--- a/apps/api/src/server.ts
++++ b/apps/api/src/server.ts
+@@ -1,12 +1,18 @@
++import { createServer } from "http";
++
+ import { createApp } from "./app.js";
+ import { connectDatabase } from "./config/db.js";
+ import { env } from "./config/env.js";
++import { registerTranscriptionRelay } from "./realtime/transcription-relay.js";
+ 
+ async function bootstrap() {
+   await connectDatabase();
+ 
+   const app = createApp();
+-  app.listen(env.PORT, () => {
++  const server = createServer(app);
++  registerTranscriptionRelay(server);
++
++  server.listen(env.PORT, () => {
+     console.log(`Histora API listening on port ${env.PORT}`);
+   });
+ }
+--- a/apps/web/src/App.tsx
++++ b/apps/web/src/App.tsx
+@@ -1373,6 +1373,14 @@
+     }
+ 
+     return null;
++  };
++
++  const getRelaySocketUrl = (language: string) => {
++    const apiUrl = new URL(apiBaseUrl);
++    const protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
++    const relayUrl = new URL(`${protocol}//${apiUrl.host}/ws/transcription`);
++    relayUrl.searchParams.set("language", language);
++    return relayUrl;
+   };
+ 
+   const startChunkTranscription = () => {
+@@ -1403,6 +1411,151 @@
+       setStudioMessage("Microphone permission was denied or unavailable.");
+       setTranscriptionStatus("Voice transcription unavailable");
+     });
++  };
++
++  const startMobileRelayTranscription = (AudioContextConstructor: typeof AudioContext) => {
++    setTranscriptionStatus("Preparing live transcription...");
++    setStudioMessage("Starting Histora mobile transcription relay...");
++    transcriptionManualStopRef.current = false;
++    transcriptionCommittedTurnsRef.current.clear();
++    transcriptionFallbackTriggeredRef.current = false;
++
++    void (async () => {
++      try {
++        const stream = await navigator.mediaDevices.getUserMedia({
++          audio: {
++            channelCount: 1,
++            echoCancellation: true,
++            noiseSuppression: true,
++            autoGainControl: true
++          }
++        });
++
++        const audioContext = new AudioContextConstructor();
++        await audioContext.resume();
++
++        const sourceNode = audioContext.createMediaStreamSource(stream);
++        const processorNode = audioContext.createScriptProcessor(4096, 1, 1);
++        const relaySocket = new WebSocket(getRelaySocketUrl(transcriptionLanguage));
++        relaySocket.binaryType = "arraybuffer";
++
++        transcriptionStreamRef.current = stream;
++        transcriptionAudioContextRef.current = audioContext;
++        transcriptionSourceNodeRef.current = sourceNode;
++        transcriptionProcessorRef.current = processorNode;
++        transcriptionSocketRef.current = relaySocket;
++
++        processorNode.onaudioprocess = (event) => {
++          if (relaySocket.readyState !== WebSocket.OPEN) {
++            return;
++          }
++
++          const inputData = event.inputBuffer.getChannelData(0);
++          const downsampled = downsampleAudioBuffer(inputData, audioContext.sampleRate, 16000);
++
++          if (downsampled.length === 0) {
++            return;
++          }
++
++          relaySocket.send(encodePcm16(downsampled));
++        };
++
++        relaySocket.onopen = () => {
++          sourceNode.connect(processorNode);
++          processorNode.connect(audioContext.destination);
++          setIsTranscribing(true);
++          const selectedLanguageLabel =
++            transcriptionLanguages.find((language) => language.value === transcriptionLanguage)?.label ?? transcriptionLanguage;
++          setStudioMessage(`Histora relay transcription started in ${selectedLanguageLabel}.`);
++          setTranscriptionStatus(`Listening live in ${selectedLanguageLabel}...`);
++        };
++
++        relaySocket.onmessage = (event) => {
++          const payload = JSON.parse(String(event.data)) as {
++            type?: string;
++            transcript?: string;
++            end_of_turn?: boolean;
++            turn_order?: number;
++            error?: string;
++            message?: string;
++          };
++
++          if (payload.type === "RelayReady") {
++            setTranscriptionStatus("Mobile transcription relay connected");
++            return;
++          }
++
++          if (payload.type === "Error") {
++            cleanupStreamingTranscription({ nextStatus: "Voice transcription connection failed", markManual: false });
++            setStudioMessage(payload.error || "The mobile transcription relay failed.");
++            return;
++          }
++
++          if (payload.type === "Begin") {
++            setTranscriptionStatus("Live transcription connected");
++            return;
++          }
++
++          if (payload.type === "Termination") {
++            cleanupStreamingTranscription({ nextStatus: "Voice transcription ended", markManual: false });
++            setStudioMessage(payload.message || "The transcription session ended.");
++            return;
++          }
++
++          if (payload.type !== "Turn") {
++            return;
++          }
++
++          const transcript = payload.transcript?.trim();
++
++          if (!transcript) {
++            return;
++          }
++
++          if (payload.end_of_turn && typeof payload.turn_order === "number") {
++            if (!transcriptionCommittedTurnsRef.current.has(payload.turn_order)) {
++              transcriptionCommittedTurnsRef.current.add(payload.turn_order);
++              commitTranscript(transcript);
++              setStudioMessage("Voice transcription updated the chapter body.");
++            }
++
++            setTranscriptionStatus(`Captured: ${transcript}`);
++            return;
++          }
++
++          setTranscriptionStatus(`Hearing: ${transcript}`);
++        };
++
++        relaySocket.onerror = () => {
++          if (transcriptionManualStopRef.current) {
++            return;
++          }
++
++          cleanupStreamingTranscription({ nextStatus: "Voice transcription connection failed", markManual: false });
++          setStudioMessage("The mobile transcription relay connection failed.");
++        };
++
++        relaySocket.onclose = (event) => {
++          if (transcriptionManualStopRef.current) {
++            transcriptionManualStopRef.current = false;
++            setIsTranscribing(false);
++            return;
++          }
++
++          cleanupStreamingTranscription({ nextStatus: "Voice transcription disconnected", markManual: false });
++          setStudioMessage(`The mobile transcription relay disconnected (code ${event.code}).`);
++        };
++      } catch {
++        if (typeof MediaRecorder === "undefined") {
++          setStudioMessage("Voice transcription could not be started.");
++          setTranscriptionStatus("Voice transcription unavailable");
++          return;
++        }
++
++        setStudioMessage("The mobile relay was unavailable. Falling back to chunk transcription.");
++        startChunkTranscription();
++      }
++    })();
+   };
+ 
+   const startVoiceTranscription = () => {
+@@ -1418,13 +1571,22 @@
+       (window.navigator.maxTouchPoints > 1 && /Macintosh/i.test(window.navigator.userAgent));
+     transcriptionFallbackTriggeredRef.current = false;
+ 
++    const AudioContextConstructor =
++      window.AudioContext ||
++      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
++
+     if (isMobileBrowser) {
+-      if (typeof MediaRecorder === "undefined") {
+-        setStudioMessage("Voice transcription is not supported in this browser.");
++      if (!AudioContextConstructor) {
++        if (typeof MediaRecorder === "undefined") {
++          setStudioMessage("Voice transcription is not supported in this browser.");
++          return;
++        }
++
++        startChunkTranscription();
+         return;
+       }
+ 
+-      startChunkTranscription();
++      startMobileRelayTranscription(AudioContextConstructor);
+       return;
+     }
+ 
+@@ -1438,10 +1600,6 @@
+       return;
+     }
+ 
+-    const AudioContextConstructor =
+-      window.AudioContext ||
+-      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+-
+     if (!AudioContextConstructor) {
+       if (typeof MediaRecorder === "undefined") {
+         setStudioMessage("Voice transcription is not supported in this browser.");
+--- a/apps/api/src/realtime/transcription-relay.ts
++++ b/apps/api/src/realtime/transcription-relay.ts
+@@ -0,0 +1,161 @@
++import type { Server as HttpServer, IncomingMessage } from "http";
++import { WebSocket, WebSocketServer } from "ws";
++
++import { env } from "../config/env.js";
++
++const ASSEMBLYAI_STREAMING_URL = "wss://streaming.assemblyai.com/v3/ws";
++
++const getStreamingConfig = (language: string) => {
++  if (language === "en-US" || language === "en-GB") {
++    return {
++      speechModel: "universal-streaming-english",
++      languageDetection: false
++    };
++  }
++
++  if (
++    language === "fr-FR" ||
++    language === "es-ES" ||
++    language === "de-DE" ||
++    language === "pt-BR" ||
++    language === "it-IT"
++  ) {
++    return {
++      speechModel: "universal-streaming-multilingual",
++      languageDetection: true
++    };
++  }
++
++  return null;
++};
++
++const closeSocket = (socket: WebSocket | null | undefined) => {
++  if (!socket || socket.readyState === WebSocket.CLOSED) {
++    return;
++  }
++
++  socket.close();
++};
++
++const isUpgradeRequestForRelay = (request: IncomingMessage) => {
++  const host = request.headers.host;
++
++  if (!host || !request.url) {
++    return false;
++  }
++
++  const requestUrl = new URL(request.url, `http://${host}`);
++  return requestUrl.pathname === "/ws/transcription";
++};
++
++export function registerTranscriptionRelay(server: HttpServer) {
++  const relayServer = new WebSocketServer({ noServer: true });
++
++  server.on("upgrade", (request, socket, head) => {
++    if (!isUpgradeRequestForRelay(request)) {
++      return;
++    }
++
++    relayServer.handleUpgrade(request, socket, head, (clientSocket) => {
++      relayServer.emit("connection", clientSocket, request);
++    });
++  });
++
++  relayServer.on("connection", (clientSocket, request) => {
++    if (!env.ASSEMBLYAI_API_KEY) {
++      clientSocket.send(
++        JSON.stringify({
++          type: "Error",
++          error: "AssemblyAI is not configured on the server."
++        })
++      );
++      clientSocket.close();
++      return;
++    }
++
++    const host = request.headers.host;
++    const requestUrl = new URL(request.url ?? "/ws/transcription", `http://${host ?? "localhost"}`);
++    const language = requestUrl.searchParams.get("language") ?? "en-US";
++    const streamingConfig = getStreamingConfig(language) ?? {
++      speechModel: "universal-streaming-multilingual",
++      languageDetection: true
++    };
++
++    const assemblyUrl = new URL(ASSEMBLYAI_STREAMING_URL);
++    assemblyUrl.searchParams.set("sample_rate", "16000");
++    assemblyUrl.searchParams.set("encoding", "pcm_s16le");
++    assemblyUrl.searchParams.set("format_turns", "true");
++    assemblyUrl.searchParams.set("speech_model", streamingConfig.speechModel);
++    assemblyUrl.searchParams.set("inactivity_timeout", "60");
++    if (streamingConfig.languageDetection) {
++      assemblyUrl.searchParams.set("language_detection", "true");
++    }
++
++    const assemblySocket = new WebSocket(assemblyUrl, {
++      headers: {
++        Authorization: env.ASSEMBLYAI_API_KEY
++      }
++    });
++
++    const teardown = () => {
++      closeSocket(clientSocket);
++      closeSocket(assemblySocket);
++    };
++
++    assemblySocket.on("open", () => {
++      clientSocket.send(
++        JSON.stringify({
++          type: "RelayReady"
++        })
++      );
++    });
++
++    assemblySocket.on("message", (message, isBinary) => {
++      if (clientSocket.readyState !== WebSocket.OPEN) {
++        return;
++      }
++
++      clientSocket.send(message, { binary: isBinary });
++    });
++
++    assemblySocket.on("error", () => {
++      if (clientSocket.readyState === WebSocket.OPEN) {
++        clientSocket.send(
++          JSON.stringify({
++            type: "Error",
++            error: "The transcription relay connection failed."
++          })
++        );
++      }
++      teardown();
++    });
++
++    assemblySocket.on("close", () => {
++      closeSocket(clientSocket);
++    });
++
++    clientSocket.on("message", (message, isBinary) => {
++      if (assemblySocket.readyState !== WebSocket.OPEN) {
++        return;
++      }
++
++      if (isBinary) {
++        assemblySocket.send(message, { binary: true });
++        return;
++      }
++
++      assemblySocket.send(message.toString());
++    });
++
++    clientSocket.on("close", () => {
++      if (assemblySocket.readyState === WebSocket.OPEN) {
++        assemblySocket.send(JSON.stringify({ type: "Terminate" }));
++      }
++      closeSocket(assemblySocket);
++    });
++
++    clientSocket.on("error", () => {
++      closeSocket(assemblySocket);
++    });
++  });
++}
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -20,6 +20,7 @@
+       "name": "@histora/api",
+       "version": "0.1.0",
+       "dependencies": {
++        "@types/ws": "^8.18.1",
+         "bcryptjs": "^3.0.2",
+         "cookie-parser": "^1.4.7",
+         "cors": "^2.8.5",
+@@ -30,6 +31,7 @@
+         "jsonwebtoken": "^9.0.2",
+         "mongoose": "^8.13.2",
+         "morgan": "^1.10.0",
++        "ws": "^8.19.0",
+         "zod": "^3.24.2"
+       },
+       "devDependencies": {
+@@ -1327,7 +1329,6 @@
+       "version": "22.19.15",
+       "resolved": "https://registry.npmjs.org/@types/node/-/node-22.19.15.tgz",
+       "integrity": "sha512-F0R/h2+dsy5wJAUe3tAU6oqa2qbWY5TpNfL/RGmo1y38hiyO1w3x2jPtt76wmuaJI4DQnOBu21cNXQ2STIUUWg==",
+-      "dev": true,
+       "license": "MIT",
+       "dependencies": {
+         "undici-types": "~6.21.0"
+@@ -1403,6 +1404,15 @@
+         "@types/webidl-conversions": "*"
+       }
+     },
++    "node_modules/@types/ws": {
++      "version": "8.18.1",
++      "resolved": "https://registry.npmjs.org/@types/ws/-/ws-8.18.1.tgz",
++      "integrity": "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==",
++      "license": "MIT",
++      "dependencies": {
++        "@types/node": "*"
++      }
++    },
+     "node_modules/@vitejs/plugin-react-swc": {
+       "version": "3.11.0",
+       "resolved": "https://registry.npmjs.org/@vitejs/plugin-react-swc/-/plugin-react-swc-3.11.0.tgz",
+@@ -3355,7 +3365,6 @@
+       "version": "6.21.0",
+       "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-6.21.0.tgz",
+       "integrity": "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==",
+-      "dev": true,
+       "license": "MIT"
+     },
+     "node_modules/unpipe": {
+@@ -4023,6 +4032,27 @@
+       },
+       "engines": {
+         "node": ">=18"
++      }
++    },
++    "node_modules/ws": {
++      "version": "8.19.0",
++      "resolved": "https://registry.npmjs.org/ws/-/ws-8.19.0.tgz",
++      "integrity": "sha512-blAT2mjOEIi0ZzruJfIhb3nps74PRWTCz1IjglWEEpQl5XS/UNama6u2/rjFkDDouqr4L67ry+1aGIALViWjDg==",
++      "license": "MIT",
++      "engines": {
++        "node": ">=10.0.0"
++      },
++      "peerDependencies": {
++        "bufferutil": "^4.0.1",
++        "utf-8-validate": ">=5.0.2"
++      },
++      "peerDependenciesMeta": {
++        "bufferutil": {
++          "optional": true
++        },
++        "utf-8-validate": {
++          "optional": true
++        }
+       }
+     },
+     "node_modules/zod": {
