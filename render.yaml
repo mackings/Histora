@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: histora-backend
+    runtime: node
+    repo: https://github.com/REPLACE_WITH_YOUR_REPO.git
+    branch: main
+    buildCommand: npm install && npm run build --workspace @histora/shared && npm run build --workspace @histora/api
+    startCommand: npm run start --workspace @histora/api
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: ASSEMBLYAI_API_KEY
+        sync: false
+      - key: TRANSCRIPTION_PROVIDER
+        value: assemblyai
+      - key: CLIENT_ORIGIN
+        sync: false
+      - key: CLIENT_ORIGINS
+        sync: false
+      - key: ALLOW_VERCEL_PREVIEWS
+        value: "false"

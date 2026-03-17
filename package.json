@@ -1,0 +1,20 @@
+{
+  "name": "histora",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @histora/web",
+    "dev:api": "npm run dev --workspace @histora/api",
+    "build": "npm run build --workspace @histora/shared && npm run build --workspace @histora/api && npm run build --workspace @histora/web",
+    "lint": "npm run lint --workspace @histora/api && npm run lint --workspace @histora/web",
+    "typecheck": "npm run typecheck --workspace @histora/shared && npm run typecheck --workspace @histora/api && npm run typecheck --workspace @histora/web"
+  },
+  "dependencies": {
+    "browserslist": "^4.28.1",
+    "caniuse-lite": "^1.0.30001779"
+  }
+}
