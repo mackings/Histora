@@ -165,3 +165,53 @@ export const readingShelves = [
     reactions: "22 reactions"
   }
 ];
+
+export const profileStats = [
+  { label: "Published chapters", value: "12" },
+  { label: "Anonymous posts", value: "8" },
+  { label: "Read count", value: "14.2K" },
+  { label: "Saved by readers", value: "2.1K" }
+];
+
+export const profileStories = [
+  {
+    title: "From borrowed rooms to my own front door",
+    visibility: "PUBLIC",
+    chapters: "12 chapters",
+    reads: "12.4K reads",
+    status: "Live"
+  },
+  {
+    title: "Need advice on forgiving a parent",
+    visibility: "ANON",
+    chapters: "1 chapter",
+    reads: "843 reads",
+    status: "Advice open"
+  },
+  {
+    title: "Close-circle chapter pack",
+    visibility: "SELECTED",
+    chapters: "4 chapters",
+    reads: "117 selected views",
+    status: "Shared privately"
+  }
+];
+
+export const profileActivity = [
+  { title: "Anonymous advice request", detail: "6 new responses arrived on your anonymous post.", time: "12m ago" },
+  { title: "Chapter saved locally", detail: "Chapter 2 was saved on this device for later publishing.", time: "48m ago" },
+  { title: "Help request pending", detail: "One reader paid the consent fee to request direct contact.", time: "2h ago" }
+];
+
+export const profileSettings = [
+  { title: "Privacy controls", detail: "Manage public, private, selected, and anonymous defaults." },
+  { title: "Comments and advice", detail: "Choose whether readers can comment on chapters and statuses." },
+  { title: "Premium and billing", detail: "Upgrade for more chapters, images, voice notes, and access controls." },
+  { title: "Security", detail: "Update password, sessions, email verification, and archive safety settings." }
+];
+
+export const profileSavedShelf = [
+  { title: "Healing after silence", meta: "Saved advice thread" },
+  { title: "First apartment documents", meta: "Reference archive" },
+  { title: "Timeline of rebuilding", meta: "Public story" }
+];

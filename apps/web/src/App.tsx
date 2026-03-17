@@ -5,6 +5,11 @@ import {
   chapterDrafts,
   feedPreview,
   pricingPlans,
+  profileActivity,
+  profileSavedShelf,
+  profileSettings,
+  profileStats,
+  profileStories,
   readingShelves,
   storyCircles,
   timelineMoments,
@@ -117,6 +122,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
     return <div className="studio-focus-shell">{children}</div>;
   }
 
+  if (location.pathname.startsWith("/profile")) {
+    return <div className="profile-focus-shell">{children}</div>;
+  }
+
   return (
     <div className="app-shell">
       <aside className="left-rail">
@@ -144,6 +153,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
           <NavLink to="/pricing">
             <Icon className="nav-icon" name="premium" />
             Premium
+          </NavLink>
+          <NavLink to="/profile">
+            <Icon className="nav-icon" name="bookmark" />
+            Profile
           </NavLink>
           <NavLink to="/signin">
             <Icon className="nav-icon" name="signin" />
@@ -198,6 +211,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
           <NavLink to="/pricing">
             <Icon className="nav-icon" name="premium" />
             Pro
+          </NavLink>
+          <NavLink to="/profile">
+            <Icon className="nav-icon" name="bookmark" />
+            Profile
           </NavLink>
         </nav>
       </div>
@@ -971,20 +988,51 @@ function HomePage() {
   );
 }
 
-function AuthPage({ mode }: { mode: "signin" | "signup" }) {
+function AuthPage({ mode }: { mode: "signin" | "signup" | "forgot" | "reset" }) {
   const isSignup = mode === "signup";
+  const isForgot = mode === "forgot";
+  const isReset = mode === "reset";
+  const isSignin = mode === "signin";
 
   return (
     <main className="page-shell auth-shell">
       <section className="auth-layout">
         <article className="auth-info card">
-          <SectionLabel>{isSignup ? "CREATE_IDENTITY" : "RETURN_TO_ARCHIVE"}</SectionLabel>
-          <h1>{isSignup ? "JOIN THE SOCIAL ARCHIVE." : "SIGN IN TO CONTINUE WRITING."}</h1>
+          <SectionLabel>
+            {isSignup ? "CREATE_IDENTITY" : isForgot ? "RECOVERY_LINK" : isReset ? "RESET_ARCHIVE_ACCESS" : "RETURN_TO_ARCHIVE"}
+          </SectionLabel>
+          <h1>
+            {isSignup
+              ? "JOIN THE SOCIAL ARCHIVE."
+              : isForgot
+                ? "RESET ACCESS WITHOUT LOSING YOUR DRAFTS."
+                : isReset
+                  ? "SET A NEW PASSWORD FOR YOUR ARCHIVE."
+                  : "SIGN IN TO CONTINUE WRITING."}
+          </h1>
           <p>
             {isSignup
               ? "Create your profile, draft in private, publish when ready, and control who can read each story."
-              : "Return to your feed, chapter drafts, trusted circle, and active memory statuses."}
+              : isForgot
+                ? "We will send a recovery link so you can return to your stories, drafts, statuses, and profile controls."
+                : isReset
+                  ? "Choose a stronger password and restore access to your protected archive, anonymous posts, and premium tools."
+                  : "Return to your feed, chapter drafts, status replies, premium tools, and profile controls."}
           </p>
+          <div className="auth-feature-list">
+            <div className="auth-feature-row">
+              <strong>Private and public archive</strong>
+              <span>Choose exactly who can see each story, chapter, or anonymous post.</span>
+            </div>
+            <div className="auth-feature-row">
+              <strong>Profile and identity controls</strong>
+              <span>Manage your bio, reading stats, premium plan, and chapter visibility from one place.</span>
+            </div>
+            <div className="auth-feature-row">
+              <strong>Status and advice access</strong>
+              <span>Track anonymous responses, help requests, and consent-fee updates inside your account.</span>
+            </div>
+          </div>
           <div className="image-frame">
             <img alt="Writing board preview" className="feature-image" src={studioBoard} />
           </div>
@@ -993,22 +1041,451 @@ function AuthPage({ mode }: { mode: "signin" | "signup" }) {
         <article className="auth-card card">
           <div className="section-head">
             <div>
-              <SectionLabel>{isSignup ? "ACCOUNT_SETUP" : "AUTH_GATEWAY"}</SectionLabel>
-              <h2>{isSignup ? "Create your account" : "Sign in"}</h2>
+              <SectionLabel>{isSignup ? "ACCOUNT_SETUP" : isForgot ? "EMAIL_RECOVERY" : isReset ? "PASSWORD_RESET" : "AUTH_GATEWAY"}</SectionLabel>
+              <h2>{isSignup ? "Create your account" : isForgot ? "Forgot password" : isReset ? "Reset password" : "Sign in"}</h2>
             </div>
           </div>
           <form className="auth-form">
             {isSignup ? <input placeholder="Full name" /> : null}
             {isSignup ? <input placeholder="Username" /> : null}
-            <input placeholder="Email address" />
-            <input placeholder="Password" type="password" />
+            {(isSignin || isSignup || isForgot) ? <input placeholder="Email address" /> : null}
+            {(isSignin || isSignup) ? <input placeholder="Password" type="password" /> : null}
+            {isReset ? <input placeholder="Reset code" /> : null}
+            {isReset ? <input placeholder="New password" type="password" /> : null}
+            {isReset ? <input placeholder="Confirm new password" type="password" /> : null}
             {isSignup ? <input placeholder="Date of birth" type="date" /> : null}
+            {isSignup ? (
+              <label className="toggle-row auth-toggle-row">
+                <input defaultChecked type="checkbox" />
+                <span>Allow comments on published chapters by default</span>
+              </label>
+            ) : null}
             <button className="primary-action block-action" type="button">
-              {isSignup ? "CREATE ACCOUNT" : "SIGN IN"}
+              {isSignup ? "CREATE ACCOUNT" : isForgot ? "SEND RESET LINK" : isReset ? "UPDATE PASSWORD" : "SIGN IN"}
               <Icon className="button-icon" name="arrow" />
             </button>
           </form>
+
+          <div className="auth-support-links">
+            {isSignin ? <NavLink to="/forgot-password">Forgot password?</NavLink> : null}
+            {isSignin ? <NavLink to="/signup">Create a new account</NavLink> : null}
+            {isSignup ? <NavLink to="/signin">Already have an account? Sign in</NavLink> : null}
+            {isForgot ? <NavLink to="/reset-password">Already have a code? Reset password</NavLink> : null}
+            {isReset ? <NavLink to="/signin">Back to sign in</NavLink> : null}
+          </div>
+          <div className="auth-note card">
+            <strong>{isSignin ? "Protected access" : "Account setup details"}</strong>
+            <span>
+              {isSignin
+                ? "Sign in to restore your saved studio draft, profile settings, anonymous advice activity, and premium limits."
+                : "Your account will control profile visibility, chapter defaults, anonymous post settings, and saved reading activity."}
+            </span>
+          </div>
         </article>
+      </section>
+    </main>
+  );
+}
+
+function ProfilePage() {
+  return (
+    <main className="page-shell">
+      <section className="topbar card profile-utility-bar">
+        <div className="topbar-copy profile-topbar-copy">
+          <strong>Profile archive</strong>
+          <span>Identity, privacy, and archive controls.</span>
+        </div>
+        <div className="topbar-actions profile-topbar-actions">
+          <NavLink className="ghost-action" to="/feed">
+            BACK TO FEED
+          </NavLink>
+          <NavLink className="primary-action" to="/profile/edit">
+            EDIT PROFILE
+            <Icon className="button-icon" name="arrow" />
+          </NavLink>
+        </div>
+      </section>
+
+      <section className="profile-stage card">
+        <div className="profile-stage-copy">
+          <h1>Kingsley Udoma</h1>
+          <strong>@kingsleyarchive</strong>
+          <p>Archivist of movement, family memory, hard-earned reinventions, and anonymous advice threads that help others breathe.</p>
+        </div>
+
+        <div className="profile-header">
+          <span className="profile-avatar-xl">K</span>
+          <div className="profile-header-copy">
+            <div className="profile-header-meta">
+              <span className="story-tag">PUBLIC PROFILE</span>
+              <span className="story-tag">PRO PLAN</span>
+            </div>
+            <p>Writing real-life chapters about home, migration, rebuilding, and the timelines that made identity visible.</p>
+          </div>
+          <div className="profile-header-actions">
+            <NavLink className="primary-action" to="/profile/edit">
+              EDIT PROFILE
+              <Icon className="button-icon" name="arrow" />
+            </NavLink>
+            <NavLink className="ghost-action" to="/studio">
+              OPEN STUDIO
+            </NavLink>
+          </div>
+        </div>
+
+      </section>
+
+      <section className="profile-metric-strip">
+        {profileStats.map((stat) => (
+          <article className="profile-stat-card" key={stat.label}>
+            <span>{stat.label}</span>
+            <strong>{stat.value}</strong>
+          </article>
+        ))}
+      </section>
+
+      <section className="profile-content-grid">
+        <div className="profile-primary-column">
+          <article className="profile-panel card">
+            <div className="profile-panel-body">
+              <div className="profile-section-copy">
+                <SectionLabel>PUBLISHED_STORIES</SectionLabel>
+                <h2>Stories and chapter packs</h2>
+              </div>
+              <div className="profile-story-list">
+                {profileStories.map((story) => (
+                  <div className="profile-story-card" key={story.title}>
+                    <div className="profile-story-head">
+                      <div className="profile-story-copy">
+                        <strong>{story.title}</strong>
+                        <span>{story.chapters}</span>
+                      </div>
+                      <span className="story-tag">{story.visibility}</span>
+                    </div>
+                    <small>{story.reads} // {story.status}</small>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </article>
+
+          <article className="profile-panel card">
+            <div className="profile-panel-body">
+              <div className="profile-section-copy">
+                <SectionLabel>RECENT_ACTIVITY</SectionLabel>
+                <h2>Archive notifications</h2>
+              </div>
+              <div className="profile-activity-list">
+                {profileActivity.map((item) => (
+                  <div className="profile-activity-row" key={item.title}>
+                    <strong>{item.title}</strong>
+                    <span>{item.detail}</span>
+                    <small>{item.time}</small>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </article>
+        </div>
+
+        <div className="profile-secondary-column">
+          <article className="profile-panel card">
+            <div className="profile-panel-body">
+              <div className="profile-section-copy">
+                <SectionLabel>ACCOUNT_CONTROLS</SectionLabel>
+                <h2>What you can manage</h2>
+              </div>
+              <div className="profile-settings-list">
+                {profileSettings.map((item) => (
+                  <div className="profile-setting-row" key={item.title}>
+                    <strong>{item.title}</strong>
+                    <span>{item.detail}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </article>
+
+          <article className="profile-panel card">
+            <div className="profile-panel-body">
+              <div className="profile-section-copy">
+                <SectionLabel>ANON_AND_HELP</SectionLabel>
+                <h2>Anonymous posts and help requests</h2>
+              </div>
+              <div className="profile-settings-list">
+                <div className="profile-setting-row">
+                  <strong>Anonymous advice posts</strong>
+                  <span>8 active advice drops, with one-response-per-user protection and shareable safe links.</span>
+                </div>
+                <div className="profile-setting-row">
+                  <strong>Consent-fee requests</strong>
+                  <span>2 pending helper requests waiting for your approval before contact access is shared.</span>
+                </div>
+                <div className="profile-setting-row">
+                  <strong>Comment defaults</strong>
+                  <span>Comments are enabled for public chapters and disabled for sensitive archive entries.</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <article className="profile-panel card">
+            <div className="profile-panel-body">
+              <div className="profile-section-copy">
+                <SectionLabel>SAVED_AND_PREMIUM</SectionLabel>
+                <h2>Saved reading and plan status</h2>
+              </div>
+              <div className="profile-story-list">
+                {profileSavedShelf.map((item) => (
+                  <div className="profile-story-card" key={item.title}>
+                    <div className="profile-story-copy">
+                      <strong>{item.title}</strong>
+                      <span>{item.meta}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="profile-premium-card">
+                <span className="story-tag">PRO PLAN</span>
+                <strong>$12 / month</strong>
+                <p>Unlimited chapters, more media slots, selected-reader controls, and extended archive privacy.</p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function EditProfilePage() {
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteCircle, setInviteCircle] = useState<"family" | "friend">("family");
+  const [inviteStory, setInviteStory] = useState(profileStories[0]?.title ?? "");
+  const [contributorInvites, setContributorInvites] = useState([
+    {
+      email: "auntie.grace@example.com",
+      circle: "family",
+      story: "From borrowed rooms to my own front door",
+      status: "Pending"
+    },
+    {
+      email: "nora.friend@example.com",
+      circle: "friend",
+      story: "Need advice on forgiving a parent",
+      status: "Accepted"
+    }
+  ]);
+
+  const handleInviteContributor = () => {
+    const trimmedEmail = inviteEmail.trim();
+
+    if (!trimmedEmail) {
+      return;
+    }
+
+    setContributorInvites((current) => [
+      {
+        email: trimmedEmail,
+        circle: inviteCircle,
+        story: inviteStory,
+        status: "Pending"
+      },
+      ...current
+    ]);
+    setInviteEmail("");
+    setInviteCircle("family");
+    setInviteStory(profileStories[0]?.title ?? inviteStory);
+  };
+
+  const handleRemoveInvite = (email: string) => {
+    setContributorInvites((current) => current.filter((invite) => invite.email !== email));
+  };
+
+  return (
+    <main className="page-shell">
+      <div className="profile-edit-back">
+        <NavLink className="ghost-action" to="/profile">
+          <Icon className="button-icon" name="arrow" />
+          BACK
+        </NavLink>
+      </div>
+
+      <section className="profile-editor-stage card">
+        <div className="profile-editor-stage-copy">
+          <SectionLabel>IDENTITY_AND_ACCESS</SectionLabel>
+          <h1>Update identity, privacy, invites, and archive defaults.</h1>
+          <p>Use this page to manage what readers see, how stories open to others, and who can help you write by invitation.</p>
+        </div>
+        <div className="profile-editor-stage-notes">
+          <div className="profile-editor-note">
+            <strong>Public profile</strong>
+            <span>Controls name, username, bio, and location shown to readers.</span>
+          </div>
+          <div className="profile-editor-note">
+            <strong>Contributor invites</strong>
+            <span>Invite family or friends by email and choose the exact story they can contribute to.</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="profile-editor-shell">
+        <article className="profile-panel card profile-editor-main">
+          <div className="profile-panel-body">
+            <div className="profile-section-copy profile-editor-copy">
+              <SectionLabel>EDIT_PROFILE</SectionLabel>
+              <h2>Identity and visibility</h2>
+              <span>Update the public details, location, bio, and default archive visibility for new chapters.</span>
+            </div>
+            <div className="profile-form-grid">
+              <label>
+                Display name
+                <input defaultValue="Kingsley Udoma" />
+              </label>
+              <label>
+                Username
+                <input defaultValue="@kingsleyarchive" />
+              </label>
+              <label>
+                Bio
+                <textarea defaultValue="Writing real-life chapters about home, movement, identity, healing, and hard-earned rebuilding." />
+              </label>
+              <label>
+                Location
+                <input defaultValue="Lagos, Nigeria" />
+              </label>
+              <label>
+                Profile visibility
+                <select defaultValue="public">
+                  <option value="public">Public</option>
+                  <option value="selected">Selected readers</option>
+                  <option value="private">Private</option>
+                </select>
+              </label>
+              <label>
+                Default chapter visibility
+                <select defaultValue="selected">
+                  <option value="public">Public</option>
+                  <option value="selected">Selected readers</option>
+                  <option value="private">Private</option>
+                  <option value="anonymous">Anonymous advice</option>
+                </select>
+              </label>
+            </div>
+          </div>
+        </article>
+
+        <div className="profile-editor-side">
+          <article className="profile-panel card profile-editor-card">
+            <div className="profile-panel-body">
+              <div className="profile-section-copy">
+                <SectionLabel>CONTRIBUTOR_INVITES</SectionLabel>
+                <h2>Invite family or friends to contribute</h2>
+                <span>Choose a story, send the invite by email, and manage who can contribute.</span>
+              </div>
+              <div className="profile-form-grid profile-invite-grid">
+                <label>
+                  Invite email
+                  <input onChange={(event) => setInviteEmail(event.target.value)} placeholder="friend@example.com" value={inviteEmail} />
+                </label>
+                <label>
+                  Invite type
+                  <select onChange={(event) => setInviteCircle(event.target.value as "family" | "friend")} value={inviteCircle}>
+                    <option value="family">Family</option>
+                    <option value="friend">Friend</option>
+                  </select>
+                </label>
+                <label>
+                  Story to contribute to
+                  <select onChange={(event) => setInviteStory(event.target.value)} value={inviteStory}>
+                    {profileStories.map((story) => (
+                      <option key={story.title} value={story.title}>
+                        {story.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="chapter-controls profile-editor-actions">
+                <button className="primary-action" onClick={handleInviteContributor} type="button">
+                  SEND INVITE
+                  <Icon className="button-icon" name="arrow" />
+                </button>
+              </div>
+              <div className="profile-settings-list">
+                {contributorInvites.map((invite) => (
+                  <div className="profile-setting-row" key={invite.email}>
+                    <strong>{invite.email}</strong>
+                    <span>
+                      {invite.circle === "family" ? "Family" : "Friend"} // {invite.story}
+                    </span>
+                    <small>{invite.status}</small>
+                    <button className="ghost-action slim-action" onClick={() => handleRemoveInvite(invite.email)} type="button">
+                      REVOKE
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </article>
+
+          <article className="profile-panel card profile-editor-card">
+            <div className="profile-panel-body">
+              <div className="profile-section-copy">
+                <SectionLabel>PROFILE_CONTROLS</SectionLabel>
+                <h2>Profile controls</h2>
+              </div>
+              <div className="profile-toggle-stack">
+                <label className="toggle-row">
+                  <input defaultChecked type="checkbox" />
+                  <span>Allow comments on published chapters</span>
+                </label>
+                <label className="toggle-row">
+                  <input defaultChecked type="checkbox" />
+                  <span>Let readers request to help through consent-fee flow</span>
+                </label>
+                <label className="toggle-row">
+                  <input type="checkbox" />
+                  <span>Hide read counts from public profile view</span>
+                </label>
+                <label className="toggle-row">
+                  <input defaultChecked type="checkbox" />
+                  <span>Show anonymous advice activity inside profile dashboard</span>
+                </label>
+              </div>
+              <div className="chapter-controls">
+                <button className="ghost-action" type="button">CANCEL</button>
+                <button className="primary-action" type="button">
+                  SAVE PROFILE
+                  <Icon className="button-icon" name="arrow" />
+                </button>
+              </div>
+            </div>
+          </article>
+
+          <article className="profile-panel card profile-editor-card">
+            <div className="profile-panel-body">
+              <div className="profile-section-copy">
+                <SectionLabel>SECURITY_AND_ACCESS</SectionLabel>
+                <h2>Security and access</h2>
+              </div>
+              <div className="profile-settings-list">
+                <div className="profile-setting-row">
+                  <strong>Email verification</strong>
+                  <span>Verified // kingsley@example.com</span>
+                </div>
+                <div className="profile-setting-row">
+                  <strong>Password</strong>
+                  <span>Last changed 14 days ago</span>
+                </div>
+                <div className="profile-setting-row">
+                  <strong>Active sessions</strong>
+                  <span>MacBook Pro, iPhone Safari, Chrome desktop</span>
+                </div>
+              </div>
+            </div>
+          </article>
+        </div>
       </section>
     </main>
   );
@@ -2997,11 +3474,15 @@ export default function App() {
       <Routes>
         <Route element={<HomePage />} path="/" />
         <Route element={<FeedPage />} path="/feed" />
+        <Route element={<ProfilePage />} path="/profile" />
+        <Route element={<EditProfilePage />} path="/profile/edit" />
         <Route element={<StudioPreviewPage />} path="/studio/preview" />
         <Route element={<StudioPage />} path="/studio" />
         <Route element={<PricingPage />} path="/pricing" />
         <Route element={<AuthPage mode="signin" />} path="/signin" />
         <Route element={<AuthPage mode="signup" />} path="/signup" />
+        <Route element={<AuthPage mode="forgot" />} path="/forgot-password" />
+        <Route element={<AuthPage mode="reset" />} path="/reset-password" />
       </Routes>
     </AppShell>
   );
