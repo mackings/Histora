@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
 import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import {
@@ -8,8 +8,7 @@ import {
   readingShelves,
   storyCircles,
   timelineMoments,
-  trendingStories,
-  trustedCircle
+  trendingStories
 } from "./app-data";
 import feedStory from "./assets/feed-story.svg";
 import heroMemory from "./assets/hero-memory.svg";
@@ -207,6 +206,18 @@ function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 function StoryCirclesRow() {
+  type StatusEntry = {
+    name: string;
+    meta: string;
+    tone: "orange" | "ink" | "add" | "blue";
+    label: string;
+    contentTitle: string;
+    contentBody: string;
+    anonymous?: boolean;
+    shareSlug?: string;
+    comments?: Array<{ author: string; text: string }>;
+    helpFee?: number;
+  };
   const emojiGroups = [
     { label: "Recent", icon: "🕘", emojis: ["😂", "❤️", "😭", "🔥", "🙏", "✨"] },
     { label: "Smileys", icon: "😊", emojis: ["😊", "😄", "😁", "😂", "🥹", "😮", "😌", "🤭"] },
@@ -233,9 +244,46 @@ function StoryCirclesRow() {
   const [showImageLibrary, setShowImageLibrary] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [activeEmojiGroup, setActiveEmojiGroup] = useState("Recent");
+  const [isAnonymousComposer, setIsAnonymousComposer] = useState(false);
+  const [statusItems, setStatusItems] = useState<StatusEntry[]>(storyCircles as StatusEntry[]);
+  const [replyDraft, setReplyDraft] = useState("");
+  const [shareFeedback, setShareFeedback] = useState("");
+  const [helpRequestTarget, setHelpRequestTarget] = useState<StatusEntry | null>(null);
+  const [consentAccepted, setConsentAccepted] = useState(false);
+  const [anonymousReplyHistory, setAnonymousReplyHistory] = useState<string[]>([]);
 
-  const activeStatus = activeIndex === null ? null : storyCircles[activeIndex];
+  const activeStatus = activeIndex === null ? null : statusItems[activeIndex];
   const isAnonymousStatus = activeStatus?.name === "Anonymous" || activeStatus?.label.toLowerCase().includes("advice");
+  const hasAlreadyRepliedToActiveAnonymous =
+    Boolean(activeStatus?.shareSlug) && anonymousReplyHistory.includes(activeStatus.shareSlug);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const savedReplyHistory = window.localStorage.getItem("histora-anonymous-replies");
+      if (!savedReplyHistory) {
+        return;
+      }
+
+      const parsedHistory = JSON.parse(savedReplyHistory);
+      if (Array.isArray(parsedHistory)) {
+        setAnonymousReplyHistory(parsedHistory);
+      }
+    } catch {
+      setAnonymousReplyHistory([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem("histora-anonymous-replies", JSON.stringify(anonymousReplyHistory));
+  }, [anonymousReplyHistory]);
 
   useEffect(() => {
     if (activeIndex === null) {
@@ -266,7 +314,7 @@ function StoryCirclesRow() {
             return null;
           }
 
-          return currentIndex < storyCircles.length - 1 ? currentIndex + 1 : null;
+          return currentIndex < statusItems.length - 1 ? currentIndex + 1 : null;
         });
 
         return 100;
@@ -283,7 +331,7 @@ function StoryCirclesRow() {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "ArrowRight") {
-        setActiveIndex((current) => (current === null ? 0 : Math.min(current + 1, storyCircles.length - 1)));
+        setActiveIndex((current) => (current === null ? 0 : Math.min(current + 1, statusItems.length - 1)));
       }
 
       if (event.key === "ArrowLeft") {
@@ -316,23 +364,175 @@ function StoryCirclesRow() {
         return 0;
       }
 
-      return current < storyCircles.length - 1 ? current + 1 : null;
+      return current < statusItems.length - 1 ? current + 1 : null;
     });
   };
 
   const openStory = (index: number) => {
-    if (storyCircles[index]?.tone === "add") {
+    if (statusItems[index]?.tone === "add") {
       setIsComposerOpen(true);
       setShowEmojiLibrary(false);
       setShowImageLibrary(false);
+      setIsAnonymousComposer(false);
+      setShareFeedback("");
       return;
     }
 
     setActiveIndex(index);
+    setReplyDraft("");
+    setShareFeedback("");
   };
 
   const insertSnippet = (snippet: string) => {
     setStatusDraft((current) => `${current}${current.endsWith(" ") || current.length === 0 ? "" : " "}${snippet}`);
+  };
+
+  const createShareSlug = () => `anon-${Date.now().toString(36)}`;
+  const getStatusShareLink = (entry: StatusEntry) => {
+    if (typeof window === "undefined" || !entry.shareSlug) {
+      return "";
+    }
+
+    return `${window.location.origin}/status/${entry.shareSlug}`;
+  };
+
+  const copyStatusLink = async (entry: StatusEntry) => {
+    const link = getStatusShareLink(entry);
+    if (!link) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(link);
+      setShareFeedback("Anonymous status link copied.");
+    } catch {
+      setShareFeedback("Could not copy the link on this device.");
+    }
+  };
+
+  const downloadAnonymousStatusImage = (entry: StatusEntry) => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 1080;
+    canvas.height = 1350;
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      setShareFeedback("Could not prepare the anonymous status image.");
+      return;
+    }
+
+    const gradient = context.createLinearGradient(0, 0, 1080, 1350);
+    gradient.addColorStop(0, "#f6f9ff");
+    gradient.addColorStop(1, "#fff0e7");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 1080, 1350);
+    context.fillStyle = "#1b2440";
+    context.font = "700 46px Space Grotesk, sans-serif";
+    context.fillText("HISTORA // ANONYMOUS STATUS", 80, 120);
+    context.font = "700 72px Space Grotesk, sans-serif";
+    context.fillText(entry.contentTitle.slice(0, 24), 80, 240);
+    context.font = "400 42px Manrope, sans-serif";
+
+    const words = entry.contentBody.split(" ");
+    const lines: string[] = [];
+    let currentLine = "";
+    for (const word of words) {
+      const nextLine = currentLine ? `${currentLine} ${word}` : word;
+      if (context.measureText(nextLine).width > 880) {
+        lines.push(currentLine);
+        currentLine = word;
+      } else {
+        currentLine = nextLine;
+      }
+    }
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+    lines.slice(0, 10).forEach((line, index) => {
+      context.fillText(line, 80, 360 + index * 60);
+    });
+    context.font = "700 36px Space Grotesk, sans-serif";
+    context.fillStyle = "#cc5a24";
+    context.fillText(`Advice replies stay anonymous // ${entry.meta}`, 80, 1160);
+
+    const link = document.createElement("a");
+    link.href = canvas.toDataURL("image/png");
+    link.download = `${entry.shareSlug ?? "histora-anonymous-status"}.png`;
+    link.click();
+    setShareFeedback("Anonymous status image saved to your device.");
+  };
+
+  const postStatus = () => {
+    const nextEntry: StatusEntry = {
+      name: isAnonymousComposer ? "Anonymous" : "Your status",
+      meta: "Just now",
+      tone: isAnonymousComposer ? "ink" : "blue",
+      label: isAnonymousComposer ? "Advice status" : "Memory status",
+      contentTitle: isAnonymousComposer ? "Anonymous advice status" : "Fresh memory status",
+      contentBody: statusDraft,
+      anonymous: isAnonymousComposer,
+      shareSlug: isAnonymousComposer ? createShareSlug() : undefined,
+      comments: isAnonymousComposer
+        ? [
+            { author: "Reply 1", text: "You are not overreacting. Protect your peace first." },
+            { author: "Reply 2", text: "Take your time. You can ask for help without revealing yourself." }
+          ]
+        : [],
+      helpFee: isAnonymousComposer ? 8 : undefined
+    };
+
+    setStatusItems((current) => [current[0], nextEntry, ...current.slice(1)]);
+    setStatusDraft("Today I finally wrote the chapter I kept postponing.");
+    setSelectedImage(null);
+    setIsComposerOpen(false);
+    setIsAnonymousComposer(false);
+    setShareFeedback(
+      isAnonymousComposer ? "Anonymous status posted. You can now copy the link or save the post image." : "Status posted."
+    );
+    setActiveIndex(1);
+  };
+
+  const submitReply = () => {
+    if (!activeStatus || !replyDraft.trim()) {
+      return;
+    }
+
+    if (activeStatus.anonymous && activeStatus.shareSlug && anonymousReplyHistory.includes(activeStatus.shareSlug)) {
+      setShareFeedback("You have already sent one anonymous response to this post.");
+      return;
+    }
+
+    setStatusItems((current) =>
+      current.map((entry) =>
+        entry.shareSlug === activeStatus.shareSlug
+          ? {
+              ...entry,
+              comments: [...(entry.comments ?? []), { author: entry.anonymous ? "Anonymous reply" : "Reply", text: replyDraft.trim() }]
+            }
+          : entry
+      )
+    );
+    if (activeStatus.anonymous && activeStatus.shareSlug) {
+      setAnonymousReplyHistory((current) => [...current, activeStatus.shareSlug!]);
+    }
+    setReplyDraft("");
+    setShareFeedback(activeStatus.anonymous ? "Anonymous advice sent." : "Reply sent.");
+  };
+
+  const confirmHelpRequest = () => {
+    if (!helpRequestTarget || !consentAccepted) {
+      setShareFeedback("Accept the consent fee first to continue.");
+      return;
+    }
+
+    const targetName = helpRequestTarget.name === "Anonymous" ? "this anonymous poster" : helpRequestTarget.name;
+    setHelpRequestTarget(null);
+    setConsentAccepted(false);
+    setShareFeedback(`Consent fee confirmed. The request to help ${targetName} is now pending.`);
   };
 
   return (
@@ -347,7 +547,7 @@ function StoryCirclesRow() {
         </div>
 
         <div className="status-scroll">
-          {storyCircles.map((circle, index) => (
+          {statusItems.map((circle, index) => (
             <button
               className={`status-bubble ${seenStories.includes(index) ? "status-bubble-seen" : ""}`}
               key={circle.name}
@@ -434,6 +634,11 @@ function StoryCirclesRow() {
               ))}
             </div>
 
+            <label className="toggle-row">
+              <input checked={isAnonymousComposer} onChange={(event) => setIsAnonymousComposer(event.target.checked)} type="checkbox" />
+              <span>Post this status anonymously and make it shareable</span>
+            </label>
+
             {showEmojiLibrary ? (
               <div className="picker-panel">
                 <div className="picker-panel-head">
@@ -495,17 +700,24 @@ function StoryCirclesRow() {
             />
 
             <div className={`status-compose-preview tone-preview-${statusTone} style-preview-${statusStyle}`}>
-              <span className="story-tag">Preview</span>
+              <span className="story-tag">{isAnonymousComposer ? "Anonymous preview" : "Preview"}</span>
               {selectedImage ? <span className="preview-asset-tag">Background: {selectedImage}</span> : null}
               <p>{statusDraft}</p>
             </div>
+
+            {isAnonymousComposer ? (
+              <div className="anonymous-compose-note">
+                <strong>Anonymous post tools</strong>
+                <span>After posting, you can copy a share link and save the anonymous post image to your device.</span>
+              </div>
+            ) : null}
 
             <div className="status-composer-footer">
               <button className="ghost-action" onClick={() => insertSnippet("✨")} type="button">
                 Add emoji
               </button>
-              <button className="primary-action" onClick={() => setIsComposerOpen(false)} type="button">
-                Post status
+              <button className="primary-action" onClick={postStatus} type="button">
+                {isAnonymousComposer ? "Post anonymous status" : "Post status"}
               </button>
             </div>
           </article>
@@ -516,7 +728,7 @@ function StoryCirclesRow() {
         <div className="status-viewer-backdrop" onClick={() => setActiveIndex(null)} role="presentation">
           <article className={`status-story-viewer tone-${activeStatus.tone}`} onClick={(event) => event.stopPropagation()}>
             <div className="story-progress-row">
-              {storyCircles.map((circle, index) => (
+              {statusItems.map((circle, index) => (
                 <span className="story-progress-track" key={circle.name}>
                   <span
                     className="story-progress-fill"
@@ -571,23 +783,83 @@ function StoryCirclesRow() {
                   <button className="story-reaction" type="button">🔥</button>
                   <button className="story-reaction" type="button">😭</button>
                 </div>
+                {activeStatus.anonymous ? (
+                  <div className="anonymous-status-tools">
+                    <button className="story-chip" onClick={() => copyStatusLink(activeStatus)} type="button">Copy link</button>
+                    <button className="story-chip" onClick={() => downloadAnonymousStatusImage(activeStatus)} type="button">Save image</button>
+                    <button className="story-chip" onClick={() => setHelpRequestTarget(activeStatus)} type="button">Request to help</button>
+                  </div>
+                ) : null}
+                {shareFeedback ? <p className="status-feedback">{shareFeedback}</p> : null}
               </div>
             </div>
 
             <div className="story-reply-bar">
-              <input placeholder={isAnonymousStatus ? "Reply anonymously..." : `Reply to ${activeStatus.name}...`} />
-              <button className="primary-action" type="button">
-                {isAnonymousStatus ? "Send anonymous reply" : "Send"}
+              <input
+                disabled={Boolean(isAnonymousStatus && hasAlreadyRepliedToActiveAnonymous)}
+                onChange={(event) => setReplyDraft(event.target.value)}
+                placeholder={
+                  isAnonymousStatus
+                    ? hasAlreadyRepliedToActiveAnonymous
+                      ? "You already sent one anonymous response"
+                      : "Reply anonymously..."
+                    : `Reply to ${activeStatus.name}...`
+                }
+                value={hasAlreadyRepliedToActiveAnonymous ? "" : replyDraft}
+              />
+              <button
+                className="primary-action"
+                disabled={Boolean(isAnonymousStatus && hasAlreadyRepliedToActiveAnonymous)}
+                onClick={submitReply}
+                type="button"
+              >
+                {isAnonymousStatus
+                  ? hasAlreadyRepliedToActiveAnonymous
+                    ? "Response sent"
+                    : "Send anonymous reply"
+                  : "Send"}
               </button>
             </div>
+
+            {activeStatus.comments?.length ? (
+              <div className="story-comment-list">
+                {activeStatus.comments.map((comment, index) => (
+                  <div className="story-comment-card" key={`${comment.author}-${index}`}>
+                    <strong>{comment.author}</strong>
+                    <p>{comment.text}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             <div className="story-footer-row">
               <button className="ghost-action" disabled={activeIndex === 0} onClick={goToPrevious} type="button">
                 Previous
               </button>
               <button className="ghost-action" onClick={goToNext} type="button">
-                {activeIndex === storyCircles.length - 1 ? "Finish" : "Next"}
+                {activeIndex === statusItems.length - 1 ? "Finish" : "Next"}
               </button>
+            </div>
+          </article>
+        </div>
+      ) : null}
+
+      {helpRequestTarget ? (
+        <div className="status-viewer-backdrop" onClick={() => setHelpRequestTarget(null)} role="presentation">
+          <article className="status-help-modal card" onClick={(event) => event.stopPropagation()}>
+            <SectionLabel>CONSENT_FEE</SectionLabel>
+            <h3>Request access to help this anonymous poster</h3>
+            <p>
+              To protect privacy, helpers pay a consent fee of ${helpRequestTarget.helpFee ?? 8} before any contact request can be
+              passed to the anonymous poster.
+            </p>
+            <label className="toggle-row">
+              <input checked={consentAccepted} onChange={(event) => setConsentAccepted(event.target.checked)} type="checkbox" />
+              <span>I accept the consent fee and privacy terms for this help request.</span>
+            </label>
+            <div className="status-composer-footer">
+              <button className="ghost-action" onClick={() => setHelpRequestTarget(null)} type="button">Cancel</button>
+              <button className="primary-action" onClick={confirmHelpRequest} type="button">Pay consent fee</button>
             </div>
           </article>
         </div>
@@ -827,6 +1099,41 @@ function FeedPage() {
 
 function StudioPage() {
   const navigate = useNavigate();
+  const normalizeChapterTitle = (title: string) => title.replace(/^Chapter\s+\d+:\s*/i, "").trim();
+  const monthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const currentYear = new Date().getFullYear();
+  const timelineYearOptions = Array.from({ length: currentYear - 1949 }, (_, index) => String(currentYear + 5 - index));
+  const chapterCompletionThreshold = 80;
+  const getDaysInMonth = (year: string, month: string) => {
+    const safeYear = Number.parseInt(year, 10) || currentYear;
+    const safeMonth = Number.parseInt(month, 10);
+    if (!safeMonth) {
+      return 31;
+    }
+    return new Date(safeYear, safeMonth, 0).getDate();
+  };
+  const getTimelineMonthLabel = (month: string) => {
+    const monthIndex = Number.parseInt(month, 10);
+    if (!monthIndex || monthIndex < 1 || monthIndex > 12) {
+      return "Month";
+    }
+    return monthLabels[monthIndex - 1];
+  };
+  const getPlainTextFromHtml = (html: string) => {
+    if (typeof document === "undefined") {
+      return html.replace(/<[^>]+>/g, " ");
+    }
+
+    const parser = document.createElement("div");
+    parser.innerHTML = html;
+    return parser.textContent ?? "";
+  };
+  const getChapterWordCount = (html: string) => {
+    const plainText = getPlainTextFromHtml(html).trim();
+    return plainText.length === 0 ? 0 : plainText.split(/\s+/).length;
+  };
+  const isChapterComplete = (chapter: { title: string; body: string }) =>
+    chapter.title.trim().length > 0 && getChapterWordCount(chapter.body) >= chapterCompletionThreshold;
   const transcriptionLanguages = [
     { label: "English (US)", value: "en-US" },
     { label: "English (UK)", value: "en-GB" },
@@ -847,13 +1154,8 @@ function StudioPage() {
     "Advice post: Should I reconnect?":
       "<p>I do not know if reopening this relationship will heal anything or only restart a wound I barely closed.</p>"
   } as const;
-  const initialContributorInvites = [
-    { name: "Mum", scope: "Whole story", status: "Active", note: "Can add family corrections and photos" },
-    { name: "Jade", scope: "Chapter 2 only", status: "Paused", note: "Waiting until the next draft is ready" },
-    { name: "Tosin", scope: "Whole story", status: "Revoked", note: "Invite access removed last week" }
-  ];
   const [isEnteringStudio, setIsEnteringStudio] = useState(true);
-  const [activeChapter, setActiveChapter] = useState(chapterDrafts[1]?.title ?? "Chapter 2");
+  const [activeChapter, setActiveChapter] = useState(normalizeChapterTitle(chapterDrafts[1]?.title ?? "Chapter 2"));
   const [isPremium, setIsPremium] = useState(false);
   const [visibility, setVisibility] = useState("selected");
   const [anonymous, setAnonymous] = useState(true);
@@ -862,17 +1164,29 @@ function StudioPage() {
     "A chaptered life story about movement, rebuilding, and finally feeling at home in my own voice."
   );
   const [chapterType, setChapterType] = useState("milestone");
+  const [allowComments, setAllowComments] = useState(true);
   const [chapters, setChapters] = useState(
     chapterDrafts.map((chapter) => ({
       ...chapter,
+      title: normalizeChapterTitle(chapter.title),
       body: initialChapterContent[chapter.title as keyof typeof initialChapterContent] ?? ""
     }))
   );
   const [studioMessage, setStudioMessage] = useState("Studio synced locally.");
   const [hasReviewedPreview, setHasReviewedPreview] = useState(false);
   const [isDraftHistoryVisible, setIsDraftHistoryVisible] = useState(false);
+  const [isEditingChapterTitle, setIsEditingChapterTitle] = useState(false);
   const [draftHistory, setDraftHistory] = useState<string[]>(["Studio opened."]);
-  const [contributorInvites, setContributorInvites] = useState(initialContributorInvites);
+  const [studioNotice, setStudioNotice] = useState<null | { title: string; body: string }>(null);
+  const [timelineEntries, setTimelineEntries] = useState(
+    timelineMoments.map((moment) => ({
+      year: moment.year,
+      month: "01",
+      day: "01",
+      title: moment.title,
+      body: moment.body
+    }))
+  );
   const [activeFormats, setActiveFormats] = useState({
     bold: false,
     italic: false,
@@ -890,6 +1204,7 @@ function StudioPage() {
   const [transcriptionLanguage, setTranscriptionLanguage] = useState("en-US");
   const [mediaError, setMediaError] = useState<string | null>(null);
   const chapterBodyRef = useRef<HTMLDivElement | null>(null);
+  const chapterEditorSectionRef = useRef<HTMLElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const imageAttachmentsRef = useRef<Array<{ name: string; url: string; source: string }>>([]);
@@ -909,22 +1224,28 @@ function StudioPage() {
   const transcriptionManualStopRef = useRef(false);
   const transcriptionCommittedTurnsRef = useRef<Set<number>>(new Set());
   const transcriptionFallbackTriggeredRef = useRef(false);
+  const noticeAudioContextRef = useRef<AudioContext | null>(null);
+  const hasLoadedStudioDraftRef = useRef(false);
 
   const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
+  const studioStorageKey = "histora-studio-local-draft-v1";
   const imageLimit = isPremium ? 12 : 2;
   const voiceLimit = isPremium ? 6 : 1;
   const chapterLimit = isPremium ? 8 : 2;
-  const activeChapterEntry = chapters.find((chapter) => chapter.title === activeChapter) ?? chapters[0];
+  const activeChapterIndex = chapters.findIndex((chapter) => chapter.title === activeChapter);
+  const activeChapterEntry = chapters[activeChapterIndex] ?? chapters[0];
+  const activeChapterLabel = activeChapterEntry?.title ?? activeChapter;
   const chapterBody = activeChapterEntry?.body ?? "";
-  const plainChapterText =
-    typeof document === "undefined"
-      ? chapterBody.replace(/<[^>]+>/g, " ")
-      : (() => {
-          const parser = document.createElement("div");
-          parser.innerHTML = chapterBody;
-          return parser.textContent ?? "";
-        })();
-  const wordCount = plainChapterText.trim().length === 0 ? 0 : plainChapterText.trim().split(/\s+/).length;
+  const plainChapterText = getPlainTextFromHtml(chapterBody);
+  const wordCount = getChapterWordCount(chapterBody);
+  const chapterMetrics = chapters.map((chapter) => ({
+    ...chapter,
+    words: getChapterWordCount(chapter.body),
+    isComplete: isChapterComplete(chapter)
+  }));
+  const readyChapters = chapterMetrics.filter((chapter) => chapter.isComplete);
+  const startedIncompleteChapters = chapterMetrics.filter((chapter) => !chapter.isComplete && chapter.words > 0);
+  const activeChapterReady = chapterMetrics[activeChapterIndex >= 0 ? activeChapterIndex : 0];
   const chapterSlots = Array.from({ length: 6 }).map((_, index) => {
     const existingChapter = chapters[index];
     const isLocked = index >= chapterLimit;
@@ -932,7 +1253,7 @@ function StudioPage() {
     return existingChapter
       ? { ...existingChapter, isLocked }
       : {
-          title: `Chapter ${index + 1}: Premium chapter`,
+          title: "Premium chapter",
           status: "PREMIUM",
           type: "PREMIUM",
           words: 0,
@@ -952,6 +1273,114 @@ function StudioPage() {
       setHasReviewedPreview(true);
     }
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      const rawDraft = window.localStorage.getItem(studioStorageKey);
+      if (!rawDraft) {
+        return;
+      }
+
+      const savedDraft = JSON.parse(rawDraft) as Partial<{
+        activeChapter: string;
+        isPremium: boolean;
+        visibility: string;
+        anonymous: boolean;
+        storyTitle: string;
+        storySummary: string;
+        chapterType: string;
+        chapters: typeof chapters;
+        timelineEntries: typeof timelineEntries;
+        draftHistory: string[];
+        transcriptionLanguage: string;
+        allowComments: boolean;
+      }>;
+
+      if (savedDraft.activeChapter) {
+        setActiveChapter(savedDraft.activeChapter);
+      }
+      if (typeof savedDraft.isPremium === "boolean") {
+        setIsPremium(savedDraft.isPremium);
+      }
+      if (savedDraft.visibility) {
+        setVisibility(savedDraft.visibility);
+      }
+      if (typeof savedDraft.anonymous === "boolean") {
+        setAnonymous(savedDraft.anonymous);
+      }
+      if (savedDraft.storyTitle) {
+        setStoryTitle(savedDraft.storyTitle);
+      }
+      if (savedDraft.storySummary) {
+        setStorySummary(savedDraft.storySummary);
+      }
+      if (savedDraft.chapterType) {
+        setChapterType(savedDraft.chapterType);
+      }
+      if (typeof savedDraft.allowComments === "boolean") {
+        setAllowComments(savedDraft.allowComments);
+      }
+      if (Array.isArray(savedDraft.chapters) && savedDraft.chapters.length > 0) {
+        setChapters(savedDraft.chapters);
+      }
+      if (Array.isArray(savedDraft.timelineEntries)) {
+        setTimelineEntries(savedDraft.timelineEntries);
+      }
+      if (Array.isArray(savedDraft.draftHistory) && savedDraft.draftHistory.length > 0) {
+        setDraftHistory(savedDraft.draftHistory);
+      }
+      if (savedDraft.transcriptionLanguage) {
+        setTranscriptionLanguage(savedDraft.transcriptionLanguage);
+      }
+
+      setStudioMessage("Local studio draft restored.");
+    } catch {
+      setStudioMessage("Could not restore the last local studio draft.");
+    } finally {
+      hasLoadedStudioDraftRef.current = true;
+    }
+  }, [studioStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !hasLoadedStudioDraftRef.current) {
+      return;
+    }
+
+    const draftPayload = {
+      activeChapter,
+      isPremium,
+      visibility,
+      anonymous,
+      storyTitle,
+      storySummary,
+      chapterType,
+      allowComments,
+      chapters,
+      timelineEntries,
+      draftHistory,
+      transcriptionLanguage
+    };
+
+    window.localStorage.setItem(studioStorageKey, JSON.stringify(draftPayload));
+  }, [
+    activeChapter,
+    anonymous,
+    chapterType,
+    allowComments,
+    chapters,
+    draftHistory,
+    isPremium,
+    storySummary,
+    storyTitle,
+    timelineEntries,
+    transcriptionLanguage,
+    visibility,
+    studioStorageKey
+  ]);
 
   useEffect(() => {
     imageAttachmentsRef.current = imageAttachments;
@@ -982,8 +1411,59 @@ function StudioPage() {
       if (audioContext) {
         void audioContext.close().catch(() => undefined);
       }
+      const noticeAudioContext = noticeAudioContextRef.current;
+      if (noticeAudioContext) {
+        void noticeAudioContext.close().catch(() => undefined);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (!studioNotice || typeof window === "undefined") {
+      return;
+    }
+
+    const AudioContextConstructor =
+      window.AudioContext ||
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+    if (!AudioContextConstructor) {
+      return;
+    }
+
+    const audioContext = noticeAudioContextRef.current ?? new AudioContextConstructor();
+    noticeAudioContextRef.current = audioContext;
+
+    void audioContext.resume().then(() => {
+      const startAt = audioContext.currentTime;
+      const playWarningPulse = (offset: number, frequency: number, duration: number) => {
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        const pulseStart = startAt + offset;
+
+        oscillator.type = "triangle";
+        oscillator.frequency.setValueAtTime(frequency, pulseStart);
+        oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.88, pulseStart + duration);
+
+        gainNode.gain.setValueAtTime(0.0001, pulseStart);
+        gainNode.gain.exponentialRampToValueAtTime(0.09, pulseStart + 0.02);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, pulseStart + duration);
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        oscillator.start(pulseStart);
+        oscillator.stop(pulseStart + duration);
+
+        oscillator.onended = () => {
+          oscillator.disconnect();
+          gainNode.disconnect();
+        };
+      };
+
+      playWarningPulse(0, 720, 0.16);
+      playWarningPulse(0.2, 620, 0.22);
+    }).catch(() => undefined);
+  }, [studioNotice]);
 
   const appendImages = (files: FileList | null, source: string) => {
     if (!files?.length) {
@@ -1107,8 +1587,22 @@ function StudioPage() {
 
   const updateChapter = (updater: (chapter: (typeof chapters)[number]) => (typeof chapters)[number]) => {
     setChapters((current) =>
-      current.map((chapter) => (chapter.title === activeChapter ? updater(chapter) : chapter))
+      current.map((chapter, index) => (index === (activeChapterIndex >= 0 ? activeChapterIndex : 0) ? updater(chapter) : chapter))
     );
+  };
+
+  const updateActiveChapterTitle = (nextTitle: string) => {
+    const normalizedTitle = normalizeChapterTitle(nextTitle) || "Untitled chapter";
+    updateChapter((chapter) => ({
+      ...chapter,
+      title: normalizedTitle
+    }));
+    setActiveChapter(normalizedTitle);
+    invalidatePreviewReview();
+  };
+
+  const submitActiveChapterTitle = () => {
+    setIsEditingChapterTitle(false);
   };
 
   const refreshEditorState = () => {
@@ -1193,8 +1687,8 @@ function StudioPage() {
     }
 
     syncEditorContent();
-    setStudioMessage(`${tool} applied in ${activeChapter}.`);
-    setDraftHistory((current) => [`${tool} tool used on ${activeChapter}.`, ...current].slice(0, 6));
+    setStudioMessage(`${tool} applied in ${activeChapterLabel}.`);
+    setDraftHistory((current) => [`${tool} tool used on ${activeChapterLabel}.`, ...current].slice(0, 6));
   };
 
   const transcribeAudioChunk = (audioBlob: Blob) => {
@@ -1632,79 +2126,149 @@ function StudioPage() {
     setTranscriptionStatus("Voice transcription stopped");
   };
 
+  const openStudioNotice = (title: string, body: string) => {
+    setStudioNotice({ title, body });
+  };
+
+  const guideToSection = (ref: RefObject<HTMLElement | null>, message: string) => {
+    setStudioMessage(message);
+    openStudioNotice("Action needed", message);
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   const saveCurrentDraft = () => {
     setChapters((current) =>
       current.map((chapter) =>
         chapter.title === activeChapter ? { ...chapter, status: "Draft saved", words: wordCount } : chapter
       )
     );
-    setStudioMessage(`${activeChapter} saved as draft.`);
-    setDraftHistory((current) => [`${activeChapter} saved as draft.`, ...current].slice(0, 6));
+    setStudioMessage(`${activeChapterLabel} saved as draft.`);
+    setDraftHistory((current) => [`${activeChapterLabel} saved as draft.`, ...current].slice(0, 6));
   };
 
-  const publishCurrentChapter = () => {
+  const publishWholeStory = () => {
+    if (readyChapters.length === 0) {
+      guideToSection(
+        chapterEditorSectionRef,
+        `Finish at least one chapter before publishing. Chapters need a title and at least ${chapterCompletionThreshold} words.`
+      );
+      return;
+    }
+
     if (!hasReviewedPreview) {
+      openStudioNotice(
+        "Review before publish",
+        startedIncompleteChapters.length > 0
+          ? `After preview review, these chapters will go live: ${readyChapters.map((chapter) => chapter.title).join(", ")}. Unfinished chapters will stay as drafts: ${startedIncompleteChapters.map((chapter) => chapter.title).join(", ")}.`
+          : `After preview review, these chapters will go live: ${readyChapters.map((chapter) => chapter.title).join(", ")}.`
+      );
       handlePreviewToggle();
       return;
     }
 
     setChapters((current) =>
       current.map((chapter) =>
-        chapter.title === activeChapter ? { ...chapter, status: "Published", words: wordCount } : chapter
+        readyChapters.some((readyChapter) => readyChapter.title === chapter.title)
+          ? { ...chapter, status: "Published", words: getChapterWordCount(chapter.body) }
+          : chapter
       )
     );
-    setStudioMessage(`${activeChapter} published.`);
-    setDraftHistory((current) => [`${activeChapter} published.`, ...current].slice(0, 6));
-  };
-
-  const publishWholeStory = () => {
-    if (!hasReviewedPreview) {
-      handlePreviewToggle();
-      return;
-    }
-
-    setStudioMessage(`"${storyTitle}" is ready for ${anonymous ? "anonymous" : visibility} publishing.`);
-    setDraftHistory((current) => [`Story publish prepared for ${visibility} visibility.`, ...current].slice(0, 6));
-  };
-
-  const updateInviteStatus = (name: string, status: "Paused" | "Revoked" | "Active") => {
-    setContributorInvites((current) =>
-      current.map((invite) => (invite.name === name ? { ...invite, status } : invite))
+    setStudioMessage(
+      startedIncompleteChapters.length > 0
+        ? `Publishing ${readyChapters.map((chapter) => chapter.title).join(", ")}. Unfinished chapters stay in draft.`
+        : `Publishing ${readyChapters.map((chapter) => chapter.title).join(", ")} as ${anonymous ? "anonymous" : visibility}.`
     );
-    setStudioMessage(`${name}'s contribution access is now ${status.toLowerCase()}.`);
-    setDraftHistory((current) => [`${name} invite set to ${status}.`, ...current].slice(0, 6));
+    setDraftHistory((current) => [
+      startedIncompleteChapters.length > 0
+        ? `Published: ${readyChapters.map((chapter) => chapter.title).join(", ")}. Drafts kept: ${startedIncompleteChapters.map((chapter) => chapter.title).join(", ")}.`
+        : `Story published with chapters: ${readyChapters.map((chapter) => chapter.title).join(", ")}.`,
+      ...current
+    ].slice(0, 6));
   };
 
-  const addContributorInvite = () => {
-    const nextIndex = contributorInvites.length + 1;
-    const nextInvite = {
-      name: `Family ${nextIndex}`,
-      scope: activeChapter,
-      status: "Active",
-      note: "Invited to contribute to the active chapter"
-    };
+  const updateTimelineEntry = (index: number, field: "title" | "body", value: string) => {
+    setTimelineEntries((current) =>
+      current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, [field]: value } : entry))
+    );
+    invalidatePreviewReview();
+  };
 
-    setContributorInvites((current) => [nextInvite, ...current]);
-    setStudioMessage(`${nextInvite.name} invited to contribute to ${activeChapter}.`);
-    setDraftHistory((current) => [`${nextInvite.name} invited to ${activeChapter}.`, ...current].slice(0, 6));
+  const addTimelineEntry = () => {
+    setTimelineEntries((current) => [
+      ...current,
+      {
+        year: "",
+        month: "",
+        day: "",
+        title: "",
+        body: ""
+      }
+    ]);
+    setStudioMessage("New timeline moment added.");
+    setDraftHistory((current) => ["Timeline moment added.", ...current].slice(0, 6));
+  };
+
+  const removeTimelineEntry = (index: number) => {
+    setTimelineEntries((current) => current.filter((_, entryIndex) => entryIndex !== index));
+    setStudioMessage("Timeline moment removed.");
+    setDraftHistory((current) => ["Timeline moment removed.", ...current].slice(0, 6));
+    invalidatePreviewReview();
+  };
+
+  const updateTimelineDatePart = (index: number, field: "year" | "month" | "day", value: string) => {
+    setTimelineEntries((current) =>
+      current.map((entry, entryIndex) => {
+        if (entryIndex !== index) {
+          return entry;
+        }
+
+        const nextEntry = {
+          ...entry,
+          [field]: value
+        };
+        const maxDay = getDaysInMonth(nextEntry.year, nextEntry.month);
+
+        if (nextEntry.day && Number.parseInt(nextEntry.day, 10) > maxDay) {
+          nextEntry.day = String(maxDay).padStart(2, "0");
+        }
+
+        return nextEntry;
+      })
+    );
+    invalidatePreviewReview();
   };
 
   const handlePreviewToggle = () => {
+    const previewChapters = chapters
+      .map((chapter) => ({
+        title: chapter.title,
+        status: chapter.status,
+        words: getChapterWordCount(chapter.body),
+        body: chapter.body
+      }))
+      .filter((chapter) => chapter.title.trim().length > 0 || chapter.body.trim().length > 0);
+    const previewTimeline = timelineEntries.filter(
+      (entry) => entry.title.trim().length > 0 || entry.body.trim().length > 0 || entry.year || entry.month || entry.day
+    );
     const previewPayload = {
       storyTitle,
       storySummary,
-      activeChapter,
+      activeChapter: activeChapterLabel,
       chapterType,
       visibility: anonymous ? "anonymous" : visibility,
       chapterBody,
       wordCount,
-      imageAttachments
+      imageAttachments,
+      voiceNotes,
+      chapters: previewChapters,
+      timelineEntries: previewTimeline,
+      allowComments
     };
 
     window.sessionStorage.setItem("histora-studio-preview", JSON.stringify(previewPayload));
     window.sessionStorage.setItem("histora-studio-reviewed", "true");
     setHasReviewedPreview(true);
-    setStudioMessage(`Preview opened for ${activeChapter}. Review it before publishing.`);
+    setStudioMessage(`Preview opened for ${activeChapterLabel}. Review it before publishing.`);
     navigate("/studio/preview");
   };
 
@@ -1735,8 +2299,8 @@ function StudioPage() {
 
     document.execCommand("insertHTML", false, blocks[kind]);
     syncEditorContent();
-    setStudioMessage(`${kind} structure inserted into ${activeChapter}.`);
-    setDraftHistory((current) => [`${kind} structure added to ${activeChapter}.`, ...current].slice(0, 6));
+    setStudioMessage(`${kind} structure inserted into ${activeChapterLabel}.`);
+    setDraftHistory((current) => [`${kind} structure added to ${activeChapterLabel}.`, ...current].slice(0, 6));
   };
 
   const exitStudioMode = () => {
@@ -1764,31 +2328,40 @@ function StudioPage() {
         <div>
           <SectionLabel>WRITING_STUDIO</SectionLabel>
           <h1>DRAFT LIKE AN EDITOR. PUBLISH LIKE A PLATFORM.</h1>
-          <p>Build chapters, attach images and voice notes, invite family contributors, and control how every draft gets published.</p>
+          <p>Build chapters, attach images and voice notes, and control how every finished draft gets published.</p>
         </div>
         <div className="hero-actions">
           <button className="ghost-action" onClick={saveCurrentDraft} type="button">SAVE DRAFT</button>
           <button className="ghost-action" onClick={exitStudioMode} type="button">EXIT STUDIO</button>
-          <button className="primary-action" onClick={publishWholeStory} type="button">
-            PUBLISH
-            <Icon className="button-icon" name="arrow" />
-          </button>
         </div>
       </section>
       <section className="studio-status-bar card">
         <strong>{studioMessage}</strong>
         <span>{wordCount} words in active chapter</span>
       </section>
+      {studioNotice ? (
+        <section className="studio-notice card studio-notice-live" role="status">
+          <span className="studio-notice-badge" aria-hidden="true">
+            <Icon className="button-icon" name="bolt" />
+          </span>
+          <div className="studio-notice-copy">
+            <span className="studio-notice-label">Action needed</span>
+            <strong>{studioNotice.title}</strong>
+            <p>{studioNotice.body}</p>
+          </div>
+          <button className="ghost-action" onClick={() => setStudioNotice(null)} type="button">DISMISS</button>
+        </section>
+      ) : null}
 
       <section className="studio-layout">
         <div className="studio-main">
-          <article className="studio-panel card">
+          <article className="studio-panel card" ref={chapterEditorSectionRef}>
             <div className="section-head">
               <div>
                 <SectionLabel>CHAPTER_SWITCHER</SectionLabel>
                 <h2>Every chapter and draft stays visible</h2>
               </div>
-              <span className="story-tag">{chapterDrafts.length} entries</span>
+              <span className="story-tag">{chapters.length} entries</span>
             </div>
             <div className="chapter-tab-row">
               {chapterSlots.map((chapter) => (
@@ -1840,9 +2413,34 @@ function StudioPage() {
 
           <article className="studio-panel card">
             <div className="section-head">
-              <div>
+              <div className="chapter-heading-block">
                 <SectionLabel>CURRENT_CHAPTER</SectionLabel>
-                <h2>{activeChapter}</h2>
+                <div className="chapter-heading-row">
+                  {isEditingChapterTitle ? (
+                    <input
+                      className="chapter-title-input"
+                      onBlur={submitActiveChapterTitle}
+                      onChange={(event) => updateActiveChapterTitle(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          submitActiveChapterTitle();
+                        }
+                      }}
+                      value={activeChapterLabel}
+                    />
+                  ) : (
+                    <h2>{activeChapterLabel}</h2>
+                  )}
+                  <button
+                    aria-label="Edit chapter title"
+                    className="chapter-edit-button"
+                    onClick={() => setIsEditingChapterTitle(true)}
+                    type="button"
+                  >
+                    <Icon className="button-icon" name="write" />
+                  </button>
+                </div>
               </div>
               <span className="story-tag">{wordCount}_WORDS</span>
             </div>
@@ -1862,8 +2460,17 @@ function StudioPage() {
             </div>
             <div className={isTranscribing ? "transcription-indicator transcription-live" : "transcription-indicator"}>
               <span className="transcription-dot" />
-              <strong>{isTranscribing ? "Voice to text active" : "Voice to text idle"}</strong>
-              <span>{transcriptionStatus}</span>
+              <div className="transcription-signal" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+                <span />
+              </div>
+              <div className="transcription-copy">
+                <strong>{isTranscribing ? "Voice capture live" : "Voice capture idle"}</strong>
+                <span>{isTranscribing ? "Amplifier blinking means speech is being captured." : "Ready when you want to begin."}</span>
+                <small>{transcriptionStatus}</small>
+              </div>
               <button
                 className={isTranscribing ? "primary-action" : "ghost-action"}
                 onClick={isTranscribing ? stopVoiceTranscription : startVoiceTranscription}
@@ -1916,7 +2523,7 @@ function StudioPage() {
               <button className="ghost-action" onClick={() => setIsDraftHistoryVisible((current) => !current)} type="button">
                 {isDraftHistoryVisible ? "HIDE DRAFT HISTORY" : "VIEW DRAFT HISTORY"}
               </button>
-              <button className="primary-action" onClick={publishCurrentChapter} type="button">PUBLISH CHAPTER</button>
+              <button className="primary-action" onClick={saveCurrentDraft} type="button">SAVE CHAPTER</button>
             </div>
             {isDraftHistoryVisible ? (
               <div className="draft-history-panel">
@@ -2021,54 +2628,9 @@ function StudioPage() {
             ) : null}
           </article>
 
-          <article className="studio-panel card">
-            <div className="section-head">
-              <div>
-                <SectionLabel>TIMELINE_MOMENTS</SectionLabel>
-                <h2>Anchor the chapter to real time</h2>
-              </div>
-            </div>
-            <div className="timeline-list">
-              {timelineMoments.map((moment) => (
-                <div key={moment.year} className="timeline-row">
-                  <strong>{moment.year}</strong>
-                  <div>
-                    <h3>{moment.title}</h3>
-                    <p>{moment.body}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </article>
         </div>
 
         <aside className="right-rail">
-          <article className="rail-panel card">
-            <div className="image-frame">
-              <img alt="Studio board" className="feature-image" src={studioBoard} />
-            </div>
-          </article>
-          <article className="rail-panel card">
-            <SectionLabel>PUBLISH_CONTROL</SectionLabel>
-            <div className="publish-stack">
-              <div className="publish-row">
-                <strong>Current mode</strong>
-                <span>{anonymous ? "Anonymous advice" : visibility}</span>
-              </div>
-              <div className="publish-row">
-                <strong>Draft health</strong>
-                <span>4 drafts visible</span>
-              </div>
-              <div className="publish-row">
-                <strong>Readiness</strong>
-                <span>Needs one final review</span>
-              </div>
-            </div>
-            <div className="chapter-controls">
-              <button className="ghost-action" onClick={saveCurrentDraft} type="button">SAVE AS DRAFT</button>
-              <button className="primary-action" onClick={publishWholeStory} type="button">PUBLISH STORY</button>
-            </div>
-          </article>
           <article className="rail-panel card">
             <SectionLabel>PRIVACY_CONTROL</SectionLabel>
             <div className="choice-stack">
@@ -2087,51 +2649,159 @@ function StudioPage() {
               <input checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} type="checkbox" />
               <span>Post this chapter anonymously for advice</span>
             </label>
+            <label className="toggle-row">
+              <input checked={allowComments} onChange={(event) => setAllowComments(event.target.checked)} type="checkbox" />
+              <span>Allow comments on published chapters</span>
+            </label>
           </article>
           <article className="rail-panel card">
-            <SectionLabel>FAMILY_INVITES</SectionLabel>
-            <div className="invite-stack">
-              {contributorInvites.map((invite) => (
-                <div className="invite-card" key={invite.name}>
-                  <div>
-                    <strong>{invite.name}</strong>
-                    <span>{invite.scope}</span>
-                    <small>{invite.note}</small>
-                  </div>
-                  <span className="story-tag">{invite.status}</span>
-                  <div className="invite-actions">
-                    <button className="composer-chip" onClick={() => updateInviteStatus(invite.name, "Paused")} type="button">Pause</button>
-                    <button className="composer-chip" onClick={() => updateInviteStatus(invite.name, "Revoked")} type="button">Revoke</button>
-                    <button className="composer-chip" onClick={() => updateInviteStatus(invite.name, "Active")} type="button">Restore</button>
-                  </div>
-                </div>
-              ))}
+            <SectionLabel>PUBLISH_CONTROL</SectionLabel>
+            <div className="publish-stack">
+              <div className="publish-row">
+                <strong>Current mode</strong>
+                <span>{anonymous ? "Anonymous advice" : visibility}</span>
+              </div>
+              <div className="publish-row">
+                <strong>Active chapter</strong>
+                <span>{activeChapterReady?.isComplete ? "Ready to publish" : `Needs ${chapterCompletionThreshold} words`}</span>
+              </div>
+              <div className="publish-row">
+                <strong>Story readiness</strong>
+                <span>{readyChapters.length > 0 ? "Ready chapters can go live" : "No finished chapters yet"}</span>
+              </div>
             </div>
-            <button className="ghost-action block-action" onClick={addContributorInvite} type="button">INVITE FAMILY CONTRIBUTOR</button>
-          </article>
-          <article className="rail-panel card">
-            <SectionLabel>TRUSTED_CIRCLE</SectionLabel>
-            <div className="rail-stack">
-              {trustedCircle.map((person) => (
-                <div key={person.name} className="rail-row">
-                  <strong>{person.name}</strong>
-                  <span>{person.access}</span>
+            <div className="publish-summary-block">
+              <strong>Chapters going live</strong>
+              {readyChapters.length ? (
+                <div className="publish-chip-list">
+                  {readyChapters.map((chapter) => (
+                    <span className="publish-chip" key={chapter.title}>{chapter.title}</span>
+                  ))}
                 </div>
-              ))}
+              ) : (
+                <p>No finished chapters yet.</p>
+              )}
             </div>
-          </article>
-          <article className="rail-panel card dark-card">
-            <SectionLabel>DRAFT_QUEUE</SectionLabel>
-            <div className="rail-stack">
-              {chapterDrafts.map((chapter) => (
-                <div key={chapter.title} className="rail-row">
-                  <strong>{chapter.title}</strong>
-                  <span>{chapters.find((entry) => entry.title === chapter.title)?.status ?? chapter.status}</span>
+            {startedIncompleteChapters.length ? (
+              <div className="publish-summary-block publish-warning-block">
+                <strong>Stays in draft for now</strong>
+                <div className="publish-chip-list">
+                  {startedIncompleteChapters.map((chapter) => (
+                    <span className="publish-chip publish-chip-warning" key={chapter.title}>{chapter.title}</span>
+                  ))}
                 </div>
-              ))}
+              </div>
+            ) : null}
+            <div className="chapter-controls">
+              <button className="ghost-action" onClick={saveCurrentDraft} type="button">SAVE AS DRAFT</button>
+              <button className="primary-action" onClick={publishWholeStory} type="button">PUBLISH STORY</button>
             </div>
           </article>
         </aside>
+      </section>
+
+      <section className="timeline-stage">
+        <article className="studio-panel card timeline-panel-full">
+          <div className="section-head">
+            <div>
+              <SectionLabel>TIMELINE_MOMENTS</SectionLabel>
+              <h2>Anchor the chapter to real time</h2>
+            </div>
+            <button className="ghost-action" onClick={addTimelineEntry} type="button">ADD MOMENT</button>
+          </div>
+          <div className="timeline-list">
+            {timelineEntries.map((moment, index) => (
+              <div key={`${moment.year}-${moment.month}-${moment.day}-${index}`} className="timeline-row timeline-editor-row">
+                <label>
+                  Date
+                  <div className="timeline-date-grid">
+                    <label className="timeline-date-field">
+                      <span>Month</span>
+                      <div className="timeline-select-shell">
+                        <span className={`timeline-select-value${moment.month ? " is-filled" : ""}`}>
+                          {getTimelineMonthLabel(moment.month)}
+                        </span>
+                        <select
+                          aria-label="Timeline month"
+                          onChange={(event) => updateTimelineDatePart(index, "month", event.target.value)}
+                          value={moment.month}
+                        >
+                          <option value="">Month</option>
+                          {monthLabels.map((label, monthIndex) => (
+                            <option key={label} value={String(monthIndex + 1).padStart(2, "0")}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </label>
+                    <label className="timeline-date-field">
+                      <span>Day</span>
+                      <div className="timeline-select-shell">
+                        <span className={`timeline-select-value${moment.day ? " is-filled" : ""}`}>
+                          {moment.day ? String(Number.parseInt(moment.day, 10)) : "Day"}
+                        </span>
+                        <select
+                          aria-label="Timeline day"
+                          onChange={(event) => updateTimelineDatePart(index, "day", event.target.value)}
+                          value={moment.day}
+                        >
+                          <option value="">Day</option>
+                          {Array.from({ length: getDaysInMonth(moment.year, moment.month) }, (_, dayIndex) => (
+                            <option key={dayIndex + 1} value={String(dayIndex + 1).padStart(2, "0")}>
+                              {dayIndex + 1}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </label>
+                    <label className="timeline-date-field">
+                      <span>Year</span>
+                      <div className="timeline-select-shell">
+                        <span className={`timeline-select-value${moment.year ? " is-filled" : ""}`}>
+                          {moment.year || "Year"}
+                        </span>
+                        <select
+                          aria-label="Timeline year"
+                          onChange={(event) => updateTimelineDatePart(index, "year", event.target.value)}
+                          value={moment.year}
+                        >
+                          <option value="">Year</option>
+                          {timelineYearOptions.map((year) => (
+                            <option key={year} value={year}>
+                              {year}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </label>
+                  </div>
+                </label>
+                <div className="timeline-editor-copy">
+                  <label>
+                    Title
+                    <input
+                      onChange={(event) => updateTimelineEntry(index, "title", event.target.value)}
+                      placeholder="What happened?"
+                      value={moment.title}
+                    />
+                  </label>
+                  <label>
+                    What happened
+                    <textarea
+                      onChange={(event) => updateTimelineEntry(index, "body", event.target.value)}
+                      placeholder="Write what happened at this point in your story."
+                      value={moment.body}
+                    />
+                  </label>
+                  <div className="timeline-editor-actions">
+                    <button className="composer-chip" onClick={() => removeTimelineEntry(index)} type="button">Remove moment</button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
       </section>
     </main>
   );
@@ -2148,6 +2818,10 @@ function StudioPreviewPage() {
     chapterBody: string;
     wordCount: number;
     imageAttachments: Array<{ name: string; url: string; source: string }>;
+    voiceNotes: Array<{ name: string; url: string; source: string }>;
+    chapters: Array<{ title: string; status: string; words: number; body: string }>;
+    timelineEntries: Array<{ year: string; month: string; day: string; title: string; body: string }>;
+    allowComments: boolean;
   }>(null);
 
   useEffect(() => {
@@ -2189,17 +2863,69 @@ function StudioPreviewPage() {
           <span>{preview?.activeChapter ?? "No chapter selected"}</span>
           <span>{preview?.chapterType ?? "story"}</span>
           <span>{preview?.wordCount ?? 0} words</span>
+          <span>{preview?.allowComments ? "Comments on" : "Comments off"}</span>
         </div>
 
-        <section className="preview-chapter-block">
-          <h2>{preview?.activeChapter ?? "Story preview"}</h2>
-          <div
-            className="preview-rich-text"
-            dangerouslySetInnerHTML={{
-              __html: preview?.chapterBody ?? "<p>Open a preview from the studio to render the story reader view.</p>"
-            }}
-          />
-        </section>
+        {preview?.voiceNotes?.length ? (
+          <section className="preview-chapter-block">
+            <h2>Voice notes</h2>
+            <div className="preview-voice-list">
+              {preview.voiceNotes.map((voice) => (
+                <article className="preview-voice-card" key={voice.url}>
+                  <strong>{voice.name}</strong>
+                  <span>{voice.source}</span>
+                  <audio className="voice-player" controls src={voice.url} />
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {preview?.timelineEntries?.length ? (
+          <section className="preview-chapter-block">
+            <h2>Timeline moments</h2>
+            <div className="preview-timeline-list">
+              {preview.timelineEntries.map((entry, index) => (
+                <article className="preview-timeline-row" key={`${entry.year}-${entry.month}-${entry.day}-${index}`}>
+                  <strong>
+                    {[entry.month, entry.day, entry.year].filter(Boolean).join(" / ") || "Undated moment"}
+                  </strong>
+                  <h3>{entry.title || "Untitled moment"}</h3>
+                  <p>{entry.body || "No timeline notes added yet."}</p>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {preview?.chapters?.length ? (
+          <section className="preview-chapter-stack">
+            {preview.chapters.map((chapter) => (
+              <section className="preview-chapter-block" key={chapter.title}>
+                <div className="preview-chapter-heading">
+                  <h2>{chapter.title || "Untitled chapter"}</h2>
+                  <span className="story-tag">{chapter.words} words</span>
+                </div>
+                <div
+                  className="preview-rich-text"
+                  dangerouslySetInnerHTML={{
+                    __html: chapter.body || "<p>This chapter has not been written yet.</p>"
+                  }}
+                />
+              </section>
+            ))}
+          </section>
+        ) : (
+          <section className="preview-chapter-block">
+            <h2>{preview?.activeChapter ?? "Story preview"}</h2>
+            <div
+              className="preview-rich-text"
+              dangerouslySetInnerHTML={{
+                __html: preview?.chapterBody ?? "<p>Open a preview from the studio to render the story reader view.</p>"
+              }}
+            />
+          </section>
+        )}
       </article>
     </main>
   );

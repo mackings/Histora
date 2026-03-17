@@ -4,6 +4,7 @@ import { AppError } from "../utils/app-error.js";
 import { StoryModel } from "../models/story.model.js";
 import { UserModel } from "../models/user.model.js";
 
+
 function enforcePremiumLimits(input: StoryInput, tier: "free" | "premium") {
   const totalWords = input.chapters.reduce<number>(
     (sum, chapter) => sum + chapter.body.split(/\s+/).length,
@@ -16,6 +17,7 @@ function enforcePremiumLimits(input: StoryInput, tier: "free" | "premium") {
     throw new AppError("Premium is required for long-form stories, extra images, or voice notes", 403);
   }
 }
+
 
 export async function createStory(authorId: string, input: StoryInput) {
   const user = await UserModel.findById(authorId).select("subscriptionTier");
