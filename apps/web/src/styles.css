@@ -117,6 +117,12 @@ textarea {
   padding: 20px 0 48px;
 }
 
+.onboarding-shell {
+  width: min(1180px, calc(100% - 24px));
+  margin: 0 auto;
+  padding: 24px 0 48px;
+}
+
 .studio-preview-page {
   width: min(1040px, calc(100% - 24px));
   margin: 0 auto;
@@ -513,7 +519,7 @@ textarea {
 }
 
 .status-bubble {
-  min-width: 88px;
+  min-width: 84px;
   display: grid;
   justify-items: center;
   gap: 6px;
@@ -530,8 +536,8 @@ textarea {
 }
 
 .status-ring {
-  width: 84px;
-  height: 84px;
+  width: 80px;
+  height: 80px;
   padding: 3px;
   border-radius: 999px;
   display: grid;
@@ -1118,6 +1124,12 @@ textarea {
 
 .transcription-copy small {
   font-size: 0.82rem;
+}
+
+.transcription-supported-copy {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
 }
 
 .transcription-live {
@@ -2042,6 +2054,18 @@ textarea {
   gap: 10px;
 }
 
+.icon-chip {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+}
+
 .story-viewer-author strong,
 .story-stage-card strong {
   color: var(--ink);
@@ -2694,16 +2718,52 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .story-circles .section-head h2 {
+    font-size: 1.15rem;
+  }
+
+  .status-scroll {
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .status-bubble {
+    min-width: 72px;
+    gap: 5px;
+  }
+
+  .status-ring {
+    width: 64px;
+    height: 64px;
+  }
+
+  .status-avatar {
+    width: 34px;
+    height: 34px;
+    font-size: 0.95rem;
+    border-radius: 12px;
+  }
+
+  .status-bubble strong {
+    font-size: 0.84rem;
+  }
+
+  .status-bubble-meta {
+    font-size: 0.65rem;
+  }
+
   .status-viewer-backdrop {
     place-items: start center;
-    padding: 14px;
+    padding: 10px;
   }
 
   .status-composer,
   .status-story-viewer,
   .status-help-modal {
-    max-height: calc(100dvh - 28px);
+    width: min(100%, 420px);
+    max-height: calc(100dvh - 20px);
     overflow-y: auto;
+    border-radius: 22px;
   }
 
   .studio-panel,
@@ -2835,8 +2895,8 @@ textarea {
   }
 
   .status-ring {
-    width: 76px;
-    height: 76px;
+    width: 58px;
+    height: 58px;
   }
 
   .status-story-viewer {

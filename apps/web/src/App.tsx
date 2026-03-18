@@ -36,7 +36,8 @@ function Icon({
     | "share"
     | "bolt"
     | "arrow"
-    | "check";
+    | "check"
+    | "close";
   className?: string;
 }) {
   const paths = {
@@ -52,7 +53,8 @@ function Icon({
     share: "M18 16a3 3 0 0 0-2.4 1.2l-6.6-3.3a3.2 3.2 0 0 0 0-1.8l6.6-3.3A3 3 0 1 0 15 7a3.2 3.2 0 0 0 .1.7L8.5 11a3 3 0 1 0 0 2l6.6 3.3A3 3 0 1 0 18 16Z",
     bolt: "M13 2 4 13h6l-1 9 9-11h-6l1-9Z",
     arrow: "M5 12h12.2l-4.1 4.1 1.4 1.4L21 11l-6.5-6.5-1.4 1.4 4.1 4.1H5v2Z",
-    check: "m9.3 16.6-4-4 1.4-1.4 2.6 2.6 8-8 1.4 1.4-9.4 9.4Z"
+    check: "m9.3 16.6-4-4 1.4-1.4 2.6 2.6 8-8 1.4 1.4-9.4 9.4Z",
+    close: "M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4 6.4 5Z"
   } as const;
 
   return (
@@ -114,9 +116,13 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <span className="section-label">{children}</span>;
 }
 
-function AppShell({ children }: { children: React.ReactNode }) {
+function AppShell({ children, isLoggedIn }: { children: React.ReactNode; isLoggedIn: boolean }) {
   useHomeIntroVoice();
   const location = useLocation();
+
+  if (!isLoggedIn && location.pathname === "/") {
+    return <div className="onboarding-shell">{children}</div>;
+  }
 
   if (location.pathname.startsWith("/studio")) {
     return <div className="studio-focus-shell">{children}</div>;
@@ -589,8 +595,8 @@ function StoryCirclesRow() {
                 <SectionLabel>YOUR_STATUS</SectionLabel>
                 <h3>Write a memory status</h3>
               </div>
-              <button className="story-chip light-chip" onClick={() => setIsComposerOpen(false)} type="button">
-                Close
+              <button aria-label="Close status composer" className="icon-chip" onClick={() => setIsComposerOpen(false)} type="button">
+                <Icon className="button-icon" name="close" />
               </button>
             </div>
 
@@ -773,11 +779,11 @@ function StoryCirclesRow() {
                 </div>
               </div>
               <div className="story-viewer-top-actions">
+                <button aria-label="Close story viewer" className="icon-chip" onClick={() => setActiveIndex(null)} type="button">
+                  <Icon className="button-icon" name="close" />
+                </button>
                 <button className="story-chip" onClick={() => setIsPaused((current) => !current)} type="button">
                   {isPaused ? "Resume" : "Pause"}
-                </button>
-                <button className="story-chip" onClick={() => setActiveIndex(null)} type="button">
-                  Close
                 </button>
               </div>
             </div>
@@ -864,8 +870,15 @@ function StoryCirclesRow() {
       {helpRequestTarget ? (
         <div className="status-viewer-backdrop" onClick={() => setHelpRequestTarget(null)} role="presentation">
           <article className="status-help-modal card" onClick={(event) => event.stopPropagation()}>
-            <SectionLabel>CONSENT_FEE</SectionLabel>
-            <h3>Request access to help this anonymous poster</h3>
+            <div className="status-composer-top">
+              <div>
+                <SectionLabel>CONSENT_FEE</SectionLabel>
+                <h3>Request access to help this anonymous poster</h3>
+              </div>
+              <button aria-label="Close help dialog" className="icon-chip" onClick={() => setHelpRequestTarget(null)} type="button">
+                <Icon className="button-icon" name="close" />
+              </button>
+            </div>
             <p>
               To protect privacy, helpers pay a consent fee of ${helpRequestTarget.helpFee ?? 8} before any contact request can be
               passed to the anonymous poster.
@@ -988,11 +1001,79 @@ function HomePage() {
   );
 }
 
-function AuthPage({ mode }: { mode: "signin" | "signup" | "forgot" | "reset" }) {
+function OnboardingPage() {
+  return (
+    <main className="page-shell">
+      <section className="hero-layout onboarding-hero">
+        <article className="hero-copy-card card">
+          <SectionLabel>WELCOME_TO_HISTORA</SectionLabel>
+          <h1>Turn your life into chapters, statuses, and timelines.</h1>
+          <p>
+            Build a social archive from real memories. Write chapter by chapter, post quick status drops, attach media, and control
+            who gets access.
+          </p>
+          <div className="hero-actions">
+            <NavLink className="primary-action" to="/signup">
+              SIGN UP
+              <Icon className="button-icon" name="arrow" />
+            </NavLink>
+            <NavLink className="ghost-action" to="/signin">
+              SIGN IN
+            </NavLink>
+          </div>
+          <div className="status-matrix">
+            {readingShelves.map((shelf) => (
+              <article key={shelf.title} className="status-card">
+                <span className="story-tag">{shelf.mood}</span>
+                <strong>{shelf.title}</strong>
+                <span>{shelf.meta}</span>
+                <small>{shelf.reactions}</small>
+              </article>
+            ))}
+          </div>
+        </article>
+
+        <article className="hero-visual-card card">
+          <div className="image-frame">
+            <img alt="Histora onboarding preview" className="feature-image" src={heroMemory} />
+          </div>
+          <div className="hero-overlay-stack">
+            <article className="overlay-card">
+              <SectionLabel>START_HERE</SectionLabel>
+              <h3>PRIVATE MEMORIES, PUBLIC STORIES, ANONYMOUS ADVICE</h3>
+              <p>Start with your first profile and move into chapters, statuses, contributors, and premium media.</p>
+            </article>
+          </div>
+        </article>
+      </section>
+    </main>
+  );
+}
+
+function AuthPage({
+  mode,
+  onAuthenticated
+}: {
+  mode: "signin" | "signup" | "forgot" | "reset";
+  onAuthenticated: () => void;
+}) {
   const isSignup = mode === "signup";
   const isForgot = mode === "forgot";
   const isReset = mode === "reset";
   const isSignin = mode === "signin";
+  const navigate = useNavigate();
+
+  const handlePrimaryAction = () => {
+    if (isSignin || isSignup) {
+      onAuthenticated();
+      navigate("/feed");
+      return;
+    }
+
+    if (isReset) {
+      navigate("/signin");
+    }
+  };
 
   return (
     <main className="page-shell auth-shell">
@@ -1060,7 +1141,7 @@ function AuthPage({ mode }: { mode: "signin" | "signup" | "forgot" | "reset" }) 
                 <span>Allow comments on published chapters by default</span>
               </label>
             ) : null}
-            <button className="primary-action block-action" type="button">
+            <button className="primary-action block-action" onClick={handlePrimaryAction} type="button">
               {isSignup ? "CREATE ACCOUNT" : isForgot ? "SEND RESET LINK" : isReset ? "UPDATE PASSWORD" : "SIGN IN"}
               <Icon className="button-icon" name="arrow" />
             </button>
@@ -1623,6 +1704,21 @@ function StudioPage() {
     { label: "Igbo", value: "ig-NG" },
     { label: "Hausa", value: "ha-NG" }
   ];
+  const supportedTranscriptionLanguageValues = new Set([
+    "en-US",
+    "en-GB",
+    "fr-FR",
+    "es-ES",
+    "de-DE",
+    "pt-BR",
+    "ar-SA",
+    "yo-NG",
+    "ig-NG",
+    "ha-NG"
+  ]);
+  const supportedTranscriptionLanguages = transcriptionLanguages.filter((language) =>
+    supportedTranscriptionLanguageValues.has(language.value)
+  );
   const initialChapterContent = {
     "Chapter 1: Before the city":
       "<p>I learned early that memory is rarely one clean scene. It is a room, then a sound, then a name I did not understand until years later.</p>",
@@ -2336,7 +2432,16 @@ function StudioPage() {
       };
     }
 
-    if (language === "fr-FR" || language === "es-ES" || language === "de-DE" || language === "pt-BR") {
+    if (
+      language === "fr-FR" ||
+      language === "es-ES" ||
+      language === "de-DE" ||
+      language === "pt-BR" ||
+      language === "ar-SA" ||
+      language === "yo-NG" ||
+      language === "ig-NG" ||
+      language === "ha-NG"
+    ) {
       return {
         speechModel: "universal-streaming-multilingual",
         languageDetection: true
@@ -2606,6 +2711,22 @@ function StudioPage() {
   const openStudioNotice = (title: string, body: string) => {
     setStudioNotice({ title, body });
   };
+
+  useEffect(() => {
+    if (supportedTranscriptionLanguageValues.has(transcriptionLanguage)) {
+      return;
+    }
+
+    const fallbackLanguage = supportedTranscriptionLanguages[0]?.value ?? "en-US";
+    setTranscriptionLanguage(fallbackLanguage);
+    setStudioMessage("Unsupported transcription language reset to a supported option.");
+    openStudioNotice(
+      "Transcription language unsupported",
+      `The saved language "${transcriptionLanguage}" is not supported by the current voice transcription setup. Supported languages: ${supportedTranscriptionLanguages
+        .map((language) => language.label)
+        .join(", ")}.`
+    );
+  }, [supportedTranscriptionLanguages, transcriptionLanguage]);
 
   const guideToSection = (ref: RefObject<HTMLElement | null>, message: string) => {
     setStudioMessage(message);
@@ -2963,13 +3084,16 @@ function StudioPage() {
                   onChange={(event) => setTranscriptionLanguage(event.target.value)}
                   value={transcriptionLanguage}
                 >
-                  {transcriptionLanguages.map((language) => (
+                  {supportedTranscriptionLanguages.map((language) => (
                     <option key={language.value} value={language.value}>
                       {language.label}
                     </option>
                   ))}
                 </select>
               </label>
+              <span className="transcription-supported-copy">
+                Supported now: {supportedTranscriptionLanguages.map((language) => language.label).join(", ")}
+              </span>
             </div>
             <div className="form-grid">
               <label>
@@ -3469,20 +3593,38 @@ function PricingPage() {
 }
 
 export default function App() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    setIsLoggedIn(window.localStorage.getItem("histora-auth") === "true");
+  }, []);
+
+  const handleAuthenticated = () => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("histora-auth", "true");
+    }
+
+    setIsLoggedIn(true);
+  };
+
   return (
-    <AppShell>
+    <AppShell isLoggedIn={isLoggedIn}>
       <Routes>
-        <Route element={<HomePage />} path="/" />
+        <Route element={isLoggedIn ? <HomePage /> : <OnboardingPage />} path="/" />
         <Route element={<FeedPage />} path="/feed" />
         <Route element={<ProfilePage />} path="/profile" />
         <Route element={<EditProfilePage />} path="/profile/edit" />
         <Route element={<StudioPreviewPage />} path="/studio/preview" />
         <Route element={<StudioPage />} path="/studio" />
         <Route element={<PricingPage />} path="/pricing" />
-        <Route element={<AuthPage mode="signin" />} path="/signin" />
-        <Route element={<AuthPage mode="signup" />} path="/signup" />
-        <Route element={<AuthPage mode="forgot" />} path="/forgot-password" />
-        <Route element={<AuthPage mode="reset" />} path="/reset-password" />
+        <Route element={<AuthPage mode="signin" onAuthenticated={handleAuthenticated} />} path="/signin" />
+        <Route element={<AuthPage mode="signup" onAuthenticated={handleAuthenticated} />} path="/signup" />
+        <Route element={<AuthPage mode="forgot" onAuthenticated={handleAuthenticated} />} path="/forgot-password" />
+        <Route element={<AuthPage mode="reset" onAuthenticated={handleAuthenticated} />} path="/reset-password" />
       </Routes>
     </AppShell>
   );
