@@ -1701,7 +1701,6 @@ function StudioPage() {
     { label: "Portuguese (Brazil)", value: "pt-BR" },
     { label: "Arabic", value: "ar-SA" },
     { label: "Yoruba", value: "yo-NG" },
-    { label: "Igbo", value: "ig-NG" },
     { label: "Hausa", value: "ha-NG" }
   ];
   const supportedTranscriptionLanguageValues = new Set([
@@ -1713,7 +1712,6 @@ function StudioPage() {
     "pt-BR",
     "ar-SA",
     "yo-NG",
-    "ig-NG",
     "ha-NG"
   ]);
   const supportedTranscriptionLanguages = transcriptionLanguages.filter((language) =>
@@ -2432,18 +2430,16 @@ function StudioPage() {
       };
     }
 
-    if (
-      language === "fr-FR" ||
-      language === "es-ES" ||
-      language === "de-DE" ||
-      language === "pt-BR" ||
-      language === "ar-SA" ||
-      language === "yo-NG" ||
-      language === "ig-NG" ||
-      language === "ha-NG"
-    ) {
+    if (language === "fr-FR" || language === "es-ES" || language === "de-DE" || language === "pt-BR") {
       return {
         speechModel: "universal-streaming-multilingual",
+        languageDetection: true
+      };
+    }
+
+    if (language === "ar-SA" || language === "yo-NG" || language === "ha-NG") {
+      return {
+        speechModel: "whisper-rt",
         languageDetection: true
       };
     }
@@ -2644,6 +2640,18 @@ function StudioPage() {
   const startVoiceTranscription = () => {
     if (!navigator.mediaDevices?.getUserMedia) {
       setStudioMessage("Live transcription recording is not supported in this browser.");
+      return;
+    }
+
+    if (!supportedTranscriptionLanguageValues.has(transcriptionLanguage)) {
+      openStudioNotice(
+        "Transcription language unsupported",
+        `The selected language is not supported by the current AssemblyAI setup. Supported now: ${supportedTranscriptionLanguages
+          .map((language) => language.label)
+          .join(", ")}. Igbo is not currently confirmed in AssemblyAI's supported-language docs for this setup.`
+      );
+      setStudioMessage("Unsupported transcription language selected.");
+      setTranscriptionStatus("Voice transcription unavailable");
       return;
     }
 
@@ -3093,6 +3101,9 @@ function StudioPage() {
               </label>
               <span className="transcription-supported-copy">
                 Supported now: {supportedTranscriptionLanguages.map((language) => language.label).join(", ")}
+              </span>
+              <span className="transcription-supported-copy">
+                Not currently confirmed here: Igbo
               </span>
             </div>
             <div className="form-grid">

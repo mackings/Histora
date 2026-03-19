@@ -18,14 +18,17 @@ const getStreamingConfig = (language: string) => {
     language === "es-ES" ||
     language === "de-DE" ||
     language === "pt-BR" ||
-    language === "it-IT" ||
-    language === "ar-SA" ||
-    language === "yo-NG" ||
-    language === "ig-NG" ||
-    language === "ha-NG"
+    language === "it-IT"
   ) {
     return {
       speechModel: "universal-streaming-multilingual",
+      languageDetection: true
+    };
+  }
+
+  if (language === "ar-SA" || language === "yo-NG" || language === "ha-NG") {
+    return {
+      speechModel: "whisper-rt",
       languageDetection: true
     };
   }
