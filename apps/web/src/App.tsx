@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
-import { NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Fragment, useEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import {
   chapterDrafts,
@@ -12,8 +12,7 @@ import {
   profileStories,
   readingShelves,
   storyCircles,
-  timelineMoments,
-  trendingStories
+  timelineMoments
 } from "./app-data";
 import feedStory from "./assets/feed-story.svg";
 import heroMemory from "./assets/hero-memory.svg";
@@ -37,7 +36,19 @@ function Icon({
     | "bolt"
     | "arrow"
     | "check"
-    | "close";
+    | "close"
+    | "person"
+    | "download"
+    | "mic"
+    | "pause"
+    | "eye"
+    | "eyeOff"
+    | "bold"
+    | "italic"
+    | "quote"
+    | "checklist"
+    | "timeline"
+    | "note";
   className?: string;
 }) {
   const paths = {
@@ -54,7 +65,20 @@ function Icon({
     bolt: "M13 2 4 13h6l-1 9 9-11h-6l1-9Z",
     arrow: "M5 12h12.2l-4.1 4.1 1.4 1.4L21 11l-6.5-6.5-1.4 1.4 4.1 4.1H5v2Z",
     check: "m9.3 16.6-4-4 1.4-1.4 2.6 2.6 8-8 1.4 1.4-9.4 9.4Z",
-    close: "M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4 6.4 5Z"
+    close: "M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4 6.4 5Z",
+    person: "M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Zm0 2c-4.7 0-8.5 2.6-8.5 5.8 0 .7.6 1.2 1.2 1.2h14.6c.7 0 1.2-.5 1.2-1.2C20.5 16.6 16.7 14 12 14Z",
+    download: "M11 4h2v8.2l2.6-2.6 1.4 1.4-5 5-5-5 1.4-1.4 2.6 2.6V4Zm-6 14h14v2H5v-2Z",
+    mic: "M12 15a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.93V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.07A7 7 0 0 1 5 12a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z",
+    pause: "M7 5h3v14H7V5Zm7 0h3v14h-3V5Z",
+    eye: "M12 6c5.1 0 9.3 3.3 10.8 6-1.5 2.7-5.7 6-10.8 6S2.7 14.7 1.2 12C2.7 9.3 6.9 6 12 6Zm0 2C8.1 8 4.8 10.3 3.4 12 4.8 13.7 8.1 16 12 16s7.2-2.3 8.6-4C19.2 10.3 15.9 8 12 8Zm0 1.7a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6Z",
+    eyeOff:
+      "m4.3 3 16.7 16.7-1.4 1.4-2.7-2.7A12.6 12.6 0 0 1 12 18c-5.1 0-9.3-3.3-10.8-6A14.7 14.7 0 0 1 6 7.2L2.9 4.1 4.3 3Zm3.2 5.9A8.9 8.9 0 0 0 3.4 12C4.8 13.7 8.1 16 12 16c1.2 0 2.2-.2 3.2-.6l-1.8-1.8a3.5 3.5 0 0 1-4.8-4.8L7.5 8.9Zm4.8-2.9c5.1 0 9.3 3.3 10.8 6a14 14 0 0 1-3.8 4.2l-1.4-1.4A10.2 10.2 0 0 0 20.6 12C19.2 10.3 15.9 8 12 8c-.3 0-.7 0-1 .1L9.4 6.5c.8-.3 1.7-.5 2.6-.5Z",
+    bold: "M8 5h5.5a4 4 0 0 1 2.3 7.3A4.2 4.2 0 0 1 13.2 20H8V5Zm3 6h2.1a1.8 1.8 0 1 0 0-3.6H11V11Zm0 6.2h2.5a2 2 0 0 0 0-4H11v4Z",
+    italic: "M10 5h9v2h-3.2l-3.6 10H15v2H6v-2h3.2l3.6-10H10V5Z",
+    quote: "M7.5 9A2.5 2.5 0 0 1 10 11.5c0 2.6-2 4.7-4.5 4.9v-2A2.9 2.9 0 0 0 8 11.7H5.5V9h2Zm8 0A2.5 2.5 0 0 1 18 11.5c0 2.6-2 4.7-4.5 4.9v-2A2.9 2.9 0 0 0 16 11.7h-2.5V9h2Z",
+    checklist: "M9 7 7.6 5.6 6.2 7 9 9.8 13.8 5 12.4 3.6 9 7Zm0 10-1.4-1.4-1.4 1.4L9 19.8l4.8-4.8-1.4-1.4L9 17Zm6-9h5v2h-5V8Zm0 8h5v2h-5v-2Z",
+    timeline: "M7 4a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm10 14a2 2 0 1 1 0 4 2 2 0 0 1 0-4ZM6 7h2v10H6V7Zm10 0h2v10h-2V7ZM9 10h6v2H9v-2Z",
+    note: "M6 4h12a2 2 0 0 1 2 2v10l-4 4H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm2 4v2h8V8H8Zm0 4v2h5v-2H8Z"
   } as const;
 
   return (
@@ -113,8 +137,120 @@ function useHomeIntroVoice() {
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <span className="section-label">{children}</span>;
+  const normalizedLabel = typeof children === "string" ? children.replaceAll("_", " ") : children;
+  return <span className="section-label">{normalizedLabel}</span>;
 }
+
+type StatusEntry = {
+  name: string;
+  meta: string;
+  tone: "orange" | "ink" | "add" | "blue";
+  label: string;
+  contentTitle: string;
+  contentBody: string;
+  anonymous?: boolean;
+  shareSlug?: string;
+  comments?: Array<{ author: string; text: string }>;
+  helpFee?: number;
+};
+
+type StoredAnonymousStatus = {
+  id: string;
+  title: string;
+  body: string;
+  meta: string;
+  shareSlug: string;
+  comments: Array<{ author: string; text: string }>;
+  helpFee: number;
+  distribution: "app" | "external";
+  source: "posted" | "received";
+  helperContact?: {
+    name: string;
+    phone: string;
+  } | null;
+};
+
+type AnonymousFeedSource = {
+  id: string;
+  slug: string;
+  title: string;
+  excerpt: string;
+  meta: string;
+  comments: Array<{ author: string; text: string }>;
+  helpFee: number;
+  fromQuickMemory: boolean;
+};
+
+const anonymousStatusStorageKey = "histora-anonymous-feed-v1";
+const anonymousStatusUpdateEvent = "histora-anonymous-status-updated";
+
+const readStoredAnonymousStatuses = (): StoredAnonymousStatus[] => {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  try {
+    const savedStatuses = window.localStorage.getItem(anonymousStatusStorageKey);
+    if (!savedStatuses) {
+      return [];
+    }
+
+    const parsedStatuses = JSON.parse(savedStatuses);
+    if (!Array.isArray(parsedStatuses)) {
+      return [];
+    }
+
+    return parsedStatuses.filter(
+      (entry): entry is StoredAnonymousStatus =>
+        Boolean(
+          entry &&
+            typeof entry === "object" &&
+            typeof entry.id === "string" &&
+            typeof entry.title === "string" &&
+            typeof entry.body === "string" &&
+            typeof entry.meta === "string" &&
+            typeof entry.shareSlug === "string" &&
+            Array.isArray(entry.comments) &&
+            typeof entry.helpFee === "number"
+        )
+    ).map((entry) => ({
+      ...entry,
+      distribution: entry.distribution === "external" ? "external" : "app",
+      source: entry.source === "received" ? "received" : "posted",
+      helperContact:
+        entry.helperContact &&
+        typeof entry.helperContact === "object" &&
+        typeof entry.helperContact.name === "string" &&
+        typeof entry.helperContact.phone === "string"
+          ? entry.helperContact
+          : null
+    }));
+  } catch {
+    return [];
+  }
+};
+
+const writeStoredAnonymousStatuses = (entries: StoredAnonymousStatus[]) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.localStorage.setItem(anonymousStatusStorageKey, JSON.stringify(entries));
+  window.dispatchEvent(new CustomEvent(anonymousStatusUpdateEvent));
+};
+
+const storedAnonymousStatusToEntry = (entry: StoredAnonymousStatus): StatusEntry => ({
+  name: "Anonymous",
+  meta: entry.meta,
+  tone: "ink",
+  label: "Advice status",
+  contentTitle: entry.title,
+  contentBody: entry.body,
+  anonymous: true,
+  shareSlug: entry.shareSlug,
+  comments: entry.comments,
+  helpFee: entry.helpFee
+});
 
 function AppShell({ children, isLoggedIn }: { children: React.ReactNode; isLoggedIn: boolean }) {
   useHomeIntroVoice();
@@ -128,8 +264,25 @@ function AppShell({ children, isLoggedIn }: { children: React.ReactNode; isLogge
     return <div className="studio-focus-shell">{children}</div>;
   }
 
+  if (location.pathname.startsWith("/feed/story/")) {
+    return <div className="feed-reader-focus-shell">{children}</div>;
+  }
+
+  if (location.pathname.startsWith("/anonymous")) {
+    return <div className="feed-reader-focus-shell">{children}</div>;
+  }
+
   if (location.pathname.startsWith("/profile")) {
     return <div className="profile-focus-shell">{children}</div>;
+  }
+
+  if (
+    location.pathname === "/signin" ||
+    location.pathname === "/signup" ||
+    location.pathname === "/forgot-password" ||
+    location.pathname === "/reset-password"
+  ) {
+    return <div className="auth-focus-shell">{children}</div>;
   }
 
   return (
@@ -144,10 +297,6 @@ function AppShell({ children, isLoggedIn }: { children: React.ReactNode; isLogge
         </NavLink>
 
         <nav className="rail-nav card">
-          <NavLink to="/">
-            <Icon className="nav-icon" name="home" />
-            Home
-          </NavLink>
           <NavLink to="/feed">
             <Icon className="nav-icon" name="feed" />
             Feed
@@ -156,12 +305,12 @@ function AppShell({ children, isLoggedIn }: { children: React.ReactNode; isLogge
             <Icon className="nav-icon" name="write" />
             Studio
           </NavLink>
-          <NavLink to="/pricing">
-            <Icon className="nav-icon" name="premium" />
-            Premium
+          <NavLink to="/anonymous">
+            <Icon className="nav-icon" name="spark" />
+            Anonymous
           </NavLink>
           <NavLink to="/profile">
-            <Icon className="nav-icon" name="bookmark" />
+            <Icon className="nav-icon" name="person" />
             Profile
           </NavLink>
           <NavLink to="/signin">
@@ -202,10 +351,6 @@ function AppShell({ children, isLoggedIn }: { children: React.ReactNode; isLogge
         {children}
 
         <nav className="mobile-dock card">
-          <NavLink to="/">
-            <Icon className="nav-icon" name="home" />
-            Home
-          </NavLink>
           <NavLink to="/feed">
             <Icon className="nav-icon" name="feed" />
             Feed
@@ -214,12 +359,12 @@ function AppShell({ children, isLoggedIn }: { children: React.ReactNode; isLogge
             <Icon className="nav-icon" name="write" />
             Studio
           </NavLink>
-          <NavLink to="/pricing">
-            <Icon className="nav-icon" name="premium" />
-            Pro
+          <NavLink to="/anonymous">
+            <Icon className="nav-icon" name="spark" />
+            Anonymous
           </NavLink>
           <NavLink to="/profile">
-            <Icon className="nav-icon" name="bookmark" />
+            <Icon className="nav-icon" name="person" />
             Profile
           </NavLink>
         </nav>
@@ -229,18 +374,7 @@ function AppShell({ children, isLoggedIn }: { children: React.ReactNode; isLogge
 }
 
 function StoryCirclesRow() {
-  type StatusEntry = {
-    name: string;
-    meta: string;
-    tone: "orange" | "ink" | "add" | "blue";
-    label: string;
-    contentTitle: string;
-    contentBody: string;
-    anonymous?: boolean;
-    shareSlug?: string;
-    comments?: Array<{ author: string; text: string }>;
-    helpFee?: number;
-  };
+  const navigate = useNavigate();
   const emojiGroups = [
     { label: "Recent", icon: "🕘", emojis: ["😂", "❤️", "😭", "🔥", "🙏", "✨"] },
     { label: "Smileys", icon: "😊", emojis: ["😊", "😄", "😁", "😂", "🥹", "😮", "😌", "🤭"] },
@@ -269,44 +403,11 @@ function StoryCirclesRow() {
   const [activeEmojiGroup, setActiveEmojiGroup] = useState("Recent");
   const [isAnonymousComposer, setIsAnonymousComposer] = useState(false);
   const [statusItems, setStatusItems] = useState<StatusEntry[]>(storyCircles as StatusEntry[]);
-  const [replyDraft, setReplyDraft] = useState("");
   const [shareFeedback, setShareFeedback] = useState("");
   const [helpRequestTarget, setHelpRequestTarget] = useState<StatusEntry | null>(null);
   const [consentAccepted, setConsentAccepted] = useState(false);
-  const [anonymousReplyHistory, setAnonymousReplyHistory] = useState<string[]>([]);
 
   const activeStatus = activeIndex === null ? null : statusItems[activeIndex];
-  const isAnonymousStatus = activeStatus?.name === "Anonymous" || activeStatus?.label.toLowerCase().includes("advice");
-  const hasAlreadyRepliedToActiveAnonymous =
-    Boolean(activeStatus?.shareSlug) && anonymousReplyHistory.includes(activeStatus.shareSlug);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    try {
-      const savedReplyHistory = window.localStorage.getItem("histora-anonymous-replies");
-      if (!savedReplyHistory) {
-        return;
-      }
-
-      const parsedHistory = JSON.parse(savedReplyHistory);
-      if (Array.isArray(parsedHistory)) {
-        setAnonymousReplyHistory(parsedHistory);
-      }
-    } catch {
-      setAnonymousReplyHistory([]);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    window.localStorage.setItem("histora-anonymous-replies", JSON.stringify(anonymousReplyHistory));
-  }, [anonymousReplyHistory]);
 
   useEffect(() => {
     if (activeIndex === null) {
@@ -402,7 +503,6 @@ function StoryCirclesRow() {
     }
 
     setActiveIndex(index);
-    setReplyDraft("");
     setShareFeedback("");
   };
 
@@ -416,7 +516,7 @@ function StoryCirclesRow() {
       return "";
     }
 
-    return `${window.location.origin}/status/${entry.shareSlug}`;
+    return `${window.location.origin}/anonymous/${entry.shareSlug}`;
   };
 
   const copyStatusLink = async (entry: StatusEntry) => {
@@ -490,6 +590,7 @@ function StoryCirclesRow() {
   };
 
   const postStatus = () => {
+    const shareSlug = isAnonymousComposer ? createShareSlug() : undefined;
     const nextEntry: StatusEntry = {
       name: isAnonymousComposer ? "Anonymous" : "Your status",
       meta: "Just now",
@@ -498,7 +599,7 @@ function StoryCirclesRow() {
       contentTitle: isAnonymousComposer ? "Anonymous advice status" : "Fresh memory status",
       contentBody: statusDraft,
       anonymous: isAnonymousComposer,
-      shareSlug: isAnonymousComposer ? createShareSlug() : undefined,
+      shareSlug,
       comments: isAnonymousComposer
         ? [
             { author: "Reply 1", text: "You are not overreacting. Protect your peace first." },
@@ -508,42 +609,39 @@ function StoryCirclesRow() {
       helpFee: isAnonymousComposer ? 8 : undefined
     };
 
+    if (isAnonymousComposer && shareSlug) {
+      const currentStoredStatuses = readStoredAnonymousStatuses();
+      writeStoredAnonymousStatuses([
+        {
+          id: shareSlug,
+          title: nextEntry.contentTitle,
+          body: nextEntry.contentBody,
+          meta: nextEntry.meta,
+          shareSlug,
+          comments: nextEntry.comments ?? [],
+          helpFee: nextEntry.helpFee ?? 8,
+          distribution: "app",
+          source: "posted",
+          helperContact: null
+        },
+        ...currentStoredStatuses
+      ]);
+
+      setStatusDraft("Today I finally wrote the chapter I kept postponing.");
+      setSelectedImage(null);
+      setIsComposerOpen(false);
+      setIsAnonymousComposer(false);
+      navigate("/anonymous");
+      return;
+    }
+
     setStatusItems((current) => [current[0], nextEntry, ...current.slice(1)]);
     setStatusDraft("Today I finally wrote the chapter I kept postponing.");
     setSelectedImage(null);
     setIsComposerOpen(false);
     setIsAnonymousComposer(false);
-    setShareFeedback(
-      isAnonymousComposer ? "Anonymous status posted. You can now copy the link or save the post image." : "Status posted."
-    );
+    setShareFeedback("Status posted.");
     setActiveIndex(1);
-  };
-
-  const submitReply = () => {
-    if (!activeStatus || !replyDraft.trim()) {
-      return;
-    }
-
-    if (activeStatus.anonymous && activeStatus.shareSlug && anonymousReplyHistory.includes(activeStatus.shareSlug)) {
-      setShareFeedback("You have already sent one anonymous response to this post.");
-      return;
-    }
-
-    setStatusItems((current) =>
-      current.map((entry) =>
-        entry.shareSlug === activeStatus.shareSlug
-          ? {
-              ...entry,
-              comments: [...(entry.comments ?? []), { author: entry.anonymous ? "Anonymous reply" : "Reply", text: replyDraft.trim() }]
-            }
-          : entry
-      )
-    );
-    if (activeStatus.anonymous && activeStatus.shareSlug) {
-      setAnonymousReplyHistory((current) => [...current, activeStatus.shareSlug!]);
-    }
-    setReplyDraft("");
-    setShareFeedback(activeStatus.anonymous ? "Anonymous advice sent." : "Reply sent.");
   };
 
   const confirmHelpRequest = () => {
@@ -566,7 +664,7 @@ function StoryCirclesRow() {
             <SectionLabel>STATUS_STREAM</SectionLabel>
             <h2>Quick memory drops</h2>
           </div>
-          <span className="section-meta">SCROLL_SIDEWAYS</span>
+          <span aria-label="Scroll sideways" className="section-meta">↔</span>
         </div>
 
         <div className="status-scroll">
@@ -750,6 +848,11 @@ function StoryCirclesRow() {
       {activeStatus ? (
         <div className="status-viewer-backdrop" onClick={() => setActiveIndex(null)} role="presentation">
           <article className={`status-story-viewer tone-${activeStatus.tone}`} onClick={(event) => event.stopPropagation()}>
+            <div className="story-viewer-close-row">
+              <button aria-label="Close story viewer" className="icon-chip" onClick={() => setActiveIndex(null)} type="button">
+                <Icon className="button-icon" name="close" />
+              </button>
+            </div>
             <div className="story-progress-row">
               {statusItems.map((circle, index) => (
                 <span className="story-progress-track" key={circle.name}>
@@ -779,9 +882,6 @@ function StoryCirclesRow() {
                 </div>
               </div>
               <div className="story-viewer-top-actions">
-                <button aria-label="Close story viewer" className="icon-chip" onClick={() => setActiveIndex(null)} type="button">
-                  <Icon className="button-icon" name="close" />
-                </button>
                 <button className="story-chip" onClick={() => setIsPaused((current) => !current)} type="button">
                   {isPaused ? "Resume" : "Pause"}
                 </button>
@@ -816,44 +916,6 @@ function StoryCirclesRow() {
                 {shareFeedback ? <p className="status-feedback">{shareFeedback}</p> : null}
               </div>
             </div>
-
-            <div className="story-reply-bar">
-              <input
-                disabled={Boolean(isAnonymousStatus && hasAlreadyRepliedToActiveAnonymous)}
-                onChange={(event) => setReplyDraft(event.target.value)}
-                placeholder={
-                  isAnonymousStatus
-                    ? hasAlreadyRepliedToActiveAnonymous
-                      ? "You already sent one anonymous response"
-                      : "Reply anonymously..."
-                    : `Reply to ${activeStatus.name}...`
-                }
-                value={hasAlreadyRepliedToActiveAnonymous ? "" : replyDraft}
-              />
-              <button
-                className="primary-action"
-                disabled={Boolean(isAnonymousStatus && hasAlreadyRepliedToActiveAnonymous)}
-                onClick={submitReply}
-                type="button"
-              >
-                {isAnonymousStatus
-                  ? hasAlreadyRepliedToActiveAnonymous
-                    ? "Response sent"
-                    : "Send anonymous reply"
-                  : "Send"}
-              </button>
-            </div>
-
-            {activeStatus.comments?.length ? (
-              <div className="story-comment-list">
-                {activeStatus.comments.map((comment, index) => (
-                  <div className="story-comment-card" key={`${comment.author}-${index}`}>
-                    <strong>{comment.author}</strong>
-                    <p>{comment.text}</p>
-                  </div>
-                ))}
-              </div>
-            ) : null}
 
             <div className="story-footer-row">
               <button className="ghost-action" disabled={activeIndex === 0} onClick={goToPrevious} type="button">
@@ -895,109 +957,6 @@ function StoryCirclesRow() {
         </div>
       ) : null}
     </>
-  );
-}
-
-function HomePage() {
-  return (
-    <main className="page-shell">
-      <StoryCirclesRow />
-
-      <section className="hero-layout">
-        <article className="hero-copy-card card">
-          <SectionLabel>FEATURED_LAUNCH</SectionLabel>
-          <h1>CHAPTER YOUR LIFE. POST THE MOMENTS. CONTROL WHO SEES THEM.</h1>
-          <p>
-            Histora turns real-life history into a readable social archive. Publish full chapters, post status-style memory drops,
-            attach images or voice notes, and choose whether each story stays private, anonymous, selected, or public.
-          </p>
-          <div className="hero-actions">
-            <NavLink className="primary-action" to="/feed">
-              ENTER FEED
-              <Icon className="button-icon" name="arrow" />
-            </NavLink>
-            <NavLink className="ghost-action" to="/studio">
-              OPEN STUDIO
-            </NavLink>
-          </div>
-
-          <div className="status-matrix">
-            {readingShelves.map((shelf) => (
-              <article key={shelf.title} className="status-card">
-                <span className="story-tag">{shelf.mood}</span>
-                <strong>{shelf.title}</strong>
-                <span>{shelf.meta}</span>
-                <small>{shelf.reactions}</small>
-              </article>
-            ))}
-          </div>
-        </article>
-
-        <article className="hero-visual-card card">
-          <div className="image-frame">
-            <img alt="Featured story collage" className="feature-image" src={heroMemory} />
-          </div>
-          <div className="hero-overlay-stack">
-            <article className="overlay-card">
-              <SectionLabel>EDITOR_PICK</SectionLabel>
-              <h3>FROM BORROWED ROOMS TO MY OWN FRONT DOOR</h3>
-              <p>12 chapters / 3 timelines / 1 voice note / 12.4K readers</p>
-            </article>
-            <article className="metric-strip">
-              <span>READS // 12.4K</span>
-              <span>SAVES // 2.3K</span>
-              <span>STATUS // LIVE</span>
-            </article>
-          </div>
-        </article>
-      </section>
-
-      <section className="two-column-section">
-        <article className="large-panel card">
-          <div className="section-head">
-            <div>
-              <SectionLabel>DISCOVERY_QUEUE</SectionLabel>
-              <h2>What readers are opening today</h2>
-            </div>
-            <NavLink className="ghost-action" to="/feed">
-              VIEW ALL
-            </NavLink>
-          </div>
-          <div className="trend-list">
-            {trendingStories.map((story, index) => (
-              <div key={story.title} className="trend-row">
-                <span className="trend-index">{String(index + 1).padStart(2, "0")}</span>
-                <div>
-                  <strong>{story.title}</strong>
-                  <span>{story.author}</span>
-                </div>
-                <span>{story.reads}</span>
-              </div>
-            ))}
-          </div>
-        </article>
-
-        <article className="large-panel card protocol-panel">
-          <SectionLabel>ARCHIVE_PROTOCOL</SectionLabel>
-          <h2>Built for visual histories, not plain posts.</h2>
-          <img alt="Feed layout preview" className="feature-image compact-image" src={feedStory} />
-          <div className="protocol-grid">
-            <div className="protocol-row">
-              <strong>PUBLIC</strong>
-              <span>Discoverable chapters with read counts and comments.</span>
-            </div>
-            <div className="protocol-row">
-              <strong>PRIVATE</strong>
-              <span>Archive personal histories with stronger access control.</span>
-            </div>
-            <div className="protocol-row">
-              <strong>ANON</strong>
-              <span>Ask for advice without exposing identity.</span>
-            </div>
-          </div>
-        </article>
-      </section>
-    </main>
   );
 }
 
@@ -1062,21 +1021,143 @@ function AuthPage({
   const isReset = mode === "reset";
   const isSignin = mode === "signin";
   const navigate = useNavigate();
+  const location = useLocation();
+  const redirectAfterAuth = new URLSearchParams(location.search).get("redirect");
+  const [form, setForm] = useState({
+    fullName: "",
+    username: "",
+    email: "",
+    password: "",
+    resetCode: "",
+    newPassword: "",
+    confirmPassword: "",
+    dateOfBirth: ""
+  });
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [formFeedback, setFormFeedback] = useState("");
+  const [visiblePasswords, setVisiblePasswords] = useState({
+    password: false,
+    newPassword: false,
+    confirmPassword: false
+  });
+
+  const updateField = (field: keyof typeof form, value: string) => {
+    setForm((current) => ({ ...current, [field]: value }));
+    setErrors((current) => {
+      if (!current[field]) {
+        return current;
+      }
+
+      const nextErrors = { ...current };
+      delete nextErrors[field];
+      return nextErrors;
+    });
+  };
+
+  const togglePasswordVisibility = (field: keyof typeof visiblePasswords) => {
+    setVisiblePasswords((current) => ({
+      ...current,
+      [field]: !current[field]
+    }));
+  };
+
+  const validateForm = () => {
+    const nextErrors: Record<string, string> = {};
+    const trimmedEmail = form.email.trim();
+
+    if (isSignin || isSignup || isForgot) {
+      if (!trimmedEmail) {
+        nextErrors.email = "Email is required.";
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+        nextErrors.email = "Enter a valid email address.";
+      }
+    }
+
+    if (isSignin || isSignup) {
+      if (!form.password) {
+        nextErrors.password = "Password is required.";
+      } else if (form.password.length < 8) {
+        nextErrors.password = "Password must be at least 8 characters.";
+      }
+    }
+
+    if (isSignup) {
+      if (!form.fullName.trim()) {
+        nextErrors.fullName = "Full name is required.";
+      }
+
+      if (!form.username.trim()) {
+        nextErrors.username = "Username is required.";
+      } else if (!/^@?[a-z0-9_]{3,20}$/i.test(form.username.trim())) {
+        nextErrors.username = "Use 3-20 letters, numbers, or underscores.";
+      }
+
+      if (!form.dateOfBirth) {
+        nextErrors.dateOfBirth = "Date of birth is required.";
+      } else {
+        const birthDate = new Date(form.dateOfBirth);
+        const now = new Date();
+        let age = now.getFullYear() - birthDate.getFullYear();
+        const monthDiff = now.getMonth() - birthDate.getMonth();
+        if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthDate.getDate())) {
+          age -= 1;
+        }
+        if (Number.isNaN(birthDate.getTime()) || age < 13) {
+          nextErrors.dateOfBirth = "You must be at least 13 years old.";
+        }
+      }
+    }
+
+    if (isReset) {
+      if (!form.resetCode.trim()) {
+        nextErrors.resetCode = "Reset code is required.";
+      } else if (form.resetCode.trim().length < 4) {
+        nextErrors.resetCode = "Reset code looks too short.";
+      }
+
+      if (!form.newPassword) {
+        nextErrors.newPassword = "New password is required.";
+      } else if (form.newPassword.length < 8) {
+        nextErrors.newPassword = "New password must be at least 8 characters.";
+      }
+
+      if (!form.confirmPassword) {
+        nextErrors.confirmPassword = "Confirm your new password.";
+      } else if (form.confirmPassword !== form.newPassword) {
+        nextErrors.confirmPassword = "Passwords do not match.";
+      }
+    }
+
+    setErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  };
 
   const handlePrimaryAction = () => {
+    if (!validateForm()) {
+      setFormFeedback("Please fix the highlighted fields.");
+      return;
+    }
+
     if (isSignin || isSignup) {
       onAuthenticated();
-      navigate("/feed");
+      setFormFeedback(isSignup ? "Account created. Redirecting..." : "Sign-in complete. Redirecting...");
+      navigate(redirectAfterAuth || "/feed");
+      return;
+    }
+
+    if (isForgot) {
+      setFormFeedback(`Reset instructions would be sent to ${form.email.trim()}.`);
       return;
     }
 
     if (isReset) {
+      setFormFeedback("Password updated. Redirecting to sign in...");
       navigate("/signin");
     }
   };
 
   return (
-    <main className="page-shell auth-shell">
+    <main className="auth-page-shell auth-shell">
       <section className="auth-layout">
         <article className="auth-info card">
           <SectionLabel>
@@ -1120,27 +1201,119 @@ function AuthPage({
         </article>
 
         <article className="auth-card card">
-          <div className="section-head">
-            <div>
-              <SectionLabel>{isSignup ? "ACCOUNT_SETUP" : isForgot ? "EMAIL_RECOVERY" : isReset ? "PASSWORD_RESET" : "AUTH_GATEWAY"}</SectionLabel>
-              <h2>{isSignup ? "Create your account" : isForgot ? "Forgot password" : isReset ? "Reset password" : "Sign in"}</h2>
-            </div>
+          <div className="auth-card-head">
+            <SectionLabel>{isSignup ? "ACCOUNT_SETUP" : isForgot ? "EMAIL_RECOVERY" : isReset ? "PASSWORD_RESET" : "AUTH_GATEWAY"}</SectionLabel>
+            <h2>{isSignup ? "Create your account" : isForgot ? "Forgot password" : isReset ? "Reset password" : "Sign in"}</h2>
           </div>
           <form className="auth-form">
-            {isSignup ? <input placeholder="Full name" /> : null}
-            {isSignup ? <input placeholder="Username" /> : null}
-            {(isSignin || isSignup || isForgot) ? <input placeholder="Email address" /> : null}
-            {(isSignin || isSignup) ? <input placeholder="Password" type="password" /> : null}
-            {isReset ? <input placeholder="Reset code" /> : null}
-            {isReset ? <input placeholder="New password" type="password" /> : null}
-            {isReset ? <input placeholder="Confirm new password" type="password" /> : null}
-            {isSignup ? <input placeholder="Date of birth" type="date" /> : null}
+            {isSignup ? (
+              <label className="auth-field">
+                <span>Full name</span>
+                <input onChange={(event) => updateField("fullName", event.target.value)} placeholder="Full name" value={form.fullName} />
+                {errors.fullName ? <small className="form-error">{errors.fullName}</small> : null}
+              </label>
+            ) : null}
+            {isSignup ? (
+              <label className="auth-field">
+                <span>Username</span>
+                <input onChange={(event) => updateField("username", event.target.value)} placeholder="@username" value={form.username} />
+                {errors.username ? <small className="form-error">{errors.username}</small> : null}
+              </label>
+            ) : null}
+            {isSignin || isSignup || isForgot ? (
+              <label className="auth-field">
+                <span>Email address</span>
+                <input onChange={(event) => updateField("email", event.target.value)} placeholder="Email address" type="email" value={form.email} />
+                {errors.email ? <small className="form-error">{errors.email}</small> : null}
+              </label>
+            ) : null}
+            {isSignin || isSignup ? (
+              <label className="auth-field">
+                <span>Password</span>
+                <div className="auth-password-field">
+                  <input
+                    onChange={(event) => updateField("password", event.target.value)}
+                    placeholder="Password"
+                    type={visiblePasswords.password ? "text" : "password"}
+                    value={form.password}
+                  />
+                  <button
+                    aria-label={visiblePasswords.password ? "Hide password" : "Show password"}
+                    className="auth-visibility-toggle"
+                    onClick={() => togglePasswordVisibility("password")}
+                    type="button"
+                  >
+                    <Icon className="inline-icon" name={visiblePasswords.password ? "eyeOff" : "eye"} />
+                  </button>
+                </div>
+                {errors.password ? <small className="form-error">{errors.password}</small> : null}
+              </label>
+            ) : null}
+            {isReset ? (
+              <label className="auth-field">
+                <span>Reset code</span>
+                <input onChange={(event) => updateField("resetCode", event.target.value)} placeholder="Reset code" value={form.resetCode} />
+                {errors.resetCode ? <small className="form-error">{errors.resetCode}</small> : null}
+              </label>
+            ) : null}
+            {isReset ? (
+              <label className="auth-field">
+                <span>New password</span>
+                <div className="auth-password-field">
+                  <input
+                    onChange={(event) => updateField("newPassword", event.target.value)}
+                    placeholder="New password"
+                    type={visiblePasswords.newPassword ? "text" : "password"}
+                    value={form.newPassword}
+                  />
+                  <button
+                    aria-label={visiblePasswords.newPassword ? "Hide new password" : "Show new password"}
+                    className="auth-visibility-toggle"
+                    onClick={() => togglePasswordVisibility("newPassword")}
+                    type="button"
+                  >
+                    <Icon className="inline-icon" name={visiblePasswords.newPassword ? "eyeOff" : "eye"} />
+                  </button>
+                </div>
+                {errors.newPassword ? <small className="form-error">{errors.newPassword}</small> : null}
+              </label>
+            ) : null}
+            {isReset ? (
+              <label className="auth-field">
+                <span>Confirm new password</span>
+                <div className="auth-password-field">
+                  <input
+                    onChange={(event) => updateField("confirmPassword", event.target.value)}
+                    placeholder="Confirm new password"
+                    type={visiblePasswords.confirmPassword ? "text" : "password"}
+                    value={form.confirmPassword}
+                  />
+                  <button
+                    aria-label={visiblePasswords.confirmPassword ? "Hide confirm password" : "Show confirm password"}
+                    className="auth-visibility-toggle"
+                    onClick={() => togglePasswordVisibility("confirmPassword")}
+                    type="button"
+                  >
+                    <Icon className="inline-icon" name={visiblePasswords.confirmPassword ? "eyeOff" : "eye"} />
+                  </button>
+                </div>
+                {errors.confirmPassword ? <small className="form-error">{errors.confirmPassword}</small> : null}
+              </label>
+            ) : null}
+            {isSignup ? (
+              <label className="auth-field">
+                <span>Date of birth</span>
+                <input onChange={(event) => updateField("dateOfBirth", event.target.value)} type="date" value={form.dateOfBirth} />
+                {errors.dateOfBirth ? <small className="form-error">{errors.dateOfBirth}</small> : null}
+              </label>
+            ) : null}
             {isSignup ? (
               <label className="toggle-row auth-toggle-row">
                 <input defaultChecked type="checkbox" />
                 <span>Allow comments on published chapters by default</span>
               </label>
             ) : null}
+            {formFeedback ? <p className="auth-feedback">{formFeedback}</p> : null}
             <button className="primary-action block-action" onClick={handlePrimaryAction} type="button">
               {isSignup ? "CREATE ACCOUNT" : isForgot ? "SEND RESET LINK" : isReset ? "UPDATE PASSWORD" : "SIGN IN"}
               <Icon className="button-icon" name="arrow" />
@@ -1149,7 +1322,6 @@ function AuthPage({
 
           <div className="auth-support-links">
             {isSignin ? <NavLink to="/forgot-password">Forgot password?</NavLink> : null}
-            {isSignin ? <NavLink to="/signup">Create a new account</NavLink> : null}
             {isSignup ? <NavLink to="/signin">Already have an account? Sign in</NavLink> : null}
             {isForgot ? <NavLink to="/reset-password">Already have a code? Reset password</NavLink> : null}
             {isReset ? <NavLink to="/signin">Back to sign in</NavLink> : null}
@@ -1167,6 +1339,932 @@ function AuthPage({
     </main>
   );
 }
+
+function RequireSignInRedirect({ redirectTo }: { redirectTo: string }) {
+  return <Navigate replace to={`/signin?redirect=${encodeURIComponent(redirectTo)}`} />;
+}
+
+function RequireCurrentLocationSignInRedirect() {
+  const location = useLocation();
+  return <Navigate replace to={`/signin?redirect=${encodeURIComponent(`${location.pathname}${location.search}`)}`} />;
+}
+
+const sampleHelperContacts = [
+  { name: "Tolu A.", phone: "+234 803 555 0102" },
+  { name: "Mariam K.", phone: "+234 809 555 0194" },
+  { name: "David O.", phone: "+234 812 555 0138" }
+];
+
+function AnonymousHubPage() {
+  const navigate = useNavigate();
+  const [statuses, setStatuses] = useState<StoredAnonymousStatus[]>([]);
+  const [shareFeedback, setShareFeedback] = useState("");
+  const inboxLink =
+    typeof window === "undefined" ? "/anonymous/write/kingsleyarchive" : `${window.location.origin}/anonymous/write/kingsleyarchive`;
+  const receivedMessages = statuses.filter((status) => status.source === "received");
+  const postedMessages = statuses.filter((status) => status.source === "posted");
+
+  useEffect(() => {
+    const loadStatuses = () => setStatuses(readStoredAnonymousStatuses());
+    loadStatuses();
+
+    window.addEventListener(anonymousStatusUpdateEvent, loadStatuses);
+    return () => window.removeEventListener(anonymousStatusUpdateEvent, loadStatuses);
+  }, []);
+
+  const copyAnonymousLink = async (status: StoredAnonymousStatus) => {
+    if (typeof window === "undefined" || typeof navigator === "undefined") {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/anonymous/${status.shareSlug}`);
+      setShareFeedback("Anonymous link copied.");
+    } catch {
+      setShareFeedback("Could not copy the anonymous link on this device.");
+    }
+  };
+
+  const copyInboxLink = async () => {
+    if (typeof navigator === "undefined") {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(inboxLink);
+      setShareFeedback("Anonymous inbox link copied.");
+    } catch {
+      setShareFeedback("Could not copy the inbox link on this device.");
+    }
+  };
+
+  const toggleDistribution = (status: StoredAnonymousStatus, distribution: "app" | "external") => {
+    const nextStatuses = statuses.map((entry) =>
+      entry.shareSlug === status.shareSlug
+        ? {
+            ...entry,
+            distribution
+          }
+        : entry
+    );
+
+    writeStoredAnonymousStatuses(nextStatuses);
+    setStatuses(nextStatuses);
+    setShareFeedback(
+      distribution === "app"
+        ? "Anonymous post will stay visible inside Histora."
+        : "Anonymous post is now marked for external sharing only."
+    );
+  };
+
+  const downloadAnonymousCard = (status: StoredAnonymousStatus) => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 1080;
+    canvas.height = 1350;
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      setShareFeedback("Could not prepare the anonymous post image.");
+      return;
+    }
+
+    const gradient = context.createLinearGradient(0, 0, 1080, 1350);
+    gradient.addColorStop(0, "#f7faff");
+    gradient.addColorStop(1, "#fff1e8");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 1080, 1350);
+
+    context.fillStyle = "#ffffff";
+    roundRect(context, 70, 70, 940, 1210, 42);
+    context.fill();
+
+    context.fillStyle = "#1b2440";
+    context.font = "700 32px Space Grotesk, sans-serif";
+    context.fillText("HISTORA", 130, 136);
+    context.font = "700 42px Space Grotesk, sans-serif";
+    context.fillText("ANONYMOUS MESSAGE", 130, 186);
+    context.font = "400 30px Manrope, sans-serif";
+    context.fillStyle = "#667085";
+    context.fillText(status.meta, 130, 230);
+
+    const ringGradient = context.createLinearGradient(110, 270, 270, 430);
+    ringGradient.addColorStop(0, "#315efb");
+    ringGradient.addColorStop(1, "#ff7a45");
+    context.fillStyle = ringGradient;
+    context.beginPath();
+    context.arc(190, 360, 84, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = "#1b2440";
+    context.beginPath();
+    context.arc(190, 360, 72, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = "#ffffff";
+    context.font = "700 64px Space Grotesk, sans-serif";
+    context.textAlign = "center";
+    context.fillText("A", 190, 382);
+    context.textAlign = "start";
+
+    context.fillStyle = "#1b2440";
+    context.font = "700 56px Space Grotesk, sans-serif";
+    const messageLines = wrapCanvasText(context, status.body, 820);
+    messageLines.slice(0, 12).forEach((line, index) => {
+      context.fillText(line, 130, 520 + index * 68);
+    });
+
+    context.font = "700 34px Space Grotesk, sans-serif";
+    context.fillStyle = "#cc5a24";
+    context.fillText(`${status.comments.length} replies // Anonymous advice`, 130, 1170);
+
+    const link = document.createElement("a");
+    link.href = canvas.toDataURL("image/png");
+    link.download = `${status.shareSlug}-anonymous-message.png`;
+    link.click();
+    setShareFeedback("Anonymous post image saved to your device.");
+  };
+
+  return (
+    <main className="feed-reader-shell anonymous-hub-shell">
+      <div className="profile-edit-back">
+        <button className="ghost-action" onClick={() => navigate("/feed")} type="button">
+          <Icon className="button-icon" name="arrow" />
+          BACK
+        </button>
+      </div>
+
+      <section className="story-reader-stage card anonymous-hero">
+        <div className="anonymous-hero-copy">
+          <SectionLabel>ANONYMOUS_ARCHIVE</SectionLabel>
+          <p>Share your inbox link so others can write to you anonymously. Keep messages private, publish them inside Histora, or export them elsewhere.</p>
+        </div>
+        <div className="anonymous-inbox-card">
+          <span className="story-tag">YOUR INBOX LINK</span>
+          <strong>Let people write to you anonymously</strong>
+          <p>{inboxLink}</p>
+          <div className="anonymous-hub-actions">
+            <button className="ghost-action" onClick={copyInboxLink} type="button">
+              COPY LINK
+            </button>
+            <button className="primary-action" onClick={() => navigate("/anonymous/write/kingsleyarchive")} type="button">
+              OPEN LINK PAGE
+              <Icon className="button-icon" name="arrow" />
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {shareFeedback ? <p className="status-feedback">{shareFeedback}</p> : null}
+
+      <section className="anonymous-summary-strip">
+        <article className="profile-stat-card">
+          <span>Inbox messages</span>
+          <strong>{receivedMessages.length}</strong>
+        </article>
+        <article className="profile-stat-card">
+          <span>Published on app</span>
+          <strong>{statuses.filter((status) => status.distribution === "app").length}</strong>
+        </article>
+        <article className="profile-stat-card">
+          <span>External only</span>
+          <strong>{statuses.filter((status) => status.distribution === "external").length}</strong>
+        </article>
+      </section>
+
+      <section className="anonymous-hub-stack">
+        <article className="chapter-reader-card card anonymous-hub-panel">
+          <div className="anonymous-panel-body">
+          <div className="profile-section-copy anonymous-section-copy">
+            <SectionLabel>INBOX</SectionLabel>
+            <h2>Anonymous messages people sent to you</h2>
+            <span>Review the message, then decide whether it stays in Histora or remains only for external sharing.</span>
+          </div>
+          <div className="anonymous-hub-list">
+            {receivedMessages.length ? (
+              receivedMessages.map((status) => (
+                <article className="anonymous-hub-card" key={status.shareSlug}>
+                  <div className="anonymous-hub-card-top">
+                    <div className="anonymous-hub-card-copy">
+                      <strong>Anonymous message</strong>
+                      <span>{status.meta}</span>
+                    </div>
+                    <span className="story-tag">{status.distribution === "app" ? "ON APP" : "EXTERNAL"}</span>
+                  </div>
+                  <p>{status.body}</p>
+                  <div className="anonymous-hub-meta">
+                    <span>{status.comments.length} replies</span>
+                    <span>Consent fee ${status.helpFee}</span>
+                  </div>
+                  {status.helperContact ? (
+                    <div className="anonymous-helper-card">
+                      <strong>Helper unlocked</strong>
+                      <span>{status.helperContact.name}</span>
+                      <small>{status.helperContact.phone}</small>
+                    </div>
+                  ) : null}
+                  <div className="anonymous-distribution-row">
+                    <button
+                      className={status.distribution === "app" ? "composer-chip active-composer-chip" : "composer-chip"}
+                      onClick={() => toggleDistribution(status, "app")}
+                      type="button"
+                    >
+                      Show on app
+                    </button>
+                    <button
+                      className={status.distribution === "external" ? "composer-chip active-composer-chip" : "composer-chip"}
+                      onClick={() => toggleDistribution(status, "external")}
+                      type="button"
+                    >
+                      Keep external
+                    </button>
+                  </div>
+                  <div className="anonymous-hub-actions">
+                    <button className="ghost-action" onClick={() => copyAnonymousLink(status)} type="button">
+                      COPY MESSAGE LINK
+                    </button>
+                    <button className="ghost-action" onClick={() => downloadAnonymousCard(status)} type="button">
+                      DOWNLOAD CARD
+                    </button>
+                    <button className="primary-action" onClick={() => navigate(`/anonymous/${status.shareSlug}`)} type="button">
+                      OPEN MESSAGE
+                      <Icon className="button-icon" name="arrow" />
+                    </button>
+                  </div>
+                </article>
+              ))
+            ) : (
+              <article className="anonymous-empty">
+                <strong>No anonymous messages yet</strong>
+                <p>Share your inbox link and people will be able to write you anonymous messages after signing in.</p>
+                <div className="anonymous-hub-actions">
+                  <button className="ghost-action" onClick={copyInboxLink} type="button">
+                    COPY INBOX LINK
+                  </button>
+                  <button className="primary-action" onClick={() => navigate("/anonymous/write/kingsleyarchive")} type="button">
+                    PREVIEW INBOX PAGE
+                    <Icon className="button-icon" name="arrow" />
+                  </button>
+                </div>
+              </article>
+            )}
+          </div>
+          </div>
+        </article>
+
+        <article className="chapter-reader-card card anonymous-hub-panel">
+          <div className="anonymous-panel-body">
+          <div className="profile-section-copy anonymous-section-copy">
+            <SectionLabel>POSTED_BY_YOU</SectionLabel>
+            <h2>Anonymous posts you already shared</h2>
+            <span>These came from your quick-memory anonymous posts and can still be shared, downloaded, or opened as pages.</span>
+          </div>
+          <div className="anonymous-hub-list">
+            {postedMessages.length ? (
+              postedMessages.map((status) => (
+                <article className="anonymous-hub-card" key={status.shareSlug}>
+                  <div className="anonymous-hub-card-top">
+                    <div className="anonymous-hub-card-copy">
+                      <strong>Anonymous message</strong>
+                      <span>{status.meta}</span>
+                    </div>
+                    <span className="story-tag">{status.distribution === "app" ? "ON APP" : "EXTERNAL"}</span>
+                  </div>
+                  <p>{status.body}</p>
+                  <div className="anonymous-hub-meta">
+                    <span>{status.comments.length} replies</span>
+                    <span>Consent fee ${status.helpFee}</span>
+                  </div>
+                  {status.helperContact ? (
+                    <div className="anonymous-helper-card">
+                      <strong>Helper unlocked</strong>
+                      <span>{status.helperContact.name}</span>
+                      <small>{status.helperContact.phone}</small>
+                    </div>
+                  ) : null}
+                  <div className="anonymous-distribution-row">
+                    <button
+                      className={status.distribution === "app" ? "composer-chip active-composer-chip" : "composer-chip"}
+                      onClick={() => toggleDistribution(status, "app")}
+                      type="button"
+                    >
+                      Keep on Histora
+                    </button>
+                    <button
+                      className={status.distribution === "external" ? "composer-chip active-composer-chip" : "composer-chip"}
+                      onClick={() => toggleDistribution(status, "external")}
+                      type="button"
+                    >
+                      Share elsewhere
+                    </button>
+                  </div>
+                  <div className="anonymous-hub-actions">
+                    <button className="ghost-action" onClick={() => copyAnonymousLink(status)} type="button">
+                      COPY LINK
+                    </button>
+                    <button className="ghost-action" onClick={() => downloadAnonymousCard(status)} type="button">
+                      DOWNLOAD
+                    </button>
+                    <button className="primary-action" onClick={() => navigate(`/anonymous/${status.shareSlug}`)} type="button">
+                      OPEN PAGE
+                      <Icon className="button-icon" name="arrow" />
+                    </button>
+                  </div>
+                </article>
+              ))
+            ) : (
+              <article className="anonymous-empty">
+                <strong>No anonymous posts yet</strong>
+                <p>Post an anonymous quick memory from the home status row and it will appear here.</p>
+                <NavLink className="primary-action" to="/">
+                  GO TO QUICK MEMORY
+                  <Icon className="button-icon" name="arrow" />
+                </NavLink>
+              </article>
+            )}
+          </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  );
+}
+
+function AnonymousStoryPage() {
+  const { shareSlug = "" } = useParams();
+  const navigate = useNavigate();
+  const [statuses, setStatuses] = useState<StoredAnonymousStatus[]>([]);
+  const [replyDraft, setReplyDraft] = useState("");
+  const [shareFeedback, setShareFeedback] = useState("");
+  const [consentAccepted, setConsentAccepted] = useState(false);
+  const [showHelpDialog, setShowHelpDialog] = useState(false);
+
+  useEffect(() => {
+    const loadStatuses = () => setStatuses(readStoredAnonymousStatuses());
+    loadStatuses();
+
+    window.addEventListener(anonymousStatusUpdateEvent, loadStatuses);
+    return () => window.removeEventListener(anonymousStatusUpdateEvent, loadStatuses);
+  }, []);
+
+  const status = statuses.find((entry) => entry.shareSlug === shareSlug) ?? null;
+
+  const submitReply = () => {
+    if (!status || !replyDraft.trim()) {
+      return;
+    }
+
+    const nextStatuses = statuses.map((entry) =>
+      entry.shareSlug === status.shareSlug
+        ? {
+            ...entry,
+            comments: [...entry.comments, { author: "Anonymous reply", text: replyDraft.trim() }]
+          }
+        : entry
+    );
+
+    writeStoredAnonymousStatuses(nextStatuses);
+    setStatuses(nextStatuses);
+    setReplyDraft("");
+    setShareFeedback("Anonymous advice sent.");
+  };
+
+  const confirmHelpRequest = () => {
+    if (!status || !consentAccepted) {
+      setShareFeedback("Accept the consent fee first to continue.");
+      return;
+    }
+
+    const helperContact = sampleHelperContacts[Math.abs(status.shareSlug.length) % sampleHelperContacts.length];
+    const nextStatuses = statuses.map((entry) =>
+      entry.shareSlug === status.shareSlug
+        ? {
+            ...entry,
+            helperContact
+          }
+        : entry
+    );
+
+    writeStoredAnonymousStatuses(nextStatuses);
+    setStatuses(nextStatuses);
+    setShowHelpDialog(false);
+    setConsentAccepted(false);
+    setShareFeedback(`Consent fee confirmed. ${helperContact.name} is now available to help.`);
+  };
+
+  const copyAnonymousLink = async () => {
+    if (!status || typeof window === "undefined" || typeof navigator === "undefined") {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/anonymous/${status.shareSlug}`);
+      setShareFeedback("Anonymous link copied.");
+    } catch {
+      setShareFeedback("Could not copy the anonymous link on this device.");
+    }
+  };
+
+  if (!status) {
+    return (
+      <main className="feed-reader-shell">
+        <article className="story-reader-stage card">
+          <SectionLabel>ANONYMOUS_MESSAGE</SectionLabel>
+          <h1>This anonymous message was not found.</h1>
+          <button className="ghost-action" onClick={() => navigate("/anonymous")} type="button">
+            BACK TO ANONYMOUS
+          </button>
+        </article>
+      </main>
+    );
+  }
+
+  return (
+    <main className="feed-reader-shell anonymous-story-shell">
+      <section className="topbar card feed-reader-topbar">
+        <div className="topbar-copy">
+          <SectionLabel>ANONYMOUS_MESSAGE</SectionLabel>
+          <span>{status.meta} // {status.comments.length} replies // Consent fee ${status.helpFee}</span>
+        </div>
+        <div className="topbar-actions">
+          <button className="ghost-action" onClick={() => navigate("/anonymous")} type="button">
+            BACK
+          </button>
+          <button className="primary-action" onClick={() => setShowHelpDialog(true)} type="button">
+            RENDER HELP
+          </button>
+        </div>
+      </section>
+
+      <article className="chapter-reader-card card anonymous-story-card">
+        <div className="story-reader-author-row">
+          <div className="story-viewer-author">
+            <span className="status-ring tone-ink">
+              <span className="status-avatar">A</span>
+            </span>
+            <div>
+              <strong>Anonymous</strong>
+              <span>{status.meta}</span>
+            </div>
+          </div>
+          <div className="story-reader-stage-actions">
+            <button className="feed-action-pill" onClick={copyAnonymousLink} type="button">
+              <Icon className="inline-icon" name="share" />
+              Copy link
+            </button>
+          </div>
+        </div>
+
+        <div className="chapter-reader-head">
+          <span className="story-tag">{status.distribution === "app" ? "ON APP" : "EXTERNAL"}</span>
+        </div>
+        <p className="chapter-reader-summary">{status.body}</p>
+
+        {shareFeedback ? <p className="status-feedback">{shareFeedback}</p> : null}
+        {status.helperContact ? (
+          <div className="anonymous-helper-card">
+            <strong>Helper unlocked</strong>
+            <span>{status.helperContact.name}</span>
+            <small>{status.helperContact.phone}</small>
+          </div>
+        ) : null}
+
+        <section className="story-reader-footer-card">
+          <div className="profile-section-copy">
+            <SectionLabel>THREAD</SectionLabel>
+            <h2>Anonymous advice thread</h2>
+          </div>
+          <div className="story-comment-list">
+            {status.comments.map((comment, index) => (
+              <div className="story-comment-card" key={`${comment.author}-${index}`}>
+                <strong>{comment.author}</strong>
+                <p>{comment.text}</p>
+              </div>
+            ))}
+          </div>
+          <div className="story-reply-bar">
+            <input onChange={(event) => setReplyDraft(event.target.value)} placeholder="Reply anonymously..." value={replyDraft} />
+            <button className="primary-action" onClick={submitReply} type="button">
+              Send anonymous reply
+            </button>
+          </div>
+        </section>
+      </article>
+
+      {showHelpDialog ? (
+        <div className="status-viewer-backdrop" onClick={() => setShowHelpDialog(false)} role="presentation">
+          <article className="status-help-modal card" onClick={(event) => event.stopPropagation()}>
+            <div className="status-composer-top">
+              <div>
+                <SectionLabel>CONSENT_FEE</SectionLabel>
+                <h3>Render help for this anonymous message</h3>
+              </div>
+              <button aria-label="Close help dialog" className="icon-chip" onClick={() => setShowHelpDialog(false)} type="button">
+                <Icon className="button-icon" name="close" />
+              </button>
+            </div>
+            <p>To protect privacy, helpers pay a consent fee of ${status.helpFee} before any contact request can be passed to the poster.</p>
+            <label className="toggle-row">
+              <input checked={consentAccepted} onChange={(event) => setConsentAccepted(event.target.checked)} type="checkbox" />
+              <span>I accept the consent fee and privacy terms for this help request.</span>
+            </label>
+            <div className="status-composer-footer">
+              <button className="ghost-action" onClick={() => setShowHelpDialog(false)} type="button">Cancel</button>
+              <button className="primary-action" onClick={confirmHelpRequest} type="button">Pay consent fee</button>
+            </div>
+          </article>
+        </div>
+      ) : null}
+    </main>
+  );
+}
+
+function AnonymousInboxComposePage() {
+  const { recipientSlug = "kingsleyarchive" } = useParams();
+  const navigate = useNavigate();
+  const [body, setBody] = useState("I need perspective before I decide what the next chapter should be.");
+  const [feedback, setFeedback] = useState("");
+
+  const submitAnonymousMessage = () => {
+    const trimmedBody = body.trim();
+
+    if (!trimmedBody) {
+      setFeedback("Add your message first.");
+      return;
+    }
+
+    const currentStatuses = readStoredAnonymousStatuses();
+    writeStoredAnonymousStatuses([
+      {
+        id: `received-${Date.now().toString(36)}`,
+        title: trimmedBody.slice(0, 72),
+        body: trimmedBody,
+        meta: "New message",
+        shareSlug: `received-${Date.now().toString(36)}`,
+        comments: [],
+        helpFee: 8,
+        distribution: "external",
+        source: "received",
+        helperContact: null
+      },
+      ...currentStatuses
+    ]);
+    setFeedback("Anonymous message sent. The recipient can now review it in their anonymous inbox.");
+    window.setTimeout(() => navigate("/anonymous"), 260);
+  };
+
+  return (
+    <main className="feed-reader-shell anonymous-hub-shell anonymous-compose-page">
+      <div className="profile-edit-back">
+        <button className="ghost-action" onClick={() => navigate("/anonymous")} type="button">
+          <Icon className="button-icon" name="arrow" />
+          BACK
+        </button>
+      </div>
+
+      <section className="story-reader-stage card anonymous-hero">
+        <div className="anonymous-hero-copy">
+          <SectionLabel>WRITE_ANONYMOUSLY</SectionLabel>
+          <h1>Send an anonymous message to @{recipientSlug}.</h1>
+          <p>Your message stays anonymous. The recipient decides whether to keep it inside Histora or share it elsewhere.</p>
+        </div>
+      </section>
+
+      <section className="chapter-reader-card card anonymous-compose-card">
+        <div className="anonymous-panel-body">
+        <div className="profile-section-copy anonymous-section-copy">
+          <SectionLabel>MESSAGE_FORM</SectionLabel>
+          <h2>Write the anonymous message</h2>
+        </div>
+        <div className="profile-form-grid">
+          <label>
+            Message
+            <textarea onChange={(event) => setBody(event.target.value)} placeholder="Write your anonymous message..." value={body} />
+          </label>
+        </div>
+        {feedback ? <p className="status-feedback">{feedback}</p> : null}
+        <div className="chapter-controls">
+          <button className="ghost-action" onClick={() => navigate("/anonymous")} type="button">
+            CANCEL
+          </button>
+          <button className="primary-action" onClick={submitAnonymousMessage} type="button">
+            SEND ANONYMOUS MESSAGE
+            <Icon className="button-icon" name="arrow" />
+          </button>
+        </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+type FeedThreadComment = {
+  author: string;
+  handle: string;
+  text: string;
+  time: string;
+  replyTo?: string;
+};
+
+type FeedStoryChapter = {
+  id: string;
+  title: string;
+  body: string;
+  summary: string;
+  likes: number;
+  liked: boolean;
+  comments: FeedThreadComment[];
+  images: Array<{ src: string; alt: string }>;
+  voiceNotes: Array<{ name: string; detail: string; src: string }>;
+  timeline: Array<{ label: string; title: string; body: string }>;
+};
+
+type FeedStoryRecord = (typeof feedPreview)[number] & {
+  slug: string;
+  anonymous: boolean;
+  shares: number;
+  likes: number;
+  liked: boolean;
+  bookmarked: boolean;
+  following: boolean;
+  helpFee?: number;
+  chapters: FeedStoryChapter[];
+};
+
+type ShareSheetPayload = {
+  title: string;
+  text: string;
+  url: string;
+};
+
+const slugifyStoryTitle = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const sampleVoiceNoteUrl = "https://samplelib.com/lib/preview/mp3/sample-3s.mp3";
+
+const roundRect = (
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number
+) => {
+  context.beginPath();
+  context.moveTo(x + radius, y);
+  context.lineTo(x + width - radius, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + radius);
+  context.lineTo(x + width, y + height - radius);
+  context.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+  context.lineTo(x + radius, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - radius);
+  context.lineTo(x, y + radius);
+  context.quadraticCurveTo(x, y, x + radius, y);
+  context.closePath();
+};
+
+const wrapCanvasText = (
+  context: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+) => {
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let currentLine = "";
+
+  for (const word of words) {
+    const nextLine = currentLine ? `${currentLine} ${word}` : word;
+    if (context.measureText(nextLine).width > maxWidth) {
+      if (currentLine) {
+        lines.push(currentLine);
+      }
+      currentLine = word;
+    } else {
+      currentLine = nextLine;
+    }
+  }
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines;
+};
+
+function ShareSheet({
+  share,
+  onClose,
+  onFeedback
+}: {
+  share: ShareSheetPayload;
+  onClose: () => void;
+  onFeedback: (message: string) => void;
+}) {
+  const openShareTarget = async (target: "copy" | "email" | "whatsapp" | "more") => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (target === "copy") {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(share.url);
+        onFeedback("Share link copied.");
+      } else {
+        onFeedback("Copy is not available in this browser.");
+      }
+      onClose();
+      return;
+    }
+
+    if (target === "more") {
+      if (navigator.share) {
+        await navigator.share({ title: share.title, text: share.text, url: share.url });
+        onFeedback("Shared successfully.");
+      } else {
+        onFeedback("More apps sharing is not available in this browser.");
+      }
+      onClose();
+      return;
+    }
+
+    const encodedUrl = encodeURIComponent(share.url);
+    const encodedText = encodeURIComponent(`${share.text} ${share.url}`);
+    const encodedTitle = encodeURIComponent(share.title);
+
+    const targetUrl =
+      target === "whatsapp"
+        ? `https://wa.me/?text=${encodedText}`
+        : `mailto:?subject=${encodedTitle}&body=${encodedText}`;
+
+    window.open(targetUrl, "_blank", "noopener,noreferrer");
+    onFeedback(target === "whatsapp" ? "Opening WhatsApp share..." : "Opening email share...");
+    onClose();
+  };
+
+  return (
+    <div className="status-viewer-backdrop" onClick={onClose} role="presentation">
+      <article className="share-sheet-modal card" onClick={(event) => event.stopPropagation()}>
+        <div className="status-composer-top">
+          <div>
+            <SectionLabel>SHARE_STORY</SectionLabel>
+            <h3>{share.title}</h3>
+          </div>
+          <button aria-label="Close share dialog" className="icon-chip" onClick={onClose} type="button">
+            <Icon className="button-icon" name="close" />
+          </button>
+        </div>
+        <p>{share.text}</p>
+        <div className="share-sheet-actions">
+          <button className="ghost-action" onClick={() => void openShareTarget("whatsapp")} type="button">WhatsApp</button>
+          <button className="ghost-action" onClick={() => void openShareTarget("email")} type="button">Email</button>
+          <button className="ghost-action" onClick={() => void openShareTarget("copy")} type="button">Copy link</button>
+          <button className="primary-action" onClick={() => void openShareTarget("more")} type="button">More apps</button>
+        </div>
+      </article>
+    </div>
+  );
+}
+
+const buildFeedStories = (): FeedStoryRecord[] =>
+  feedPreview.map((post, index) => ({
+    ...post,
+    slug: slugifyStoryTitle(post.title),
+    anonymous: post.visibility === "ANON",
+    shares: [48, 31, 66][index] ?? 12,
+    likes: [428, 213, 689][index] ?? 120,
+    liked: false,
+    bookmarked: false,
+    following: false,
+    helpFee: post.visibility === "ANON" ? 8 : undefined,
+    chapters:
+      index === 0
+        ? [
+            {
+              id: "chapter-1",
+              title: "Packing evidence into memory",
+              body:
+                "I stopped describing the move as one dramatic leap and started preserving it in pieces. Rent receipts, blurry kitchen photos, and one voice note from the night I could finally lock my own front door became part of the chapter itself.",
+              summary: "Receipts, photos, and one voice note turn the move into evidence instead of a vague memory.",
+              likes: 132,
+              liked: false,
+              images: [
+                {
+                  src: "https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=1200&q=80",
+                  alt: "Moving boxes stacked in a new apartment"
+                },
+                {
+                  src: "https://images.unsplash.com/photo-1484154218962-a197022b5858?auto=format&fit=crop&w=1200&q=80",
+                  alt: "Kitchen corner in a newly rented home"
+                }
+              ],
+              voiceNotes: [{ name: "Voice note after move-in", detail: "01:18 // recorded at midnight", src: sampleVoiceNoteUrl }],
+              timeline: [
+                { label: "Feb / 4 / 2014", title: "Signed the lease", body: "The first document that proved I was not staying temporarily." },
+                { label: "Feb / 9 / 2014", title: "Moved the boxes", body: "Everything I owned suddenly had to fit a new room." }
+              ],
+              comments: [
+                { author: "Dami A.", handle: "@damireads", text: "The receipts beside the memory detail make this feel very real.", time: "9m" },
+                { author: "Amina Kole", handle: "@aminawrites", text: "That was the point. I wanted the archive to feel provable.", time: "7m", replyTo: "@damireads" }
+              ]
+            },
+            {
+              id: "chapter-2",
+              title: "The room started answering back",
+              body:
+                "The apartment changed tone once I had to fill it with my own routines. Every object became proof that I was not passing through. That is when the story stopped sounding like survival and started sounding like arrival.",
+              summary: "The room stops being temporary once routine, objects, and silence start belonging to the writer.",
+              likes: 88,
+              liked: false,
+              images: [
+                {
+                  src: "https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?auto=format&fit=crop&w=1200&q=80",
+                  alt: "Quiet bedroom with warm evening light"
+                }
+              ],
+              voiceNotes: [],
+              timeline: [{ label: "Mar / 1 / 2014", title: "First night of routine", body: "The room finally sounded like mine and not borrowed space." }],
+              comments: [{ author: "Tolu R.", handle: "@tolureads", text: "This chapter reads like breathing out after years of tension.", time: "4m" }]
+            }
+          ]
+        : index === 1
+          ? [
+              {
+                id: "chapter-1",
+                title: "Need advice on forgiving a parent",
+                body:
+                  "Posting this anonymously because the memory still feels too close to name. I want perspective before I decide whether the next chapter should become a call, a boundary, or silence that protects what is left of me.",
+                summary: "An anonymous chapter asking whether forgiveness must also mean renewed access.",
+                likes: 74,
+                liked: false,
+                images: [
+                  {
+                    src: "https://images.unsplash.com/photo-1516589091380-5d8e87df6999?auto=format&fit=crop&w=1200&q=80",
+                    alt: "Hands folded together in a reflective moment"
+                  }
+                ],
+              voiceNotes: [{ name: "Private reflection note", detail: "00:42 // anonymized voice", src: sampleVoiceNoteUrl }],
+                timeline: [{ label: "Present", title: "Decision point", body: "Trying to decide between contact, distance, and a softer boundary." }],
+                comments: [
+                  { author: "Anonymous reply", handle: "@advice", text: "You can forgive without reopening direct access immediately.", time: "11m" },
+                  { author: "Anonymous reply", handle: "@advice", text: "Protect your peace first, then decide what contact means.", time: "5m", replyTo: "@advice" }
+                ]
+              }
+            ]
+          : [
+              {
+                id: "chapter-1",
+                title: "The first loss did not explain the second",
+                body:
+                  "When the business fell apart, I kept trying to narrate the entire collapse in one paragraph. It made me sound clean and wise. The truth was messier. The archive only started making sense when I gave each failure its own date and weight.",
+                summary: "The collapse becomes readable only after each setback gets its own chapter and timestamp.",
+                likes: 201,
+                liked: false,
+                images: [
+                  {
+                    src: "https://images.unsplash.com/photo-1554224155-6726b3ff858f?auto=format&fit=crop&w=1200&q=80",
+                    alt: "Desk with invoices, papers, and calculator"
+                  }
+                ],
+                voiceNotes: [{ name: "Loss inventory voice note", detail: "01:06 // recorded after closing accounts", src: sampleVoiceNoteUrl }],
+                timeline: [
+                  { label: "Jun / 12 / 2021", title: "First unpaid invoice", body: "The first sign that the collapse had already started." },
+                  { label: "Sep / 3 / 2021", title: "Closed the office", body: "I packed what was left and kept only the records." }
+                ],
+                comments: [{ author: "Maryam A.", handle: "@maryamarchive", text: "Writing the setbacks separately is what made the story breathe.", time: "14m" }]
+              },
+              {
+                id: "chapter-2",
+                title: "Rebuilding as a sequence, not a slogan",
+                body:
+                  "Recovery arrived as invoices, rejected calls, quiet payments, and one client who stayed long enough to prove the work could still carry me. That was more honest than calling it a comeback.",
+                summary: "Recovery is shown as a chain of small proofs instead of one dramatic comeback scene.",
+                likes: 163,
+                liked: false,
+                images: [
+                  {
+                    src: "https://images.unsplash.com/photo-1520607162513-77705c0f0d4a?auto=format&fit=crop&w=1200&q=80",
+                    alt: "Person working quietly at a desk while rebuilding"
+                  },
+                  {
+                    src: "https://images.unsplash.com/photo-1556740749-887f6717d7e4?auto=format&fit=crop&w=1200&q=80",
+                    alt: "First client payment notification on a phone"
+                  }
+                ],
+                voiceNotes: [],
+                timeline: [{ label: "Jan / 10 / 2022", title: "First stable client", body: "The first payment that felt like a possible future." }],
+                comments: [
+                  { author: "David Ojo", handle: "@davidwrites", text: "One giant summary kept flattening the life inside it.", time: "10m", replyTo: "@maryamarchive" },
+                  { author: "Femi K.", handle: "@femireads", text: "This should be a full public series.", time: "3m" }
+                ]
+              }
+            ]
+  }));
 
 function ProfilePage() {
   return (
@@ -1573,84 +2671,827 @@ function EditProfilePage() {
 }
 
 function FeedPage() {
+  const navigate = useNavigate();
+  const [feedPosts, setFeedPosts] = useState<FeedStoryRecord[]>(buildFeedStories);
+  const [storedAnonymousStatuses, setStoredAnonymousStatuses] = useState<StoredAnonymousStatus[]>([]);
+  const [shareSheet, setShareSheet] = useState<ShareSheetPayload | null>(null);
+  const [activeAnonymousIndex, setActiveAnonymousIndex] = useState<number | null>(null);
+  const [anonymousReplyDraft, setAnonymousReplyDraft] = useState("");
+  const [helpTarget, setHelpTarget] = useState<AnonymousFeedSource | null>(null);
+  const [consentAccepted, setConsentAccepted] = useState(false);
+  const openStory = (slug: string) => navigate(`/feed/story/${slug}`);
+  const openShareSheet = (post: FeedStoryRecord) => {
+    const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
+    setShareSheet({
+      title: post.title,
+      text: `${post.title} by ${post.author}`,
+      url: `${baseUrl}/feed/story/${post.slug}`
+    });
+  };
+  const [shareFeedback, setShareFeedback] = useState("");
+  const anonymousFeedPosts = feedPosts.filter((post) => post.anonymous);
+  const loadStoredAnonymousStatuses = () => setStoredAnonymousStatuses(readStoredAnonymousStatuses());
+
+  useEffect(() => {
+    loadStoredAnonymousStatuses();
+
+    const handleStatusUpdate = () => loadStoredAnonymousStatuses();
+    window.addEventListener(anonymousStatusUpdateEvent, handleStatusUpdate);
+
+    return () => window.removeEventListener(anonymousStatusUpdateEvent, handleStatusUpdate);
+  }, []);
+
+  const anonymousFeedSources: AnonymousFeedSource[] = [
+    ...storedAnonymousStatuses
+      .filter((status) => status.distribution !== "external")
+      .map((status) => ({
+      id: status.id,
+      slug: status.shareSlug,
+      title: status.title,
+      excerpt: status.body,
+      meta: status.meta,
+      comments: status.comments,
+      helpFee: status.helpFee,
+      fromQuickMemory: true
+    })),
+    ...anonymousFeedPosts.map((post) => ({
+      id: post.slug,
+      slug: post.slug,
+      title: post.title,
+      excerpt: post.excerpt,
+      meta: `${post.reads} reads`,
+      comments: (post.chapters[0]?.comments ?? []).map((comment) => ({ author: comment.author, text: comment.text })),
+      helpFee: post.helpFee ?? 8,
+      fromQuickMemory: false
+    }))
+  ];
+  const anonymousFeedMessages = anonymousFeedSources.flatMap((source) => {
+    const chapterReplies =
+      source.comments.slice(0, 2).map((comment, index) => ({
+        id: `${source.slug}-reply-${index}`,
+        postSlug: source.slug,
+        title: "Anonymous reply",
+        meta: source.meta,
+        preview: comment.text
+      })) ?? [];
+
+    return [
+      {
+        id: `${source.slug}-lead`,
+        postSlug: source.slug,
+        title: "Anonymous",
+        meta: source.meta,
+        preview: source.excerpt
+      },
+      ...chapterReplies
+    ];
+  });
+  const activeAnonymousMessage = activeAnonymousIndex === null ? null : anonymousFeedMessages[activeAnonymousIndex] ?? null;
+  const activeAnonymousPost =
+    activeAnonymousMessage ? anonymousFeedSources.find((source) => source.slug === activeAnonymousMessage.postSlug) ?? null : null;
+
+  const toggleFeedLike = (slug: string) => {
+    setFeedPosts((current) =>
+      current.map((post) =>
+        post.slug === slug
+          ? { ...post, liked: !post.liked, likes: post.liked ? post.likes - 1 : post.likes + 1 }
+          : post
+      )
+    );
+  };
+
+  const toggleFeedBookmark = (slug: string) => {
+    setFeedPosts((current) =>
+      current.map((post) => (post.slug === slug ? { ...post, bookmarked: !post.bookmarked } : post))
+    );
+  };
+
+  const submitAnonymousReply = () => {
+    if (!activeAnonymousPost || !anonymousReplyDraft.trim()) {
+      return;
+    }
+
+    if (activeAnonymousPost.fromQuickMemory) {
+      const nextStatuses = storedAnonymousStatuses.map((status) =>
+        status.shareSlug === activeAnonymousPost.slug
+          ? {
+              ...status,
+              comments: [...status.comments, { author: "Anonymous reply", text: anonymousReplyDraft.trim() }]
+            }
+          : status
+      );
+
+      writeStoredAnonymousStatuses(nextStatuses);
+      setStoredAnonymousStatuses(nextStatuses);
+      setAnonymousReplyDraft("");
+      setShareFeedback("Anonymous advice sent.");
+      return;
+    }
+
+    setFeedPosts((current) =>
+      current.map((post) =>
+        post.slug === activeAnonymousPost.slug
+          ? {
+              ...post,
+              chapters: post.chapters.map((chapter, index) =>
+                index === 0
+                  ? {
+                      ...chapter,
+                      comments: [
+                        ...chapter.comments,
+                        { author: "Anonymous reply", handle: "@advice", text: anonymousReplyDraft.trim(), time: "now" }
+                      ]
+                    }
+                  : chapter
+              )
+            }
+          : post
+      )
+    );
+    setAnonymousReplyDraft("");
+    setShareFeedback("Anonymous advice sent.");
+  };
+
+  const confirmHelpRequest = () => {
+    if (!helpTarget || !consentAccepted) {
+      setShareFeedback("Accept the consent fee first to continue.");
+      return;
+    }
+
+    setShareFeedback(`Consent fee confirmed. The help request for "${helpTarget.title}" is now pending.`);
+    setHelpTarget(null);
+    setConsentAccepted(false);
+  };
+
+  const downloadAnonymousMessageImage = (post: AnonymousFeedSource) => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 1080;
+    canvas.height = 1350;
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      setShareFeedback("Could not prepare the anonymous post image.");
+      return;
+    }
+
+    const gradient = context.createLinearGradient(0, 0, 1080, 1350);
+    gradient.addColorStop(0, "#f7faff");
+    gradient.addColorStop(1, "#fff1e8");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 1080, 1350);
+
+    context.fillStyle = "#ffffff";
+    roundRect(context, 70, 70, 940, 1210, 42);
+    context.fill();
+
+    context.fillStyle = "#1b2440";
+    context.font = "700 32px Space Grotesk, sans-serif";
+    context.fillText("HISTORA", 130, 136);
+    context.font = "700 42px Space Grotesk, sans-serif";
+    context.fillText("ANONYMOUS MESSAGE", 130, 186);
+    context.font = "400 30px Manrope, sans-serif";
+    context.fillStyle = "#667085";
+    context.fillText(post.meta, 130, 230);
+
+    const ringGradient = context.createLinearGradient(110, 270, 270, 430);
+    ringGradient.addColorStop(0, "#315efb");
+    ringGradient.addColorStop(1, "#ff7a45");
+    context.fillStyle = ringGradient;
+    context.beginPath();
+    context.arc(190, 360, 84, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = "#1b2440";
+    context.beginPath();
+    context.arc(190, 360, 72, 0, Math.PI * 2);
+    context.fill();
+
+    context.fillStyle = "#ffffff";
+    context.font = "700 64px Space Grotesk, sans-serif";
+    context.textAlign = "center";
+    context.fillText("A", 190, 382);
+    context.textAlign = "start";
+
+    context.fillStyle = "#1b2440";
+    context.font = "700 56px Space Grotesk, sans-serif";
+    const messageLines = wrapCanvasText(context, post.excerpt, 820);
+    messageLines.slice(0, 12).forEach((line, index) => {
+      context.fillText(line, 130, 520 + index * 68);
+    });
+
+    context.font = "700 34px Space Grotesk, sans-serif";
+    context.fillStyle = "#cc5a24";
+    context.fillText(`${post.comments.length} replies // Anonymous advice`, 130, 1170);
+
+    const link = document.createElement("a");
+    link.href = canvas.toDataURL("image/png");
+    link.download = `${post.slug}-anonymous-message.png`;
+    link.click();
+    setShareFeedback("Anonymous post image saved to your device.");
+  };
+
   return (
     <main className="page-shell">
       <StoryCirclesRow />
 
-      <section className="feed-layout">
+      <section className="feed-layout feed-layout-expanded">
         <div className="feed-column">
-          {feedPreview.map((post) => (
-            <article key={post.title} className="post-card card">
-              <div className="post-top">
-                <div className="post-author">
-                  <span className="post-avatar">{post.author.slice(0, 1)}</span>
-                  <div>
-                    <strong>{post.author}</strong>
-                    <span>{post.handle}</span>
+          {feedPosts.map((post, index) => (
+            <Fragment key={post.title}>
+              <article className="post-card card post-card-clickable" onClick={() => openStory(post.slug)}>
+                <div className="post-top">
+                  <div className="post-author">
+                    <span className="post-avatar">{post.author.slice(0, 1)}</span>
+                    <div>
+                      <strong>{post.author}</strong>
+                      <span>{post.handle}</span>
+                    </div>
                   </div>
+                  <span className="story-tag">{post.visibility}</span>
                 </div>
-                <span className="story-tag">{post.visibility}</span>
-              </div>
-              <div className="image-frame">
-                <img alt={post.title} className="post-image" src={feedStory} />
-              </div>
-              <div className="post-body">
-                <div className="post-meta-row">
-                  <span>{post.genre}</span>
-                  <span>{post.chapterCount} chapters</span>
-                  <span>{post.reads} reads</span>
+                <div className="image-frame">
+                  <img alt={post.title} className="post-image" src={feedStory} />
                 </div>
-                <h2>{post.title}</h2>
-                <p>{post.excerpt}</p>
-                <div className="post-actions">
-                  <span>
-                    <Icon className="inline-icon" name="heart" />
-                    Like
-                  </span>
-                  <span>
-                    <Icon className="inline-icon" name="comment" />
-                    {post.comments}
-                  </span>
-                  <span>
-                    <Icon className="inline-icon" name="bookmark" />
-                    {post.saves}
-                  </span>
-                  <span>
-                    <Icon className="inline-icon" name="share" />
-                    Share
-                  </span>
+                <div className="post-body">
+                  <div className="post-meta-row">
+                    <span>{post.genre}</span>
+                    <span>{post.chapterCount} chapters</span>
+                    <span>{post.reads} reads</span>
+                  </div>
+                  <h2>{post.title}</h2>
+                  <p>{post.excerpt}</p>
+                  <div className="post-actions feed-card-actions">
+                    <button className={post.liked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={(event) => {
+                      event.stopPropagation();
+                      toggleFeedLike(post.slug);
+                    }} type="button">
+                      <Icon className="inline-icon" name="heart" />
+                      {post.likes}
+                    </button>
+                    <button className="feed-action-pill" onClick={(event) => {
+                      event.stopPropagation();
+                      openStory(post.slug);
+                    }} type="button">
+                      <Icon className="inline-icon" name="comment" />
+                      {post.comments}
+                    </button>
+                    <button className={post.bookmarked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={(event) => {
+                      event.stopPropagation();
+                      toggleFeedBookmark(post.slug);
+                    }} type="button">
+                      <Icon className="inline-icon" name="bookmark" />
+                      {post.saves}
+                    </button>
+                    <button className="feed-action-pill" onClick={(event) => {
+                      event.stopPropagation();
+                      openShareSheet(post);
+                    }} type="button">
+                      <Icon className="inline-icon" name="share" />
+                      {post.shares}
+                    </button>
+                  </div>
+                  {shareFeedback ? <p className="status-feedback">{shareFeedback}</p> : null}
                 </div>
-              </div>
-            </article>
+              </article>
+
+              {index === 0 && anonymousFeedMessages.length ? (
+                <section className="feed-footer-strip card feed-anonymous-inline">
+                  <div className="section-head">
+                    <div className="chapter-heading-block">
+                      <SectionLabel>ANONYMOUS_MESSAGES</SectionLabel>
+                      <h2>Anonymous messages readers are opening</h2>
+                    </div>
+                    <span aria-label="Scroll sideways" className="section-meta">↔</span>
+                  </div>
+                  <div className="status-scroll anonymous-status-strip">
+                    {anonymousFeedMessages.map((message, messageIndex) => (
+                      <button className="anonymous-message-card" key={message.id} onClick={() => setActiveAnonymousIndex(messageIndex)} type="button">
+                        <div className="anonymous-message-head">
+                          <span className="status-ring tone-ink">
+                            <span className="status-avatar">A</span>
+                          </span>
+                          <div className="anonymous-message-meta">
+                            <strong>{message.title}</strong>
+                            <span>{message.meta}</span>
+                          </div>
+                        </div>
+                        <p>{message.preview}</p>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+            </Fragment>
           ))}
         </div>
-
-        <aside className="right-rail">
-          <article className="rail-panel card">
-            <SectionLabel>STATUS_TYPES</SectionLabel>
-            <div className="rail-stack">
-              {readingShelves.map((shelf) => (
-                <div key={shelf.title} className="rail-row">
-                  <strong>{shelf.title}</strong>
-                  <span>{shelf.meta}</span>
-                </div>
-              ))}
-            </div>
-          </article>
-
-          <article className="rail-panel card dark-card">
-            <SectionLabel>TOP_READS</SectionLabel>
-            <div className="rail-stack">
-              {trendingStories.map((story) => (
-                <div key={story.title} className="rail-row">
-                  <strong>{story.title}</strong>
-                  <span>{story.reads}</span>
-                </div>
-              ))}
-            </div>
-          </article>
-        </aside>
       </section>
+      {shareSheet ? <ShareSheet onClose={() => setShareSheet(null)} onFeedback={setShareFeedback} share={shareSheet} /> : null}
+      {activeAnonymousPost ? (
+        <div className="status-viewer-backdrop" onClick={() => setActiveAnonymousIndex(null)} role="presentation">
+          <article className="status-story-viewer tone-ink anonymous-feed-viewer" onClick={(event) => event.stopPropagation()}>
+            <div className="story-viewer-close-row">
+              <button aria-label="Close anonymous message" className="icon-chip" onClick={() => setActiveAnonymousIndex(null)} type="button">
+                <Icon className="button-icon" name="close" />
+              </button>
+            </div>
+            <div className="story-viewer-top">
+              <div className="story-viewer-author">
+                  <span className="status-ring tone-ink">
+                    <span className="status-avatar">A</span>
+                  </span>
+                  <div>
+                    <strong>Anonymous</strong>
+                    <span>{activeAnonymousPost.meta}</span>
+                  </div>
+                </div>
+                <div className="story-viewer-top-actions">
+                <button aria-label="Download anonymous post" className="icon-chip" onClick={() => downloadAnonymousMessageImage(activeAnonymousPost)} type="button">
+                  <Icon className="button-icon" name="download" />
+                </button>
+              </div>
+            </div>
+
+            <div className="story-stage-card">
+              <span className="story-tag">Anonymous advice</span>
+              <h3>{activeAnonymousPost.title}</h3>
+              <p>{activeAnonymousPost.excerpt}</p>
+              <div className="story-stage-metrics">
+                <span>{activeAnonymousPost.fromQuickMemory ? "Quick memory status" : "Anonymous chapter"}</span>
+                <strong>{activeAnonymousPost.comments.length} replies</strong>
+              </div>
+              <div className="anonymous-status-tools">
+                <button className="primary-action anonymous-help-action" onClick={() => {
+                  setHelpTarget(activeAnonymousPost);
+                  setConsentAccepted(false);
+                }} type="button">Render help</button>
+              </div>
+              {shareFeedback ? <p className="status-feedback">{shareFeedback}</p> : null}
+            </div>
+
+            <div className="story-reply-bar">
+              <input
+                onChange={(event) => setAnonymousReplyDraft(event.target.value)}
+                placeholder="Reply anonymously..."
+                value={anonymousReplyDraft}
+              />
+              <button className="primary-action" onClick={submitAnonymousReply} type="button">
+                Send anonymous reply
+              </button>
+            </div>
+
+            <div className="story-comment-list">
+              {activeAnonymousPost.comments.map((comment, index) => (
+                <div className="story-comment-card" key={`${comment.author}-${index}`}>
+                  <strong>{comment.author}</strong>
+                  <p>{comment.text}</p>
+                </div>
+              ))}
+            </div>
+          </article>
+        </div>
+      ) : null}
+      {helpTarget ? (
+        <div className="status-viewer-backdrop" onClick={() => setHelpTarget(null)} role="presentation">
+          <article className="status-help-modal card" onClick={(event) => event.stopPropagation()}>
+            <div className="status-composer-top">
+              <div>
+                <SectionLabel>CONSENT_FEE</SectionLabel>
+                <h3>Render help for this anonymous message</h3>
+              </div>
+              <button aria-label="Close help dialog" className="icon-chip" onClick={() => setHelpTarget(null)} type="button">
+                <Icon className="button-icon" name="close" />
+              </button>
+            </div>
+            <p>
+              To protect privacy, helpers pay a consent fee of ${helpTarget.helpFee ?? 8} before any contact request can be passed
+              to the anonymous poster.
+            </p>
+            <label className="toggle-row">
+              <input checked={consentAccepted} onChange={(event) => setConsentAccepted(event.target.checked)} type="checkbox" />
+              <span>I accept the consent fee and privacy terms for this help request.</span>
+            </label>
+            <div className="status-composer-footer">
+              <button className="ghost-action" onClick={() => setHelpTarget(null)} type="button">Cancel</button>
+              <button className="primary-action" onClick={confirmHelpRequest} type="button">Pay consent fee</button>
+            </div>
+          </article>
+        </div>
+      ) : null}
+    </main>
+  );
+}
+
+function FeedStoryPage() {
+  const navigate = useNavigate();
+  const { storySlug } = useParams();
+  const [stories, setStories] = useState<FeedStoryRecord[]>(buildFeedStories);
+  const [chapterReplyDrafts, setChapterReplyDrafts] = useState<Record<string, string>>({});
+  const [shareFeedback, setShareFeedback] = useState("");
+  const [shareSheet, setShareSheet] = useState<ShareSheetPayload | null>(null);
+  const [helpTarget, setHelpTarget] = useState<FeedStoryRecord | null>(null);
+  const [consentAccepted, setConsentAccepted] = useState(false);
+  const [activeChapterId, setActiveChapterId] = useState("");
+
+  const story = stories.find((entry) => entry.slug === storySlug) ?? null;
+  const totalChapterComments = story?.chapters.reduce((total, chapter) => total + chapter.comments.length, 0) ?? 0;
+  const activeChapter = story?.chapters.find((chapter) => chapter.id === activeChapterId) ?? story?.chapters[0] ?? null;
+  const activeChapterIndex = story?.chapters.findIndex((chapter) => chapter.id === activeChapter?.id) ?? 0;
+  const relatedChapters = story?.chapters.filter((chapter) => chapter.id !== activeChapter?.id) ?? [];
+  const activeChapterNumber = activeChapterIndex >= 0 ? activeChapterIndex + 1 : 1;
+
+  useEffect(() => {
+    if (!story) {
+      return;
+    }
+
+    setActiveChapterId(story.chapters[0]?.id ?? "");
+  }, [story?.slug]);
+
+  const updateStory = (updater: (story: FeedStoryRecord) => FeedStoryRecord) => {
+    if (!story) {
+      return;
+    }
+
+    setStories((current) => current.map((entry) => (entry.slug === story.slug ? updater(entry) : entry)));
+  };
+
+  const toggleFollow = () => {
+    updateStory((current) => ({ ...current, following: !current.following }));
+  };
+
+  const toggleStoryLike = () => {
+    updateStory((current) => ({
+      ...current,
+      liked: !current.liked,
+      likes: current.liked ? current.likes - 1 : current.likes + 1
+    }));
+  };
+
+  const toggleStoryBookmark = () => {
+    updateStory((current) => ({ ...current, bookmarked: !current.bookmarked }));
+  };
+
+  const openShareSheet = (payload: ShareSheetPayload) => {
+    setShareSheet(payload);
+  };
+
+  const shareStory = async () => {
+    if (!story) {
+      return;
+    }
+    const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
+    openShareSheet({
+      title: story.title,
+      text: `${story.title} by ${story.author}`,
+      url: `${baseUrl}/feed/story/${story.slug}`
+    });
+  };
+
+  const toggleChapterLike = (chapterId: string) => {
+    updateStory((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) =>
+        chapter.id === chapterId
+          ? { ...chapter, liked: !chapter.liked, likes: chapter.liked ? chapter.likes - 1 : chapter.likes + 1 }
+          : chapter
+      )
+    }));
+  };
+
+  const submitChapterComment = (chapterId: string) => {
+    const draft = chapterReplyDrafts[chapterId]?.trim();
+    if (!story || !draft) {
+      return;
+    }
+
+    const nextComment: FeedThreadComment = {
+      author: "You",
+      handle: "@yourarchive",
+      text: draft,
+      time: "now"
+    };
+
+    updateStory((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) =>
+        chapter.id === chapterId ? { ...chapter, comments: [...chapter.comments, nextComment] } : chapter
+      )
+    }));
+    setChapterReplyDrafts((current) => ({ ...current, [chapterId]: "" }));
+  };
+
+  const confirmHelpRequest = () => {
+    if (!helpTarget || !consentAccepted) {
+      setShareFeedback("Accept the consent fee first to continue.");
+      return;
+    }
+
+    setShareFeedback(
+      `Consent fee confirmed. You can now request to reach, message, or follow the anonymous poster for "${helpTarget.title}".`
+    );
+    setHelpTarget(null);
+    setConsentAccepted(false);
+  };
+
+  if (!story) {
+    return (
+      <main className="page-shell">
+        <section className="card feed-reader-empty">
+          <h1>Story not found</h1>
+          <p>Return to the feed and open another published story.</p>
+          <button className="ghost-action" onClick={() => navigate("/feed")} type="button">Back to feed</button>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="page-shell feed-reader-shell">
+      <section className="topbar card feed-reader-topbar">
+        <div className="topbar-copy">
+          <strong>{activeChapter ? `Chapter ${activeChapterNumber}: ${activeChapter.title}` : story.title}</strong>
+          <span>{story.author} // {story.genre} // {story.chapterCount} chapters // {story.reads} reads</span>
+        </div>
+        <div className="topbar-actions">
+          <button className="ghost-action" onClick={() => navigate("/feed")} type="button">BACK TO FEED</button>
+          <button className={story.following ? "primary-action" : "ghost-action"} onClick={toggleFollow} type="button">
+            {story.following ? "UNFOLLOW" : "FOLLOW"}
+          </button>
+        </div>
+      </section>
+
+      <section className="feed-reader-single-column">
+        <article className="feed-reader-main card story-reader-stage">
+          <div className="story-reader-stage-copy">
+            <SectionLabel>STORY_READING</SectionLabel>
+            <h1>{story.title}</h1>
+            <p>{story.excerpt}</p>
+          </div>
+          <div className="story-reader-stage-meta">
+            <div className="story-reader-author-row">
+              <span className="post-avatar">{story.author.slice(0, 1)}</span>
+              <div>
+                <strong>{story.author}</strong>
+                <span>{story.handle}</span>
+              </div>
+            </div>
+            <div className="story-reader-meta-list">
+              <span>{`Chapter ${activeChapterNumber} of ${story.chapters.length}`}</span>
+              <span>{story.visibility}</span>
+              <span>{story.reads} reads</span>
+            </div>
+          </div>
+          <div className="post-actions feed-thread-actions story-reader-stage-actions">
+            <button className={story.liked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={toggleStoryLike} type="button">
+              <Icon className="inline-icon" name="heart" />
+              {story.likes}
+            </button>
+            <button className={story.bookmarked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={toggleStoryBookmark} type="button">
+              <Icon className="inline-icon" name="bookmark" />
+              {story.bookmarked ? "Saved" : story.saves}
+            </button>
+              <button className="feed-action-pill" onClick={() => void shareStory()} type="button">
+                <Icon className="inline-icon" name="share" />
+                {story.shares}
+              </button>
+            {story.anonymous ? (
+              <button className="feed-action-pill" onClick={() => {
+                setHelpTarget(story);
+                setConsentAccepted(false);
+              }} type="button">
+                <Icon className="inline-icon" name="bolt" />
+                Render help
+              </button>
+            ) : null}
+          </div>
+          {shareFeedback ? <p className="status-feedback">{shareFeedback}</p> : null}
+        </article>
+
+        {activeChapter ? (
+          <article className="chapter-reader-card chapter-reader-primary card">
+            <div className="chapter-reader-shell">
+              <header className="chapter-reader-head">
+                <div>
+                  <SectionLabel>{`CHAPTER_${activeChapterNumber}`}</SectionLabel>
+                  <h2>{activeChapter.title}</h2>
+                  <p className="chapter-reader-summary">{activeChapter.summary}</p>
+                </div>
+                <span className="story-tag">{story.visibility}</span>
+              </header>
+
+              <div className="chapter-reader-body">
+                <div className="preview-rich-text chapter-reader-copy">
+                  {activeChapter.body.split(/\n+/).map((paragraph, index) => (
+                    <p key={`${activeChapter.id}-paragraph-${index}`}>{paragraph}</p>
+                  ))}
+                </div>
+
+                {activeChapter.images.length ? (
+                  <section className="chapter-content-section">
+                    <div className="chapter-section-head">
+                      <SectionLabel>MEMORY_ATTACHMENTS</SectionLabel>
+                      <span>{activeChapter.images.length} images</span>
+                    </div>
+                    <div className="feed-reader-media-grid">
+                      {activeChapter.images.map((image, index) => (
+                        <figure className="feed-reader-media-frame" key={image.alt}>
+                          <img alt={image.alt} className="post-image story-reader-image" src={image.src} />
+                          <figcaption>{`Attachment ${index + 1} // ${image.alt}`}</figcaption>
+                        </figure>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {activeChapter.voiceNotes.length ? (
+                  <section className="chapter-content-section">
+                    <div className="chapter-section-head">
+                      <SectionLabel>VOICE_NOTES</SectionLabel>
+                      <span>{activeChapter.voiceNotes.length} attached</span>
+                    </div>
+                    <div className="feed-reader-support-grid">
+                      {activeChapter.voiceNotes.map((voice) => (
+                        <article className="feed-reader-support-card voice-note-card" key={voice.name}>
+                          <div className="voice-note-icon">
+                            <Icon className="button-icon" name="mic" />
+                          </div>
+                          <div className="voice-note-copy">
+                            <strong>{voice.name}</strong>
+                            <span>{voice.detail}</span>
+                          </div>
+                          <audio className="voice-note-player" controls preload="none">
+                            <source src={voice.src} type="audio/mpeg" />
+                          </audio>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {activeChapter.timeline.length ? (
+                  <section className="chapter-content-section">
+                    <div className="chapter-section-head">
+                      <SectionLabel>TIMELINE_MOMENTS</SectionLabel>
+                      <span>{activeChapter.timeline.length} moments</span>
+                    </div>
+                    <div className="feed-reader-support-grid">
+                      {activeChapter.timeline.map((entry) => (
+                        <article className="feed-reader-support-card" key={`${entry.label}-${entry.title}`}>
+                          <strong>{entry.label}</strong>
+                          <span>{entry.title}</span>
+                          <p>{entry.body}</p>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+              </div>
+
+              <div className="post-actions feed-thread-actions story-reader-chapter-actions">
+              <button className={activeChapter.liked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={() => toggleChapterLike(activeChapter.id)} type="button">
+                <Icon className="inline-icon" name="heart" />
+                {activeChapter.likes}
+              </button>
+              <button
+                className="feed-action-pill"
+                onClick={() =>
+                  openShareSheet({
+                    title: `${story.title} — ${activeChapter.title}`,
+                    text: `${activeChapter.title} from ${story.title} by ${story.author}`,
+                    url: `${typeof window !== "undefined" ? window.location.origin : ""}/feed/story/${story.slug}#${activeChapter.id}`
+                  })
+                }
+                type="button"
+              >
+                <Icon className="inline-icon" name="share" />
+                Share chapter
+              </button>
+              <button className={story.following ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={toggleFollow} type="button">
+                <Icon className="inline-icon" name="spark" />
+                {story.following ? "Following" : "Follow"}
+              </button>
+            </div>
+
+              <footer className="chapter-thread-footer">
+                <div className="chapter-section-head">
+                  <div>
+                    <SectionLabel>COMMENTS_THREAD</SectionLabel>
+                    <h3>{`${activeChapter.comments.length} replies on this chapter`}</h3>
+                  </div>
+                </div>
+                <div className="feed-thread-list">
+                  {activeChapter.comments.map((comment, commentIndex) => (
+                    <article className={`feed-thread-item${comment.replyTo ? " feed-thread-reply-item" : ""}`} key={`${comment.handle}-${commentIndex}`}>
+                      <div className="feed-thread-line" aria-hidden="true" />
+                      <div className="feed-thread-copy">
+                        <div className="feed-thread-head">
+                          <strong>{comment.author}</strong>
+                          <span>{comment.handle}</span>
+                          <small>{comment.time}</small>
+                        </div>
+                        {comment.replyTo ? <span className="feed-thread-context">Replying to {comment.replyTo}</span> : null}
+                        <p>{comment.text}</p>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                <div className="feed-thread-reply">
+                  <textarea
+                    className="status-compose-input feed-thread-input"
+                    onChange={(event) => setChapterReplyDrafts((current) => ({ ...current, [activeChapter.id]: event.target.value }))}
+                    placeholder="Reply in thread..."
+                    value={chapterReplyDrafts[activeChapter.id] ?? ""}
+                  />
+                  <button className="primary-action" onClick={() => submitChapterComment(activeChapter.id)} type="button">
+                    Post reply
+                  </button>
+                </div>
+              </footer>
+            </div>
+          </article>
+        ) : null}
+      </section>
+
+      <section className="feed-reader-footer-grid">
+        <article className="rail-panel card story-reader-footer-card">
+          <div className="story-reader-footer-inner">
+            <div className="chapter-section-head">
+              <div>
+                <SectionLabel>RELATED_CHAPTERS</SectionLabel>
+                <h3>Continue through this story</h3>
+              </div>
+              <span>{relatedChapters.length} more chapters</span>
+            </div>
+            <div className="feed-reader-related-list">
+              {relatedChapters.map((chapter) => (
+                <button className="feed-reader-related-card" key={chapter.id} onClick={() => setActiveChapterId(chapter.id)} type="button">
+                  <span className="story-tag">{`Chapter ${story.chapters.findIndex((item) => item.id === chapter.id) + 1}`}</span>
+                  <strong>{chapter.title}</strong>
+                  <p>{chapter.summary}</p>
+                  <small>{chapter.comments.length} thread replies</small>
+                </button>
+              ))}
+            </div>
+          </div>
+        </article>
+
+        <article className="rail-panel card story-reader-footer-card">
+          <div className="story-reader-footer-inner story-reader-meta-card">
+            <SectionLabel>STORY_FOOTER</SectionLabel>
+            <div className="rail-stack">
+              <div className="rail-row">
+                <strong>Visibility</strong>
+                <span>{story.visibility}</span>
+              </div>
+              <div className="rail-row">
+                <strong>Published chapters</strong>
+                <span>{story.chapters.length}</span>
+              </div>
+              <div className="rail-row">
+                <strong>Comments</strong>
+                <span>{totalChapterComments}</span>
+              </div>
+              <div className="rail-row">
+                <strong>Contains</strong>
+                <span>Summary, body, memory images, voice notes, timeline moments, thread replies</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      {helpTarget ? (
+        <div className="status-viewer-backdrop" onClick={() => setHelpTarget(null)} role="presentation">
+          <article className="status-help-modal card" onClick={(event) => event.stopPropagation()}>
+            <div className="status-composer-top">
+              <div>
+                <SectionLabel>CONSENT_FEE</SectionLabel>
+                <h3>Render help for this anonymous story</h3>
+              </div>
+              <button aria-label="Close render help dialog" className="icon-chip" onClick={() => setHelpTarget(null)} type="button">
+                <Icon className="button-icon" name="close" />
+              </button>
+            </div>
+            <p>
+              To protect privacy, you must pay a consent fee of ${helpTarget.helpFee ?? 8} before you are allowed to reach,
+              message, or follow the person behind this anonymous post.
+            </p>
+            <label className="toggle-row">
+              <input checked={consentAccepted} onChange={(event) => setConsentAccepted(event.target.checked)} type="checkbox" />
+              <span>I accept the consent fee and privacy terms for rendering help on this anonymous post.</span>
+            </label>
+            <div className="status-composer-footer">
+              <button className="ghost-action" onClick={() => setHelpTarget(null)} type="button">Cancel</button>
+              <button className="primary-action" onClick={confirmHelpRequest} type="button">Pay consent fee</button>
+            </div>
+          </article>
+        </div>
+      ) : null}
+      {shareSheet ? <ShareSheet onClose={() => setShareSheet(null)} onFeedback={setShareFeedback} share={shareSheet} /> : null}
     </main>
   );
 }
@@ -1699,9 +3540,7 @@ function StudioPage() {
     { label: "Spanish", value: "es-ES" },
     { label: "German", value: "de-DE" },
     { label: "Portuguese (Brazil)", value: "pt-BR" },
-    { label: "Arabic", value: "ar-SA" },
-    { label: "Yoruba", value: "yo-NG" },
-    { label: "Hausa", value: "ha-NG" }
+    { label: "Arabic", value: "ar-SA" }
   ];
   const supportedTranscriptionLanguageValues = new Set([
     "en-US",
@@ -1710,9 +3549,7 @@ function StudioPage() {
     "es-ES",
     "de-DE",
     "pt-BR",
-    "ar-SA",
-    "yo-NG",
-    "ha-NG"
+    "ar-SA"
   ]);
   const supportedTranscriptionLanguages = transcriptionLanguages.filter((language) =>
     supportedTranscriptionLanguageValues.has(language.value)
@@ -1769,14 +3606,18 @@ function StudioPage() {
   const [imageAttachments, setImageAttachments] = useState<Array<{ name: string; url: string; source: string }>>([]);
   const [voiceNotes, setVoiceNotes] = useState<Array<{ name: string; url: string; source: string }>>([]);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [isVoiceRecordingPaused, setIsVoiceRecordingPaused] = useState(false);
   const [voiceRecordingStatus, setVoiceRecordingStatus] = useState("Voice note idle");
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isTranscriptionPanelVisible, setIsTranscriptionPanelVisible] = useState(false);
   const [transcriptionStatus, setTranscriptionStatus] = useState("Voice transcription idle");
   const [transcriptionLanguage, setTranscriptionLanguage] = useState("en-US");
   const [mediaError, setMediaError] = useState<string | null>(null);
   const chapterBodyRef = useRef<HTMLDivElement | null>(null);
   const chapterEditorSectionRef = useRef<HTMLElement | null>(null);
-  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaSectionRef = useRef<HTMLElement | null>(null);
+  const publishSectionRef = useRef<HTMLElement | null>(null);
+  const timelineSectionRef = useRef<HTMLElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const imageAttachmentsRef = useRef<Array<{ name: string; url: string; source: string }>>([]);
   const voiceNotesRef = useRef<Array<{ name: string; url: string; source: string }>>([]);
@@ -1817,14 +3658,32 @@ function StudioPage() {
   const readyChapters = chapterMetrics.filter((chapter) => chapter.isComplete);
   const startedIncompleteChapters = chapterMetrics.filter((chapter) => !chapter.isComplete && chapter.words > 0);
   const activeChapterReady = chapterMetrics[activeChapterIndex >= 0 ? activeChapterIndex : 0];
+  const activeChapterNumber = Math.max(activeChapterIndex + 1, 1);
+  const activeChapterNumberLabel = `Chapter ${activeChapterNumber}`;
+  const currentChapterRequiredItems = [
+    activeChapterLabel.trim().length > 0 ? null : "add a chapter title",
+    plainChapterText.trim().length > 0 ? null : "write the chapter body",
+    wordCount >= chapterCompletionThreshold ? null : `reach at least ${chapterCompletionThreshold} words`
+  ].filter(Boolean) as string[];
+  const currentChapterOptionalItems = [
+    imageAttachments.length > 0 ? null : "attach an image",
+    voiceNotes.length > 0 ? null : "record a voice note",
+    timelineEntries.some(
+      (entry) => entry.title.trim().length > 0 || entry.body.trim().length > 0 || entry.year || entry.month || entry.day
+    )
+      ? null
+      : "add a timeline moment"
+  ].filter(Boolean) as string[];
   const chapterSlots = Array.from({ length: 6 }).map((_, index) => {
     const existingChapter = chapters[index];
     const isLocked = index >= chapterLimit;
+    const chapterLabel = `Chapter ${index + 1}`;
 
     return existingChapter
-      ? { ...existingChapter, isLocked }
+      ? { ...existingChapter, isLocked, chapterLabel }
       : {
           title: "Premium chapter",
+          chapterLabel,
           status: "PREMIUM",
           type: "PREMIUM",
           words: 0,
@@ -2065,11 +3924,6 @@ function StudioPage() {
     }
   };
 
-  const handleCameraChange = (event: ChangeEvent<HTMLInputElement>) => {
-    appendImages(event.target.files, "Camera");
-    event.target.value = "";
-  };
-
   const handleImageUpload = (event: ChangeEvent<HTMLInputElement>) => {
     appendImages(event.target.files, "Upload");
     event.target.value = "";
@@ -2119,11 +3973,13 @@ function StudioPage() {
         streamRef.current = null;
         mediaRecorderRef.current = null;
         setIsRecordingVoice(false);
+        setIsVoiceRecordingPaused(false);
         setVoiceRecordingStatus("Recording stopped. Voice note saved.");
       };
 
       recorder.start();
       setIsRecordingVoice(true);
+      setIsVoiceRecordingPaused(false);
       setVoiceRecordingStatus("Recording active...");
     } catch {
       setMediaError("Microphone permission was denied or unavailable.");
@@ -2136,6 +3992,26 @@ function StudioPage() {
     mediaRecorderRef.current?.stop();
   };
 
+  const pauseVoiceRecording = () => {
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== "recording") {
+      return;
+    }
+
+    mediaRecorderRef.current.pause();
+    setIsVoiceRecordingPaused(true);
+    setVoiceRecordingStatus("Recording paused.");
+  };
+
+  const resumeVoiceRecording = () => {
+    if (!mediaRecorderRef.current || mediaRecorderRef.current.state !== "paused") {
+      return;
+    }
+
+    mediaRecorderRef.current.resume();
+    setIsVoiceRecordingPaused(false);
+    setVoiceRecordingStatus("Recording active...");
+  };
+
   const removeImageAttachment = (url: string) => {
     setImageAttachments((current) => {
       const target = current.find((attachment) => attachment.url === url);
@@ -2144,6 +4020,19 @@ function StudioPage() {
       }
       return current.filter((attachment) => attachment.url !== url);
     });
+  };
+
+  const openImageSlot = () => {
+    imageInputRef.current?.click();
+  };
+
+  const openVoiceSlot = () => {
+    if (isRecordingVoice) {
+      stopVoiceRecording();
+      return;
+    }
+
+    void startVoiceRecording();
   };
 
   const removeVoiceNote = (url: string) => {
@@ -2437,7 +4326,7 @@ function StudioPage() {
       };
     }
 
-    if (language === "ar-SA" || language === "yo-NG" || language === "ha-NG") {
+    if (language === "ar-SA") {
       return {
         speechModel: "whisper-rt",
         languageDetection: true
@@ -2704,7 +4593,13 @@ function StudioPage() {
     startRelayTranscription(AudioContextConstructor, "desktop");
   };
 
+  const openVoiceTranscriptionPanel = () => {
+    setIsTranscriptionPanelVisible(true);
+    startVoiceTranscription();
+  };
+
   const stopVoiceTranscription = () => {
+    setIsTranscriptionPanelVisible(false);
     if (transcriptionSocketRef.current || transcriptionAudioContextRef.current) {
       stopStreamingTranscription();
       return;
@@ -2736,10 +4631,38 @@ function StudioPage() {
     );
   }, [supportedTranscriptionLanguages, transcriptionLanguage]);
 
+  const scrollToSectionTop = (ref: RefObject<HTMLElement | null>) => {
+    if (typeof window === "undefined" || !ref.current) {
+      return;
+    }
+
+    const sectionTop = ref.current.getBoundingClientRect().top + window.scrollY - 24;
+    window.scrollTo({
+      top: Math.max(sectionTop, 0),
+      behavior: "smooth"
+    });
+  };
+
   const guideToSection = (ref: RefObject<HTMLElement | null>, message: string) => {
     setStudioMessage(message);
     openStudioNotice("Action needed", message);
-    ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrollToSectionTop(ref);
+  };
+
+  const scrollToCurrentChapterIssue = () => {
+    if (currentChapterRequiredItems.length > 0) {
+      scrollToSectionTop(chapterEditorSectionRef);
+      return;
+    }
+
+    if (currentChapterOptionalItems.includes("attach an image") || currentChapterOptionalItems.includes("record a voice note")) {
+      scrollToSectionTop(mediaSectionRef);
+      return;
+    }
+
+    if (currentChapterOptionalItems.includes("add a timeline moment")) {
+      scrollToSectionTop(timelineSectionRef);
+    }
   };
 
   const saveCurrentDraft = () => {
@@ -2748,8 +4671,23 @@ function StudioPage() {
         chapter.title === activeChapter ? { ...chapter, status: "Draft saved", words: wordCount } : chapter
       )
     );
-    setStudioMessage(`${activeChapterLabel} saved as draft.`);
-    setDraftHistory((current) => [`${activeChapterLabel} saved as draft.`, ...current].slice(0, 6));
+    if (currentChapterRequiredItems.length > 0 || currentChapterOptionalItems.length > 0) {
+      const missingRequiredText = currentChapterRequiredItems.length
+        ? `Still required: ${currentChapterRequiredItems.join(", ")}.`
+        : "";
+      const optionalText = currentChapterOptionalItems.length
+        ? ` Optional extras you can still add: ${currentChapterOptionalItems.join(", ")}.`
+        : "";
+      const noticeBody = `${activeChapterNumberLabel} saved locally. ${missingRequiredText}${optionalText}`.trim();
+      setStudioMessage(`${activeChapterNumberLabel} saved with pending work.`);
+      openStudioNotice("Chapter saved with pending items", noticeBody);
+      scrollToCurrentChapterIssue();
+      setDraftHistory((current) => [`${activeChapterNumberLabel} saved with pending items.`, ...current].slice(0, 6));
+      return;
+    }
+
+    setStudioMessage(`${activeChapterNumberLabel} is saved and ready for preview.`);
+    setDraftHistory((current) => [`${activeChapterNumberLabel} saved as draft.`, ...current].slice(0, 6));
   };
 
   const publishWholeStory = () => {
@@ -2768,6 +4706,7 @@ function StudioPage() {
           ? `After preview review, these chapters will go live: ${readyChapters.map((chapter) => chapter.title).join(", ")}. Unfinished chapters will stay as drafts: ${startedIncompleteChapters.map((chapter) => chapter.title).join(", ")}.`
           : `After preview review, these chapters will go live: ${readyChapters.map((chapter) => chapter.title).join(", ")}.`
       );
+      scrollToSectionTop(publishSectionRef);
       handlePreviewToggle();
       return;
     }
@@ -2845,20 +4784,13 @@ function StudioPage() {
   };
 
   const handlePreviewToggle = () => {
-    const previewChapters = chapters
-      .map((chapter) => ({
-        title: chapter.title,
-        status: chapter.status,
-        words: getChapterWordCount(chapter.body),
-        body: chapter.body
-      }))
-      .filter((chapter) => chapter.title.trim().length > 0 || chapter.body.trim().length > 0);
     const previewTimeline = timelineEntries.filter(
       (entry) => entry.title.trim().length > 0 || entry.body.trim().length > 0 || entry.year || entry.month || entry.day
     );
     const previewPayload = {
       storyTitle,
       storySummary,
+      activeChapterNumberLabel,
       activeChapter: activeChapterLabel,
       chapterType,
       visibility: anonymous ? "anonymous" : visibility,
@@ -2866,9 +4798,13 @@ function StudioPage() {
       wordCount,
       imageAttachments,
       voiceNotes,
-      chapters: previewChapters,
       timelineEntries: previewTimeline,
-      allowComments
+      allowComments,
+      chapterStatus: activeChapterEntry?.status ?? "Draft",
+      chapterChecklist: {
+        required: currentChapterRequiredItems,
+        optional: currentChapterOptionalItems
+      }
     };
 
     window.sessionStorage.setItem("histora-studio-preview", JSON.stringify(previewPayload));
@@ -2937,7 +4873,6 @@ function StudioPage() {
           <p>Build chapters, attach images and voice notes, and control how every finished draft gets published.</p>
         </div>
         <div className="hero-actions">
-          <button className="ghost-action" onClick={saveCurrentDraft} type="button">SAVE DRAFT</button>
           <button className="ghost-action" onClick={exitStudioMode} type="button">EXIT STUDIO</button>
         </div>
       </section>
@@ -2965,9 +4900,9 @@ function StudioPage() {
             <div className="section-head">
               <div>
                 <SectionLabel>CHAPTER_SWITCHER</SectionLabel>
-                <h2>Every chapter and draft stays visible</h2>
+                <h2>Slide through your chapters</h2>
               </div>
-              <span className="story-tag">{chapters.length} entries</span>
+              <span className="story-tag">{chapterSlots.length} chapters</span>
             </div>
             <div className="chapter-tab-row">
               {chapterSlots.map((chapter) => (
@@ -2983,6 +4918,7 @@ function StudioPage() {
                   onClick={() => handleChapterSwitch(chapter.title, chapter.isLocked)}
                   type="button"
                 >
+                  <small>{chapter.chapterLabel}</small>
                   <strong>{chapter.title}</strong>
                   <span>{chapter.isLocked ? "PREMIUM" : chapters.find((entry) => entry.title === chapter.title)?.status ?? chapter.status}</span>
                 </button>
@@ -2991,7 +4927,7 @@ function StudioPage() {
             {!isPremium ? <span className="section-meta">Free users can write in the first 2 chapters only.</span> : null}
           </article>
 
-          <article className="studio-panel card">
+          <article className="studio-panel card" ref={mediaSectionRef}>
             <div className="section-head">
               <div>
                 <SectionLabel>STORY_SETUP</SectionLabel>
@@ -3017,10 +4953,13 @@ function StudioPage() {
             </div>
           </article>
 
-          <article className="studio-panel card">
+          <article className="studio-panel card" ref={publishSectionRef}>
             <div className="section-head">
               <div className="chapter-heading-block">
                 <SectionLabel>CURRENT_CHAPTER</SectionLabel>
+                <span className="current-chapter-kicker">
+                  Working on {chapterSlots.find((chapter) => chapter.title === activeChapter)?.chapterLabel ?? "Current chapter"}
+                </span>
                 <div className="chapter-heading-row">
                   {isEditingChapterTitle ? (
                     <input
@@ -3050,62 +4989,6 @@ function StudioPage() {
               </div>
               <span className="story-tag">{wordCount}_WORDS</span>
             </div>
-            <div className="writing-toolbar">
-              <button className={activeFormats.bold ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("bold")} type="button">Bold</button>
-              <button className={activeFormats.italic ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("italic")} type="button">Italic</button>
-              <button className={activeFormats.quote ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("quote")} type="button">Quote</button>
-              <button className={activeFormats.checklist ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("checklist")} type="button">Checklist</button>
-              <button className={activeFormats.timeline ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("timeline")} type="button">Timeline tag</button>
-              <button className={activeFormats.comment ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("comment")} type="button">Comment note</button>
-            </div>
-            <div className="writing-structure-row">
-              <button className="ghost-action" onClick={() => insertStructureBlock("opening")} type="button">Add opening</button>
-              <button className="ghost-action" onClick={() => insertStructureBlock("conflict")} type="button">Add conflict</button>
-              <button className="ghost-action" onClick={() => insertStructureBlock("reflection")} type="button">Add reflection</button>
-              <button className="ghost-action" onClick={() => insertStructureBlock("closing")} type="button">Add closing</button>
-            </div>
-            <div className={isTranscribing ? "transcription-indicator transcription-live" : "transcription-indicator"}>
-              <span className="transcription-dot" />
-              <div className="transcription-signal" aria-hidden="true">
-                <span />
-                <span />
-                <span />
-                <span />
-              </div>
-              <div className="transcription-copy">
-                <strong>{isTranscribing ? "Voice capture live" : "Voice capture idle"}</strong>
-                <span>{isTranscribing ? "Amplifier blinking means speech is being captured." : "Ready when you want to begin."}</span>
-                <small>{transcriptionStatus}</small>
-              </div>
-              <button
-                className={isTranscribing ? "primary-action" : "ghost-action"}
-                onClick={isTranscribing ? stopVoiceTranscription : startVoiceTranscription}
-                type="button"
-              >
-                {isTranscribing ? "STOP TRANSCRIBING" : "START VOICE TO TEXT"}
-              </button>
-            </div>
-            <div className="transcription-language-row">
-              <label>
-                Transcription language
-                <select
-                  onChange={(event) => setTranscriptionLanguage(event.target.value)}
-                  value={transcriptionLanguage}
-                >
-                  {supportedTranscriptionLanguages.map((language) => (
-                    <option key={language.value} value={language.value}>
-                      {language.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <span className="transcription-supported-copy">
-                Supported now: {supportedTranscriptionLanguages.map((language) => language.label).join(", ")}
-              </span>
-              <span className="transcription-supported-copy">
-                Not currently confirmed here: Igbo
-              </span>
-            </div>
             <div className="form-grid">
               <label>
                 Chapter type
@@ -3121,14 +5004,114 @@ function StudioPage() {
               </label>
               <label>
                 Body
-                <div
-                  className="editor-surface"
-                  contentEditable
-                  onInput={syncEditorContent}
-                  ref={chapterBodyRef}
-                  suppressContentEditableWarning
-                />
+                <div className="editor-field-shell">
+                  <div
+                    className="editor-surface"
+                    contentEditable
+                    onInput={syncEditorContent}
+                    ref={chapterBodyRef}
+                    suppressContentEditableWarning
+                  />
+                  {!isTranscriptionPanelVisible ? (
+                    <button
+                      aria-label="Start voice transcription"
+                      className="editor-mic-button"
+                      onClick={openVoiceTranscriptionPanel}
+                      type="button"
+                    >
+                      <Icon className="button-icon" name="mic" />
+                    </button>
+                  ) : null}
+                </div>
               </label>
+            </div>
+            {isTranscriptionPanelVisible ? (
+              <>
+                <div className={isTranscribing ? "transcription-indicator transcription-live" : "transcription-indicator"}>
+                  <span className="transcription-dot" />
+                  <div className="transcription-signal" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <div className="transcription-copy">
+                    <strong>{isTranscribing ? "Voice capture live" : "Voice capture idle"}</strong>
+                    <span>{isTranscribing ? "Amplifier blinking means speech is being captured." : "Preparing voice capture."}</span>
+                    <small>{transcriptionStatus}</small>
+                  </div>
+                  <button
+                    className={isTranscribing ? "primary-action" : "ghost-action"}
+                    onClick={isTranscribing ? stopVoiceTranscription : startVoiceTranscription}
+                    type="button"
+                  >
+                    {isTranscribing ? "STOP TRANSCRIBING" : "START VOICE TO TEXT"}
+                  </button>
+                </div>
+                <div className="transcription-language-row">
+                  <label>
+                    Transcription language
+                    <select
+                      onChange={(event) => setTranscriptionLanguage(event.target.value)}
+                      value={transcriptionLanguage}
+                    >
+                      {supportedTranscriptionLanguages.map((language) => (
+                        <option key={language.value} value={language.value}>
+                          {language.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <span className="transcription-supported-copy">
+                    Supported now: {supportedTranscriptionLanguages.map((language) => language.label).join(", ")}
+                  </span>
+                  <span className="transcription-supported-copy">
+                    Not currently confirmed here: Igbo
+                  </span>
+                </div>
+              </>
+            ) : null}
+            <div className="writing-toolbar">
+              <button className={activeFormats.bold ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("bold")} type="button">
+                <Icon className="button-icon" name="bold" />
+                <span className="toolbar-label">Bold</span>
+              </button>
+              <button className={activeFormats.italic ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("italic")} type="button">
+                <Icon className="button-icon" name="italic" />
+                <span className="toolbar-label">Italic</span>
+              </button>
+              <button className={activeFormats.quote ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("quote")} type="button">
+                <Icon className="button-icon" name="quote" />
+                <span className="toolbar-label">Quote</span>
+              </button>
+              <button className={activeFormats.checklist ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("checklist")} type="button">
+                <Icon className="button-icon" name="checklist" />
+                <span className="toolbar-label">Checklist</span>
+              </button>
+              <button className={activeFormats.timeline ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("timeline")} type="button">
+                <Icon className="button-icon" name="timeline" />
+                <span className="toolbar-label">Timeline tag</span>
+              </button>
+              <button className={activeFormats.comment ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => applyEditorTool("comment")} type="button">
+                <Icon className="button-icon" name="note" />
+                <span className="toolbar-label">Comment note</span>
+              </button>
+              <button className="composer-chip" onClick={() => insertStructureBlock("opening")} type="button">
+                <Icon className="button-icon" name="write" />
+                <span className="toolbar-label">Add opening</span>
+              </button>
+              <button className="composer-chip" onClick={() => insertStructureBlock("conflict")} type="button">
+                <Icon className="button-icon" name="bolt" />
+                <span className="toolbar-label">Add conflict</span>
+              </button>
+              <button className="composer-chip" onClick={() => insertStructureBlock("reflection")} type="button">
+                <Icon className="button-icon" name="bookmark" />
+                <span className="toolbar-label">Add reflection</span>
+              </button>
+              <button className="composer-chip" onClick={() => insertStructureBlock("closing")} type="button">
+                <Icon className="button-icon" name="arrow" />
+                <span className="toolbar-label">Add closing</span>
+              </button>
             </div>
             <div className="chapter-controls">
               <button className="ghost-action" onClick={handlePreviewToggle} type="button">PREVIEW CHAPTER</button>
@@ -3152,23 +5135,15 @@ function StudioPage() {
             <div className="section-head">
               <div>
                 <SectionLabel>MEDIA_ATTACHMENTS</SectionLabel>
-                <h2>Images, camera, uploads, and voice notes</h2>
+                <h2>Tap a slot to attach images and voice notes</h2>
               </div>
               <span className="story-tag">{isPremium ? "PREMIUM_ACTIVE" : "FREE_LIMITS_ACTIVE"}</span>
             </div>
             <div className={isRecordingVoice ? "recording-indicator recording-live" : "recording-indicator"}>
               <span className="recording-dot" />
-              <strong>{isRecordingVoice ? "Recording live" : "Recorder idle"}</strong>
+              <strong>{isRecordingVoice ? (isVoiceRecordingPaused ? "Recording paused" : "Recording live") : "Recorder idle"}</strong>
               <span>{voiceRecordingStatus}</span>
             </div>
-            <input
-              accept="image/*"
-              capture="environment"
-              className="hidden-media-input"
-              onChange={handleCameraChange}
-              ref={cameraInputRef}
-              type="file"
-            />
             <input
               accept="image/*"
               className="hidden-media-input"
@@ -3178,15 +5153,6 @@ function StudioPage() {
               type="file"
             />
             <div className="media-action-row">
-              <button className="ghost-action" onClick={() => cameraInputRef.current?.click()} type="button">OPEN CAMERA</button>
-              <button className="ghost-action" onClick={() => imageInputRef.current?.click()} type="button">UPLOAD IMAGE</button>
-              <button
-                className={isRecordingVoice ? "primary-action" : "ghost-action"}
-                onClick={isRecordingVoice ? stopVoiceRecording : startVoiceRecording}
-                type="button"
-              >
-                {isRecordingVoice ? "STOP VOICE NOTE" : "ATTACH VOICE NOTE"}
-              </button>
               <button className="ghost-action" onClick={() => setIsPremium((current) => !current)} type="button">
                 {isPremium ? "SWITCH TO FREE VIEW" : "SIMULATE PREMIUM"}
               </button>
@@ -3195,43 +5161,81 @@ function StudioPage() {
             <div className="media-grid">
               {imageAttachments.map((attachment) => (
                 <article className="media-card" key={attachment.url}>
+                  <button
+                    aria-label={`Remove ${attachment.name}`}
+                    className="media-remove-button"
+                    onClick={() => removeImageAttachment(attachment.url)}
+                    type="button"
+                  >
+                    <Icon className="button-icon" name="close" />
+                  </button>
                   <div className="media-preview-frame">
                     <img alt={attachment.name} className="media-preview-image" src={attachment.url} />
                   </div>
                   <strong>{attachment.name}</strong>
                   <span>{attachment.source}</span>
                   <div className="media-card-footer">
-                    <small>Image attached</small>
-                    <button className="composer-chip" onClick={() => removeImageAttachment(attachment.url)} type="button">Remove</button>
+                    <small>Tap a free slot to replace or add more.</small>
                   </div>
                 </article>
               ))}
               {Array.from({ length: Math.max(imageLimit - imageAttachments.length, 0) }).map((_, index) => (
-                <article className="media-card media-card-empty" key={`image-slot-${index}`}>
+                <button className="media-card media-card-empty media-slot-button" key={`image-slot-${index}`} onClick={openImageSlot} type="button">
+                  <div className="media-slot-placeholder" aria-hidden="true">
+                    <Icon className="button-icon" name="bookmark" />
+                  </div>
                   <strong>Image slot {imageAttachments.length + index + 1}</strong>
-                  <span>{imageAttachments.length + index < imageLimit ? "Ready for image attachment" : "Locked"}</span>
-                  <small>{isPremium ? "Available" : "Free plan image slot"}</small>
-                </article>
+                  <span>Tap to attach an image</span>
+                  <small>{isPremium ? "Available slot" : "Free plan image slot"}</small>
+                </button>
               ))}
               {voiceNotes.map((voice) => (
                 <article className="media-card" key={voice.url}>
+                  <button
+                    aria-label={`Remove ${voice.name}`}
+                    className="media-remove-button"
+                    onClick={() => removeVoiceNote(voice.url)}
+                    type="button"
+                  >
+                    <Icon className="button-icon" name="close" />
+                  </button>
                   <strong>{voice.name}</strong>
                   <span>{voice.source}</span>
                   <audio className="voice-player" controls src={voice.url} />
                   <div className="media-card-footer">
-                    <small>Voice note attached</small>
-                    <button className="composer-chip" onClick={() => removeVoiceNote(voice.url)} type="button">Remove</button>
+                    <small>Tap an open speaker slot to add another note.</small>
                   </div>
                 </article>
               ))}
               {Array.from({ length: Math.max(voiceLimit - voiceNotes.length, 0) }).map((_, index) => (
-                <article className="media-card media-card-empty" key={`voice-slot-${index}`}>
+                <button className="media-card media-card-empty media-slot-button" key={`voice-slot-${index}`} onClick={openVoiceSlot} type="button">
+                  <div className="media-slot-placeholder media-slot-placeholder-voice" aria-hidden="true">
+                    <Icon className="button-icon" name="mic" />
+                  </div>
                   <strong>Voice slot {voiceNotes.length + index + 1}</strong>
-                  <span>{isRecordingVoice ? "Recording in progress..." : "Ready for voice note"}</span>
-                  <small>{isPremium ? "Available" : "Free plan voice slot"}</small>
-                </article>
+                  <span>{isRecordingVoice ? "Use pause or stop above" : "Tap microphone slot to record"}</span>
+                  <small>{isPremium ? "Available voice slot" : "Free plan voice slot"}</small>
+                </button>
               ))}
             </div>
+            {isRecordingVoice ? (
+              <div className="voice-recording-alert">
+                <div className="voice-recording-alert-copy">
+                  <strong>{isVoiceRecordingPaused ? "Voice note paused" : "Voice note recording"}</strong>
+                  <span>{voiceRecordingStatus}</span>
+                </div>
+                <div className="voice-recording-alert-actions">
+                  <button className="ghost-action" onClick={isVoiceRecordingPaused ? resumeVoiceRecording : pauseVoiceRecording} type="button">
+                    <Icon className="button-icon" name="pause" />
+                    {isVoiceRecordingPaused ? "RESUME" : "PAUSE"}
+                  </button>
+                  <button className="primary-action" onClick={stopVoiceRecording} type="button">
+                    <Icon className="button-icon" name="close" />
+                    STOP
+                  </button>
+                </div>
+              </div>
+            ) : null}
             {!isPremium ? (
               <div className="premium-limit-banner">
                 <strong>Free users can add 2 images and 1 voice note.</strong>
@@ -3313,7 +5317,7 @@ function StudioPage() {
       </section>
 
       <section className="timeline-stage">
-        <article className="studio-panel card timeline-panel-full">
+        <article className="studio-panel card timeline-panel-full" ref={timelineSectionRef}>
           <div className="section-head">
             <div>
               <SectionLabel>TIMELINE_MOMENTS</SectionLabel>
@@ -3424,6 +5428,7 @@ function StudioPreviewPage() {
   const [preview, setPreview] = useState<null | {
     storyTitle: string;
     storySummary: string;
+    activeChapterNumberLabel: string;
     activeChapter: string;
     chapterType: string;
     visibility: string;
@@ -3431,9 +5436,13 @@ function StudioPreviewPage() {
     wordCount: number;
     imageAttachments: Array<{ name: string; url: string; source: string }>;
     voiceNotes: Array<{ name: string; url: string; source: string }>;
-    chapters: Array<{ title: string; status: string; words: number; body: string }>;
     timelineEntries: Array<{ year: string; month: string; day: string; title: string; body: string }>;
     allowComments: boolean;
+    chapterStatus: string;
+    chapterChecklist: {
+      required: string[];
+      optional: string[];
+    };
   }>(null);
 
   useEffect(() => {
@@ -3472,11 +5481,43 @@ function StudioPreviewPage() {
         ) : null}
 
         <div className="preview-meta-strip">
-          <span>{preview?.activeChapter ?? "No chapter selected"}</span>
+          <span>{preview?.activeChapterNumberLabel ?? "No chapter selected"}</span>
+          <span>{preview?.activeChapter ?? "Untitled chapter"}</span>
+          <span>{preview?.chapterStatus ?? "Draft"}</span>
           <span>{preview?.chapterType ?? "story"}</span>
           <span>{preview?.wordCount ?? 0} words</span>
           <span>{preview?.allowComments ? "Comments on" : "Comments off"}</span>
         </div>
+
+        {preview?.chapterChecklist?.required?.length || preview?.chapterChecklist?.optional?.length ? (
+          <section className="preview-chapter-block">
+            <h2>Current chapter progress</h2>
+            {preview.chapterChecklist.required.length ? (
+              <div className="preview-checklist-group">
+                <strong>Still needed</strong>
+                <ul className="preview-checklist-list">
+                  {preview.chapterChecklist.required.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <div className="preview-checklist-group">
+                <strong>Required items complete</strong>
+              </div>
+            )}
+            {preview.chapterChecklist.optional.length ? (
+              <div className="preview-checklist-group">
+                <strong>Optional enrichments</strong>
+                <ul className="preview-checklist-list">
+                  {preview.chapterChecklist.optional.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
         {preview?.voiceNotes?.length ? (
           <section className="preview-chapter-block">
@@ -3510,34 +5551,18 @@ function StudioPreviewPage() {
           </section>
         ) : null}
 
-        {preview?.chapters?.length ? (
-          <section className="preview-chapter-stack">
-            {preview.chapters.map((chapter) => (
-              <section className="preview-chapter-block" key={chapter.title}>
-                <div className="preview-chapter-heading">
-                  <h2>{chapter.title || "Untitled chapter"}</h2>
-                  <span className="story-tag">{chapter.words} words</span>
-                </div>
-                <div
-                  className="preview-rich-text"
-                  dangerouslySetInnerHTML={{
-                    __html: chapter.body || "<p>This chapter has not been written yet.</p>"
-                  }}
-                />
-              </section>
-            ))}
-          </section>
-        ) : (
-          <section className="preview-chapter-block">
+        <section className="preview-chapter-block">
+          <div className="preview-chapter-heading">
             <h2>{preview?.activeChapter ?? "Story preview"}</h2>
-            <div
-              className="preview-rich-text"
-              dangerouslySetInnerHTML={{
-                __html: preview?.chapterBody ?? "<p>Open a preview from the studio to render the story reader view.</p>"
-              }}
-            />
-          </section>
-        )}
+            <span className="story-tag">{preview?.wordCount ?? 0} words</span>
+          </div>
+          <div
+            className="preview-rich-text"
+            dangerouslySetInnerHTML={{
+              __html: preview?.chapterBody ?? "<p>Open a preview from the studio to render the story reader view.</p>"
+            }}
+          />
+        </section>
       </article>
     </main>
   );
@@ -3625,14 +5650,22 @@ export default function App() {
   return (
     <AppShell isLoggedIn={isLoggedIn}>
       <Routes>
-        <Route element={isLoggedIn ? <HomePage /> : <OnboardingPage />} path="/" />
+        <Route element={isLoggedIn ? <FeedPage /> : <OnboardingPage />} path="/" />
         <Route element={<FeedPage />} path="/feed" />
+        <Route element={<FeedStoryPage />} path="/feed/story/:storySlug" />
+        <Route element={isLoggedIn ? <AnonymousHubPage /> : <RequireSignInRedirect redirectTo="/anonymous" />} path="/anonymous" />
+        <Route
+          element={isLoggedIn ? <AnonymousInboxComposePage /> : <RequireCurrentLocationSignInRedirect />}
+          path="/anonymous/write/:recipientSlug"
+        />
+        <Route element={isLoggedIn ? <AnonymousStoryPage /> : <RequireCurrentLocationSignInRedirect />} path="/anonymous/:shareSlug" />
         <Route element={<ProfilePage />} path="/profile" />
         <Route element={<EditProfilePage />} path="/profile/edit" />
         <Route element={<StudioPreviewPage />} path="/studio/preview" />
         <Route element={<StudioPage />} path="/studio" />
         <Route element={<PricingPage />} path="/pricing" />
         <Route element={<AuthPage mode="signin" onAuthenticated={handleAuthenticated} />} path="/signin" />
+        <Route element={<Navigate replace to="/signin" />} path="/login" />
         <Route element={<AuthPage mode="signup" onAuthenticated={handleAuthenticated} />} path="/signup" />
         <Route element={<AuthPage mode="forgot" onAuthenticated={handleAuthenticated} />} path="/forgot-password" />
         <Route element={<AuthPage mode="reset" onAuthenticated={handleAuthenticated} />} path="/reset-password" />

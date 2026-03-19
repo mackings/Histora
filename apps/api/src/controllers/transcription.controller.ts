@@ -25,14 +25,6 @@ const mapAssemblyLanguageCode = (language: string) => {
     return "en_us";
   }
 
-  if (language === "yo-NG") {
-    return "yo";
-  }
-
-  if (language === "ha-NG") {
-    return "ha";
-  }
-
   if (language === "ar-SA") {
     return "ar";
   }

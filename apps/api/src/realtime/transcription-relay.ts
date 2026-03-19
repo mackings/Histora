@@ -26,7 +26,7 @@ const getStreamingConfig = (language: string) => {
     };
   }
 
-  if (language === "ar-SA" || language === "yo-NG" || language === "ha-NG") {
+  if (language === "ar-SA") {
     return {
       speechModel: "whisper-rt",
       languageDetection: true

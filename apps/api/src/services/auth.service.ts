@@ -1,11 +1,10 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-
 import type { LoginInput, SignUpInput } from "../shared/index.js";
-
 import { env } from "../config/env.js";
 import { AppError } from "../utils/app-error.js";
 import { UserModel } from "../models/user.model.js";
+
 
 export async function registerUser(payload: SignUpInput) {
   const existing = await UserModel.findOne({
@@ -52,3 +51,4 @@ export function issueAuthResponse(userId: string) {
     userId
   };
 }
+
