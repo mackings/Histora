@@ -26,6 +26,23 @@ export function createApp() {
     ? rateLimitModule.default
     : (rateLimitModule as unknown as { rateLimit: typeof import("express-rate-limit").default }).rateLimit) as typeof import("express-rate-limit").default;
   const app = express();
+  const shouldSkipRequestLog = (request: express.Request) => {
+    const userAgent = request.header("user-agent") ?? "";
+
+    if (request.path === "/health") {
+      return true;
+    }
+
+    if (request.path === "/" && (request.method === "HEAD" || userAgent.includes("Go-http-client"))) {
+      return true;
+    }
+
+    if (userAgent.includes("Render/1.0")) {
+      return true;
+    }
+
+    return false;
+  };
 
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
@@ -44,7 +61,18 @@ export function createApp() {
   );
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
-  app.use(morgan(env.NODE_ENV === "production" ? "combined" : "dev"));
+  app.use(
+    morgan(env.NODE_ENV === "production" ? "combined" : "dev", {
+      skip: shouldSkipRequestLog
+    })
+  );
+
+  app.get("/", (_request, response) => {
+    response.status(200).json({ ok: true, service: "Histora API" });
+  });
+  app.head("/", (_request, response) => {
+    response.status(204).end();
+  });
 
   app.get("/health", (_request, response) => {
     response.status(200).json({ ok: true });
