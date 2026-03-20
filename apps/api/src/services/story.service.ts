@@ -10,15 +10,15 @@ import { enqueueCounterSync } from "./queue.service.js";
 import { resolveStoredObjectUrl } from "./storage.service.js";
 
 function enforcePremiumLimits(input: StorySaveInput, tier: "free" | "premium") {
-  const totalWords = input.chapters.reduce<number>(
-    (sum, chapter) => sum + chapter.body.split(/\s+/).length,
+  const totalImages = input.chapters.reduce<number>((sum, chapter) => sum + chapter.imageUrls.length, 0);
+  const totalVoiceNotes = input.chapters.reduce<number>(
+    (sum, chapter) => sum + (chapter.voiceNoteUrl ? 1 : 0),
     0
   );
-  const totalImages = input.chapters.reduce<number>((sum, chapter) => sum + chapter.imageUrls.length, 0);
-  const hasVoice = input.chapters.some((chapter) => Boolean(chapter.voiceNoteUrl));
+  const totalChapters = input.chapters.length;
 
-  if (tier === "free" && (totalWords > 2500 || totalImages > 6 || hasVoice)) {
-    throw new AppError("Premium is required for long-form stories, extra images, or voice notes", 403);
+  if (tier === "free" && (totalImages > 2 || totalVoiceNotes > 1 || totalChapters > 2)) {
+    throw new AppError("Free accounts can save up to 2 images, 1 voice note, and 2 chapters per story.", 403);
   }
 }
 
