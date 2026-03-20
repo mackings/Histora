@@ -36,6 +36,7 @@ function Icon({
     | "person"
     | "download"
     | "trash"
+    | "image"
     | "mic"
     | "pause"
     | "eye"
@@ -66,6 +67,7 @@ function Icon({
     person: "M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Zm0 2c-4.7 0-8.5 2.6-8.5 5.8 0 .7.6 1.2 1.2 1.2h14.6c.7 0 1.2-.5 1.2-1.2C20.5 16.6 16.7 14 12 14Z",
     download: "M11 4h2v8.2l2.6-2.6 1.4 1.4-5 5-5-5 1.4-1.4 2.6 2.6V4Zm-6 14h14v2H5v-2Z",
     trash: "M9 3h6l1 2h4v2H4V5h4l1-2Zm1 6h2v8h-2V9Zm4 0h2v8h-2V9ZM7 9h2v8H7V9Zm-1 12a2 2 0 0 1-2-2V7h16v12a2 2 0 0 1-2 2H6Z",
+    image: "M5 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Zm1 10 3-3 2 2 4-5 4 6H6Zm2.5-6A1.5 1.5 0 1 0 8.5 6a1.5 1.5 0 0 0 0 3Z",
     mic: "M12 15a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.93V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.07A7 7 0 0 1 5 12a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z",
     pause: "M7 5h3v14H7V5Zm7 0h3v14h-3V5Z",
     eye: "M12 6c5.1 0 9.3 3.3 10.8 6-1.5 2.7-5.7 6-10.8 6S2.7 14.7 1.2 12C2.7 9.3 6.9 6 12 6Zm0 2C8.1 8 4.8 10.3 3.4 12 4.8 13.7 8.1 16 12 16s7.2-2.3 8.6-4C19.2 10.3 15.9 8 12 8Zm0 1.7a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6Z",
@@ -3209,6 +3211,14 @@ type StudioTimelineEntry = {
   body: string;
 };
 
+const createEmptyTimelineEntry = (): StudioTimelineEntry => ({
+  year: "",
+  month: "",
+  day: "",
+  title: "",
+  body: ""
+});
+
 type StudioChapter = (typeof chapterDrafts)[number] & {
   title: string;
   body: string;
@@ -5486,20 +5496,21 @@ function StudioPage({
       voiceNotes: [],
       timelineEntries:
         chapter.title === "Chapter 2: The year everything changed"
-          ? timelineMoments.map((moment) => ({
-              year: moment.year,
-              month: "01",
-              day: "01",
-              title: moment.title,
-              body: moment.body
-            }))
-          : []
+          ? [
+              {
+                year: timelineMoments[0]?.year ?? "",
+                month: "01",
+                day: "01",
+                title: timelineMoments[0]?.title ?? "",
+                body: timelineMoments[0]?.body ?? ""
+              }
+            ]
+          : [createEmptyTimelineEntry()]
     }))
   );
   const [studioMessage, setStudioMessage] = useState("Studio synced locally.");
   const [currentStoryId, setCurrentStoryId] = useState<string | null>(null);
   const [hasReviewedPreview, setHasReviewedPreview] = useState(false);
-  const [isDraftHistoryVisible, setIsDraftHistoryVisible] = useState(false);
   const [isEditingChapterTitle, setIsEditingChapterTitle] = useState(false);
   const [chapterTitleDraft, setChapterTitleDraft] = useState("");
   const [draftHistory, setDraftHistory] = useState<string[]>(["Studio opened."]);
@@ -5517,6 +5528,8 @@ function StudioPage({
   const [voiceNotes, setVoiceNotes] = useState<StudioMediaAttachment[]>([]);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [isVoiceRecordingPaused, setIsVoiceRecordingPaused] = useState(false);
+  const [isVoiceSheetOpen, setIsVoiceSheetOpen] = useState(false);
+  const [isAutoSavingDraft, setIsAutoSavingDraft] = useState(false);
   const [voiceRecordingStatus, setVoiceRecordingStatus] = useState("Voice note idle");
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isTranscriptionPanelVisible, setIsTranscriptionPanelVisible] = useState(false);
@@ -5548,6 +5561,7 @@ function StudioPage({
   const transcriptionFallbackTriggeredRef = useRef(false);
   const noticeAudioContextRef = useRef<AudioContext | null>(null);
   const hasLoadedStudioDraftRef = useRef(false);
+  const lastAutoSavedSignatureRef = useRef("");
 
   const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
   const studioStorageKey = "histora-studio-local-draft-v1";
@@ -5570,6 +5584,18 @@ function StudioPage({
   const activeChapterReady = chapterMetrics[activeChapterIndex >= 0 ? activeChapterIndex : 0];
   const activeChapterNumber = Math.max(activeChapterIndex + 1, 1);
   const activeChapterNumberLabel = `Chapter ${activeChapterNumber}`;
+  const autoSaveSignature = JSON.stringify({
+    activeChapter,
+    anonymous,
+    chapterType,
+    allowComments,
+    chapters,
+    storySummary,
+    storyTitle,
+    timelineEntries,
+    transcriptionLanguage,
+    visibility
+  });
 
   const updateActiveChapterMedia = (
     field: "imageAttachments" | "voiceNotes" | "timelineEntries",
@@ -5622,7 +5648,7 @@ function StudioPage({
   useEffect(() => {
     setImageAttachments(activeChapterEntry?.imageAttachments ?? []);
     setVoiceNotes(activeChapterEntry?.voiceNotes ?? []);
-    setTimelineEntries(activeChapterEntry?.timelineEntries ?? []);
+    setTimelineEntries(activeChapterEntry?.timelineEntries?.length ? activeChapterEntry.timelineEntries : [createEmptyTimelineEntry()]);
   }, [activeChapterEntry]);
 
   useEffect(() => {
@@ -5662,16 +5688,19 @@ function StudioPage({
                   objectKey: chapter.voiceNoteKey ?? undefined
                 }]
               : [],
-            timelineEntries: chapter.moments.map((moment) => {
-              const momentDate = new Date(moment.happenedAt);
-              return {
-                year: String(momentDate.getFullYear()),
-                month: String(momentDate.getMonth() + 1).padStart(2, "0"),
-                day: String(momentDate.getDate()).padStart(2, "0"),
-                title: moment.title,
-                body: moment.description
-              };
-            })
+            timelineEntries:
+              chapter.moments.length > 0
+                ? chapter.moments.map((moment) => {
+                    const momentDate = new Date(moment.happenedAt);
+                    return {
+                      year: String(momentDate.getFullYear()),
+                      month: String(momentDate.getMonth() + 1).padStart(2, "0"),
+                      day: String(momentDate.getDate()).padStart(2, "0"),
+                      title: moment.title,
+                      body: moment.description
+                    };
+                  })
+                : [createEmptyTimelineEntry()]
           }))
         );
       })
@@ -5748,12 +5777,12 @@ function StudioPage({
             ...chapter,
             imageAttachments: chapter.imageAttachments ?? [],
             voiceNotes: chapter.voiceNotes ?? [],
-            timelineEntries: chapter.timelineEntries ?? []
+            timelineEntries: chapter.timelineEntries?.length ? chapter.timelineEntries : [createEmptyTimelineEntry()]
           }))
         );
       }
       if (Array.isArray(savedDraft.timelineEntries) && (!savedDraft.chapters || savedDraft.chapters.length === 0)) {
-        setTimelineEntries(savedDraft.timelineEntries);
+        setTimelineEntries(savedDraft.timelineEntries.length ? savedDraft.timelineEntries : [createEmptyTimelineEntry()]);
       }
       if (Array.isArray(savedDraft.draftHistory) && savedDraft.draftHistory.length > 0) {
         setDraftHistory(savedDraft.draftHistory);
@@ -6043,7 +6072,14 @@ function StudioPage({
     imageInputRef.current?.click();
   };
 
+  const isMobileStudioViewport = () => typeof window !== "undefined" && window.innerWidth <= 820;
+
   const openVoiceSlot = () => {
+    if (isMobileStudioViewport()) {
+      setIsVoiceSheetOpen(true);
+      return;
+    }
+
     if (isRecordingVoice) {
       stopVoiceRecording();
       return;
@@ -6062,6 +6098,14 @@ function StudioPage({
       updateActiveChapterMedia("voiceNotes", updated);
       return updated;
     });
+  };
+
+  const closeVoiceSheet = () => {
+    if (isRecordingVoice) {
+      return;
+    }
+
+    setIsVoiceSheetOpen(false);
   };
 
   const updateChapter = (updater: (chapter: StudioChapter) => StudioChapter) => {
@@ -6716,7 +6760,8 @@ function StudioPage({
     }
   };
 
-  const saveCurrentDraft = () => {
+  const saveCurrentDraft = (options?: { quiet?: boolean }) => {
+    const quiet = options?.quiet ?? false;
     const snapshot = buildChaptersSnapshot();
     setChapters((current) =>
       current.map((chapter) =>
@@ -6728,6 +6773,10 @@ function StudioPage({
       .catch((error) => {
         setStudioMessage(getErrorMessage(error, "Could not upload chapter media."));
       });
+    if (quiet) {
+      setStudioMessage("All studio changes auto-saved.");
+      return;
+    }
     if (currentChapterRequiredItems.length > 0 || currentChapterOptionalItems.length > 0) {
       const missingRequiredText = currentChapterRequiredItems.length
         ? `Still required: ${currentChapterRequiredItems.join(", ")}.`
@@ -6746,6 +6795,39 @@ function StudioPage({
     setStudioMessage(`${activeChapterNumberLabel} is saved and ready for preview.`);
     setDraftHistory((current) => [`${activeChapterNumberLabel} saved as draft.`, ...current].slice(0, 6));
   };
+
+  useEffect(() => {
+    if (!hasLoadedStudioDraftRef.current) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      if (autoSaveSignature === lastAutoSavedSignatureRef.current) {
+        return;
+      }
+
+      setIsAutoSavingDraft(true);
+      saveCurrentDraft({ quiet: true });
+      lastAutoSavedSignatureRef.current = autoSaveSignature;
+      window.setTimeout(() => setIsAutoSavingDraft(false), 260);
+    }, 1400);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    activeChapter,
+    anonymous,
+    chapterType,
+    allowComments,
+    chapters,
+    currentStoryId,
+    imageAttachments,
+    storySummary,
+    storyTitle,
+    timelineEntries,
+    transcriptionLanguage,
+    visibility,
+    autoSaveSignature
+  ]);
 
   const publishWholeStory = () => {
     const snapshot = buildChaptersSnapshot();
@@ -6916,13 +6998,7 @@ function StudioPage({
     setTimelineEntries((current) => {
       const updated = [
         ...current,
-        {
-          year: "",
-          month: "",
-          day: "",
-          title: "",
-          body: ""
-        }
+        createEmptyTimelineEntry()
       ];
       updateActiveChapterMedia("timelineEntries", updated);
       return updated;
@@ -6933,7 +7009,8 @@ function StudioPage({
 
   const removeTimelineEntry = (index: number) => {
     setTimelineEntries((current) => {
-      const updated = current.filter((_, entryIndex) => entryIndex !== index);
+      const filtered = current.filter((_, entryIndex) => entryIndex !== index);
+      const updated = filtered.length ? filtered : [createEmptyTimelineEntry()];
       updateActiveChapterMedia("timelineEntries", updated);
       return updated;
     });
@@ -7090,9 +7167,34 @@ function StudioPage({
         </div>
       ) : null}
       <div className="chapter-controls">
-        <button className="ghost-action" onClick={saveCurrentDraft} type="button">SAVE AS DRAFT</button>
         <button className="primary-action" onClick={() => void handlePreviewToggle()} type="button">FINISH AND PREVIEW</button>
       </div>
+    </article>
+  );
+
+  const privacyPanel = (
+    <article className="rail-panel card">
+      <SectionLabel>PRIVACY_CONTROL</SectionLabel>
+      <div className="choice-stack">
+        {["private", "selected", "public"].map((option) => (
+          <button
+            key={option}
+            className={visibility === option ? "choice-button active-choice" : "choice-button"}
+            onClick={() => setVisibility(option as "private" | "selected" | "public")}
+            type="button"
+          >
+            {option}
+          </button>
+        ))}
+      </div>
+      <label className="toggle-row">
+        <input checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} type="checkbox" />
+        <span>Post this chapter anonymously for advice</span>
+      </label>
+      <label className="toggle-row">
+        <input checked={allowComments} onChange={(event) => setAllowComments(event.target.checked)} type="checkbox" />
+        <span>Allow comments on published chapters</span>
+      </label>
     </article>
   );
 
@@ -7123,7 +7225,7 @@ function StudioPage({
       </section>
       <section className="studio-status-bar card">
         <strong>{studioMessage}</strong>
-        <span>{wordCount} words in active chapter</span>
+        <span>{isAutoSavingDraft ? "Auto-saving..." : `${wordCount} words in active chapter`}</span>
       </section>
       {studioNotice ? (
         <section className="studio-notice card studio-notice-live" role="status">
@@ -7362,22 +7464,10 @@ function StudioPage({
                 <span className="toolbar-label">Add closing</span>
               </button>
             </div>
-            <div className="chapter-controls">
-              <button className="ghost-action" onClick={handlePreviewToggle} type="button">PREVIEW CHAPTER</button>
-              <button className="ghost-action" onClick={() => setIsDraftHistoryVisible((current) => !current)} type="button">
-                {isDraftHistoryVisible ? "HIDE DRAFT HISTORY" : "VIEW DRAFT HISTORY"}
-              </button>
-              <button className="primary-action" onClick={saveCurrentDraft} type="button">SAVE CHAPTER</button>
+            <div className="editor-preview">
+              <h3>Auto-save is on</h3>
+              <p>Changes in this chapter are saved automatically while you write, attach media, and update timeline moments.</p>
             </div>
-            {isDraftHistoryVisible ? (
-              <div className="draft-history-panel">
-                {draftHistory.map((entry) => (
-                  <div className="draft-history-row" key={entry}>
-                    <strong>{entry}</strong>
-                  </div>
-                ))}
-              </div>
-            ) : null}
           </article>
 
           <article className="studio-panel card">
@@ -7401,11 +7491,6 @@ function StudioPage({
               ref={imageInputRef}
               type="file"
             />
-            <div className="media-action-row">
-              <button className="ghost-action" onClick={() => setIsPremium((current) => !current)} type="button">
-                {isPremium ? "SWITCH TO FREE VIEW" : "SIMULATE PREMIUM"}
-              </button>
-            </div>
             {mediaError ? <div className="media-error-banner">{mediaError}</div> : null}
             <div className="media-grid">
               {imageAttachments.map((attachment) => (
@@ -7431,7 +7516,7 @@ function StudioPage({
               {Array.from({ length: Math.max(imageLimit - imageAttachments.length, 0) }).map((_, index) => (
                 <button className="media-card media-card-empty media-slot-button" key={`image-slot-${index}`} onClick={openImageSlot} type="button">
                   <div className="media-slot-placeholder" aria-hidden="true">
-                    <Icon className="button-icon" name="bookmark" />
+                    <Icon className="button-icon" name="image" />
                   </div>
                   <strong>Image slot {imageAttachments.length + index + 1}</strong>
                   <span>Tap to attach an image</span>
@@ -7467,7 +7552,7 @@ function StudioPage({
                 </button>
               ))}
             </div>
-            {isRecordingVoice ? (
+            {isRecordingVoice && !isVoiceSheetOpen ? (
               <div className="voice-recording-alert">
                 <div className="voice-recording-alert-copy">
                   <strong>{isVoiceRecordingPaused ? "Voice note paused" : "Voice note recording"}</strong>
@@ -7495,31 +7580,7 @@ function StudioPage({
 
         </div>
 
-        <aside className="right-rail">
-          <article className="rail-panel card">
-            <SectionLabel>PRIVACY_CONTROL</SectionLabel>
-            <div className="choice-stack">
-              {["private", "selected", "public"].map((option) => (
-                <button
-                  key={option}
-                  className={visibility === option ? "choice-button active-choice" : "choice-button"}
-                  onClick={() => setVisibility(option as "private" | "selected" | "public")}
-                  type="button"
-                >
-                  {option}
-                </button>
-              ))}
-            </div>
-            <label className="toggle-row">
-              <input checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} type="checkbox" />
-              <span>Post this chapter anonymously for advice</span>
-            </label>
-            <label className="toggle-row">
-              <input checked={allowComments} onChange={(event) => setAllowComments(event.target.checked)} type="checkbox" />
-              <span>Allow comments on published chapters</span>
-            </label>
-          </article>
-        </aside>
+        <aside className="right-rail desktop-only">{privacyPanel}</aside>
       </section>
 
       <section className="timeline-stage">
@@ -7626,9 +7687,63 @@ function StudioPage({
         </article>
       </section>
 
+      <section className="timeline-stage mobile-only">
+        {privacyPanel}
+      </section>
+
       <section className="timeline-stage">
         {publishPanel}
       </section>
+
+      {isVoiceSheetOpen ? (
+        <div className="status-viewer-backdrop" onClick={closeVoiceSheet} role="presentation">
+          <article className="share-sheet-modal voice-sheet-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="section-head">
+              <div>
+                <SectionLabel>VOICE_NOTE</SectionLabel>
+                <h2>Record in this chapter</h2>
+              </div>
+              <button aria-label="Close voice note sheet" className="icon-chip" onClick={closeVoiceSheet} type="button">
+                <Icon className="button-icon" name="close" />
+              </button>
+            </div>
+            <div className={isRecordingVoice ? "recording-indicator recording-live" : "recording-indicator"}>
+              <span className="recording-dot" />
+              <strong>{isRecordingVoice ? (isVoiceRecordingPaused ? "Recording paused" : "Recording live") : "Recorder idle"}</strong>
+              <span>{voiceRecordingStatus}</span>
+            </div>
+            <div className="share-sheet-actions voice-sheet-actions">
+              {!isRecordingVoice ? (
+                <button className="primary-action" onClick={() => void startVoiceRecording()} type="button">
+                  START RECORDING
+                </button>
+              ) : (
+                <>
+                  <button className="ghost-action" onClick={isVoiceRecordingPaused ? resumeVoiceRecording : pauseVoiceRecording} type="button">
+                    {isVoiceRecordingPaused ? "RESUME" : "PAUSE"}
+                  </button>
+                  <button className="primary-action" onClick={stopVoiceRecording} type="button">
+                    STOP
+                  </button>
+                </>
+              )}
+            </div>
+            {voiceNotes.length ? (
+              <div className="voice-sheet-list">
+                {voiceNotes.map((voice) => (
+                  <article className="media-card voice-sheet-card" key={voice.url}>
+                    <strong>{voice.name}</strong>
+                    <span>{voice.source}</span>
+                    <audio className="voice-player" controls src={voice.url} />
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="transcription-supported-copy">Your saved voice notes will appear here for playback after recording.</p>
+            )}
+          </article>
+        </div>
+      ) : null}
     </main>
   );
 }

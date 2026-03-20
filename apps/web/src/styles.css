@@ -3239,6 +3239,35 @@ textarea {
   gap: 10px;
 }
 
+.voice-sheet-modal {
+  width: min(520px, 100%);
+  border-radius: 28px 28px 0 0;
+  align-self: end;
+}
+
+.voice-sheet-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.voice-sheet-list {
+  display: grid;
+  gap: 12px;
+  max-height: 34vh;
+  overflow: auto;
+}
+
+.voice-sheet-card {
+  gap: 8px;
+}
+
+.desktop-only {
+  display: block;
+}
+
+.mobile-only {
+  display: none;
+}
+
 .anonymous-hub-shell {
   gap: 18px;
 }
@@ -3746,6 +3775,14 @@ textarea {
 
   .studio-notice .ghost-action {
     width: 100%;
+  }
+
+  .desktop-only {
+    display: none;
+  }
+
+  .mobile-only {
+    display: block;
   }
 }
 
@@ -4373,6 +4410,11 @@ textarea {
     padding: 12px;
     gap: 12px;
     border-radius: 20px;
+  }
+
+  .voice-sheet-modal {
+    width: 100%;
+    border-radius: 26px 26px 0 0;
   }
 
   .share-sheet-actions {
