@@ -17,9 +17,8 @@ transcriptionRouter.get(
     windowMs: 60 * 1000,
     limit: 10,
     standardHeaders: true,
-    legacyHeaders: false
-    ,
-    store: getRateLimitStore()
+    legacyHeaders: false,
+    store: getRateLimitStore("histora:rate-limit:transcription-token:")
   }),
   createAssemblyStreamingTokenController
 );
@@ -32,7 +31,7 @@ transcriptionRouter.post(
     limit: 8,
     standardHeaders: true,
     legacyHeaders: false,
-    store: getRateLimitStore()
+    store: getRateLimitStore("histora:rate-limit:transcription-create:")
   }),
   express.raw({
     type: ["audio/webm", "audio/mp4", "audio/mpeg", "audio/wav", "audio/ogg"],

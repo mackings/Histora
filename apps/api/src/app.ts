@@ -36,7 +36,7 @@ export function createApp() {
     rateLimit({
       windowMs: 15 * 60 * 1000,
       limit: 200,
-      store: getRateLimitStore(),
+      store: getRateLimitStore("histora:rate-limit:global:"),
       standardHeaders: true,
       legacyHeaders: false,
       skip: (request) => request.path.startsWith("/api/transcriptions")

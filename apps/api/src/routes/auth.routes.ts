@@ -23,14 +23,14 @@ const authWriteLimiter = rateLimit({
   limit: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  store: getRateLimitStore()
+  store: getRateLimitStore("histora:rate-limit:auth-write:")
 });
 const refreshLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 60,
   standardHeaders: true,
   legacyHeaders: false,
-  store: getRateLimitStore()
+  store: getRateLimitStore("histora:rate-limit:auth-refresh:")
 });
 
 authRouter.post("/register", requireTrustedBrowserOrigin, authWriteLimiter, registerController);

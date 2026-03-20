@@ -15,6 +15,7 @@ export function getRedisClient() {
       lazyConnect: true,
       maxRetriesPerRequest: 2
     });
+    redisClient.on("error", () => undefined);
   }
 
   return redisClient;
@@ -30,6 +31,7 @@ export function getRedisSubscriber() {
       lazyConnect: true,
       maxRetriesPerRequest: 2
     });
+    redisSubscriber.on("error", () => undefined);
   }
 
   return redisSubscriber;
