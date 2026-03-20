@@ -12,6 +12,37 @@ import { broadcastAppEvent } from "../realtime/app-events.js";
 const buildStatusShareSlug = () => `status-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const statusLifetimeMs = 24 * 60 * 60 * 1000;
 
+const toStatusResponse = (status: {
+  id?: string;
+  _id?: unknown;
+  authorName: string;
+  authorUsername: string;
+  body: string;
+  anonymous: boolean;
+  visibility: "public" | "followers" | "private";
+  imageUrl?: string | null;
+  shareSlug?: string | null;
+  commentsCount: number;
+  likesCount: number;
+  bookmarksCount: number;
+  createdAt: Date;
+  expiresAt?: Date;
+}) => ({
+  id: status.id ?? String(status._id ?? ""),
+  authorName: status.authorName,
+  authorUsername: status.authorUsername,
+  body: status.body,
+  anonymous: status.anonymous,
+  visibility: status.visibility,
+  imageUrl: status.imageUrl ?? null,
+  shareSlug: status.shareSlug ?? null,
+  commentsCount: status.commentsCount,
+  likesCount: status.likesCount,
+  bookmarksCount: status.bookmarksCount,
+  createdAt: status.createdAt,
+  ...(status.expiresAt ? { expiresAt: status.expiresAt } : {})
+});
+
 export async function createStatus(userId: string, payload: StatusCreateInput) {
   const user = await UserModel.findById(userId).select("fullName username");
 
@@ -55,7 +86,7 @@ export async function createStatus(userId: string, payload: StatusCreateInput) {
     }
   });
 
-  return status;
+  return toStatusResponse(status);
 }
 
 export async function getStatusFeed() {
@@ -76,12 +107,13 @@ export async function getStatusFeed() {
     .limit(30)
     .select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
-  await writeJsonCache("statuses:feed", feed, 30);
-  return feed;
+  const response = feed.map((status) => toStatusResponse(status));
+  await writeJsonCache("statuses:feed", response, 30);
+  return response;
 }
 
 export async function getMyStatuses(userId: string) {
-  return StatusModel.find({
+  const statuses = await StatusModel.find({
     authorId: userId,
     $or: [
       { expiresAt: { $gt: new Date() } },
@@ -91,6 +123,8 @@ export async function getMyStatuses(userId: string) {
     .sort({ createdAt: -1 })
     .limit(50)
     .select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+
+  return statuses.map((status) => toStatusResponse(status));
 }
 
 export async function getAnonymousStatusByShareSlug(shareSlug: string) {
@@ -107,7 +141,7 @@ export async function getAnonymousStatusByShareSlug(shareSlug: string) {
     throw new AppError("Anonymous status not found", 404);
   }
 
-  return status;
+  return toStatusResponse(status);
 }
 
 export async function toggleStatusReaction(statusId: string, userId: string, action: "like" | "bookmark") {

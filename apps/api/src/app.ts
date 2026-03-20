@@ -80,6 +80,7 @@ export function createApp() {
   };
 
   app.set("trust proxy", 1);
+  app.set("etag", false);
   app.disable("x-powered-by");
 
   app.use(cors(createCorsOptions()));
