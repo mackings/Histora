@@ -1,5 +1,42 @@
 import mongoose, { Schema } from "mongoose";
 
+export interface StoryDocument extends mongoose.Document {
+  authorId: mongoose.Types.ObjectId;
+  authorName: string;
+  authorUsername: string;
+  slug: string;
+  status: "draft" | "published";
+  title: string;
+  summary: string;
+  coverImageUrl?: string;
+  visibility: "private" | "public" | "selected";
+  anonymous: boolean;
+  allowedViewerIds: mongoose.Types.ObjectId[];
+  tags: string[];
+  chapters: Array<{
+    title: string;
+    body: string;
+    type: "memory" | "reflection" | "milestone" | "anonymous";
+    order: number;
+    imageUrls: string[];
+    voiceNoteUrl?: string;
+    moments: Array<{
+      title: string;
+      description: string;
+      happenedAt: Date;
+      imageUrls: string[];
+      voiceNoteUrl?: string;
+    }>;
+  }>;
+  readCount: number;
+  reactionsCount: number;
+  likesCount: number;
+  bookmarksCount: number;
+  commentsCount: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 const momentSchema = new Schema(
   {
     title: { type: String, required: true, trim: true },
@@ -27,6 +64,10 @@ const chapterSchema = new Schema(
 const storySchema = new Schema(
   {
     authorId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    authorName: { type: String, required: true, trim: true },
+    authorUsername: { type: String, required: true, trim: true, lowercase: true },
+    slug: { type: String, required: true, unique: true, index: true },
+    status: { type: String, enum: ["draft", "published"], default: "draft", index: true },
     title: { type: String, required: true, trim: true },
     summary: { type: String, required: true, trim: true },
     coverImageUrl: { type: String },
@@ -36,9 +77,12 @@ const storySchema = new Schema(
     tags: [{ type: String }],
     chapters: [chapterSchema],
     readCount: { type: Number, default: 0 },
-    reactionsCount: { type: Number, default: 0 }
+    reactionsCount: { type: Number, default: 0 },
+    likesCount: { type: Number, default: 0 },
+    bookmarksCount: { type: Number, default: 0 },
+    commentsCount: { type: Number, default: 0 }
   },
   { timestamps: true }
 );
 
-export const StoryModel = mongoose.model("Story", storySchema);
+export const StoryModel = mongoose.model<StoryDocument>("Story", storySchema);

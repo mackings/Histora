@@ -1,12 +1,105 @@
+import crypto from "crypto";
+
 import bcrypt from "bcryptjs";
+import type { CookieOptions } from "express";
 import jwt from "jsonwebtoken";
-import type { LoginInput, SignUpInput } from "../shared/index.js";
+import type { SignOptions } from "jsonwebtoken";
+
+import type {
+  ForgotPasswordInput,
+  LoginInput,
+  ResetPasswordInput,
+  SignUpInput
+} from "../shared/index.js";
 import { env } from "../config/env.js";
-import { AppError } from "../utils/app-error.js";
+import { PasswordResetTokenModel } from "../models/password-reset-token.model.js";
+import { SessionModel } from "../models/session.model.js";
 import { UserModel } from "../models/user.model.js";
+import { recordAuditEvent } from "./audit.service.js";
+import { AppError } from "../utils/app-error.js";
 
+const accessTokenTtl = env.ACCESS_TOKEN_TTL;
+const refreshTokenTtlDays = env.REFRESH_TOKEN_TTL_DAYS;
+const refreshTokenTtl = `${refreshTokenTtlDays}d` as SignOptions["expiresIn"];
 
-export async function registerUser(payload: SignUpInput) {
+type RequestContext = {
+  ipAddress?: string;
+  userAgent?: string;
+};
+
+type AuthPayload = {
+  accessToken: string;
+  refreshToken: string;
+  user: {
+    id: string;
+    fullName: string;
+    username: string;
+    email: string;
+    subscriptionTier: "free" | "premium";
+  };
+};
+
+const buildAccessToken = (userId: string) =>
+  jwt.sign({ sub: userId, typ: "access" }, env.JWT_SECRET, {
+    expiresIn: accessTokenTtl as SignOptions["expiresIn"]
+  });
+
+const buildRefreshToken = (sessionId: string, userId: string) =>
+  jwt.sign(
+    { sub: userId, sid: sessionId, typ: "refresh" },
+    env.JWT_REFRESH_SECRET ?? env.JWT_SECRET,
+    { expiresIn: refreshTokenTtl }
+  );
+
+const hashToken = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
+
+const buildResetCode = () => crypto.randomBytes(3).toString("hex").toUpperCase();
+
+export function buildCookieOptions(): CookieOptions {
+  const sameSite = env.NODE_ENV === "production" ? "none" : "lax";
+
+  return {
+    httpOnly: true,
+    sameSite,
+    secure: env.NODE_ENV === "production",
+    path: "/api/auth",
+    maxAge: refreshTokenTtlDays * 24 * 60 * 60 * 1000
+  };
+}
+
+async function createSessionPayload(userId: string, context?: RequestContext): Promise<AuthPayload> {
+  const user = await UserModel.findById(userId).select("fullName username email subscriptionTier");
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  const session = await SessionModel.create({
+    userId,
+    tokenHash: "pending",
+    userAgent: context?.userAgent,
+    ipAddress: context?.ipAddress,
+    expiresAt: new Date(Date.now() + refreshTokenTtlDays * 24 * 60 * 60 * 1000),
+    lastSeenAt: new Date()
+  });
+
+  const refreshToken = buildRefreshToken(session.id, userId);
+  session.tokenHash = hashToken(refreshToken);
+  await session.save();
+
+  return {
+    accessToken: buildAccessToken(userId),
+    refreshToken,
+    user: {
+      id: user.id,
+      fullName: user.fullName,
+      username: user.username,
+      email: user.email,
+      subscriptionTier: user.subscriptionTier
+    }
+  };
+}
+
+export async function registerUser(payload: SignUpInput, context?: RequestContext) {
   const existing = await UserModel.findOne({
     $or: [{ email: payload.email }, { username: payload.username }]
   });
@@ -16,39 +109,210 @@ export async function registerUser(payload: SignUpInput) {
   }
 
   const passwordHash = await bcrypt.hash(payload.password, 12);
-
   const user = await UserModel.create({
     fullName: payload.fullName,
     username: payload.username,
     email: payload.email,
-    passwordHash
+    passwordHash,
+    dateOfBirth: payload.dateOfBirth ? new Date(payload.dateOfBirth) : undefined
   });
 
-  return issueAuthResponse(user.id);
+  const sessionPayload = await createSessionPayload(user.id, context);
+  await recordAuditEvent({
+    actorUserId: user.id,
+    targetUserId: user.id,
+    entityType: "auth",
+    entityId: user.id,
+    action: "register.success"
+  });
+
+  return sessionPayload;
 }
 
-export async function loginUser(payload: LoginInput) {
-  const user = await UserModel.findOne({ email: payload.email });
-
+export async function loginUser(payload: LoginInput, context?: RequestContext) {
+  const user = await UserModel.findOne({ email: payload.email.toLowerCase() });
   if (!user) {
     throw new AppError("Invalid credentials", 401);
   }
 
   const isValidPassword = await bcrypt.compare(payload.password, user.passwordHash);
-
   if (!isValidPassword) {
     throw new AppError("Invalid credentials", 401);
   }
 
-  return issueAuthResponse(user.id);
+  const sessionPayload = await createSessionPayload(user.id, context);
+  await recordAuditEvent({
+    actorUserId: user.id,
+    targetUserId: user.id,
+    entityType: "auth",
+    entityId: user.id,
+    action: "login.success"
+  });
+
+  return sessionPayload;
 }
 
-export function issueAuthResponse(userId: string) {
-  const token = jwt.sign({ sub: userId }, env.JWT_SECRET, { expiresIn: "7d" });
+export async function getAuthenticatedUser(userId: string) {
+  const user = await UserModel.findById(userId).select("fullName username email subscriptionTier");
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
 
   return {
-    token,
-    userId
+    id: user.id,
+    fullName: user.fullName,
+    username: user.username,
+    email: user.email,
+    subscriptionTier: user.subscriptionTier
   };
 }
 
+export async function refreshAccessToken(refreshToken: string, context?: RequestContext) {
+  if (!refreshToken) {
+    throw new AppError("Refresh token is required", 401);
+  }
+
+  let payload: { sub: string; sid: string; typ: string };
+  try {
+    payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET ?? env.JWT_SECRET) as {
+      sub: string;
+      sid: string;
+      typ: string;
+    };
+  } catch {
+    throw new AppError("Invalid or expired refresh token", 401);
+  }
+
+  if (payload.typ !== "refresh") {
+    throw new AppError("Invalid refresh token payload", 401);
+  }
+
+  const session = await SessionModel.findById(payload.sid);
+  if (!session || session.revokedAt || session.expiresAt.getTime() < Date.now()) {
+    throw new AppError("Refresh session is no longer valid", 401);
+  }
+
+  if (session.tokenHash !== hashToken(refreshToken)) {
+    await SessionModel.updateMany({ family: session.family }, { $set: { revokedAt: new Date() } });
+    throw new AppError("Refresh token reuse detected", 401);
+  }
+
+  const nextSession = await SessionModel.create({
+    userId: payload.sub,
+    tokenHash: "pending",
+    family: session.family,
+    parentSessionId: session._id,
+    userAgent: context?.userAgent ?? session.userAgent,
+    ipAddress: context?.ipAddress ?? session.ipAddress,
+    expiresAt: new Date(Date.now() + refreshTokenTtlDays * 24 * 60 * 60 * 1000),
+    lastSeenAt: new Date()
+  });
+  const nextRefreshToken = buildRefreshToken(nextSession.id, payload.sub);
+  nextSession.tokenHash = hashToken(nextRefreshToken);
+  await nextSession.save();
+
+  session.revokedAt = new Date();
+  session.lastSeenAt = new Date();
+  await session.save();
+
+  const user = await getAuthenticatedUser(payload.sub);
+  await recordAuditEvent({
+    actorUserId: payload.sub,
+    targetUserId: payload.sub,
+    entityType: "session",
+    entityId: nextSession.id,
+    action: "refresh.success"
+  });
+
+  return {
+    accessToken: buildAccessToken(payload.sub),
+    refreshToken: nextRefreshToken,
+    user
+  };
+}
+
+export async function logoutSession(refreshToken: string | undefined) {
+  if (!refreshToken) {
+    return;
+  }
+
+  try {
+    const payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET ?? env.JWT_SECRET) as {
+      sid: string;
+      sub: string;
+      typ: string;
+    };
+    await SessionModel.findByIdAndUpdate(payload.sid, { $set: { revokedAt: new Date() } });
+    await recordAuditEvent({
+      actorUserId: payload.sub,
+      targetUserId: payload.sub,
+      entityType: "session",
+      entityId: payload.sid,
+      action: "logout.success"
+    });
+  } catch {
+    return;
+  }
+}
+
+export async function createPasswordResetRequest(payload: ForgotPasswordInput) {
+  const user = await UserModel.findOne({ email: payload.email.toLowerCase() });
+  if (!user) {
+    return { ok: true };
+  }
+
+  const rawCode = buildResetCode();
+  await PasswordResetTokenModel.create({
+    userId: user.id,
+    codeHash: hashToken(rawCode),
+    expiresAt: new Date(Date.now() + 15 * 60 * 1000)
+  });
+
+  await recordAuditEvent({
+    actorUserId: user.id,
+    targetUserId: user.id,
+    entityType: "auth",
+    entityId: user.id,
+    action: "password-reset.requested"
+  });
+
+  return {
+    ok: true,
+    resetCode: env.NODE_ENV === "production" ? undefined : rawCode
+  };
+}
+
+export async function resetPassword(payload: ResetPasswordInput) {
+  const codeHash = hashToken(payload.code.trim().toUpperCase());
+  const resetToken = await PasswordResetTokenModel.findOne({
+    codeHash,
+    usedAt: null,
+    expiresAt: { $gt: new Date() }
+  });
+
+  if (!resetToken) {
+    throw new AppError("Reset code is invalid or expired", 400);
+  }
+
+  const user = await UserModel.findById(resetToken.userId);
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  user.passwordHash = await bcrypt.hash(payload.password, 12);
+  await user.save();
+
+  resetToken.usedAt = new Date();
+  await resetToken.save();
+  await SessionModel.updateMany({ userId: user.id, revokedAt: null }, { $set: { revokedAt: new Date() } });
+
+  await recordAuditEvent({
+    actorUserId: user.id,
+    targetUserId: user.id,
+    entityType: "auth",
+    entityId: user.id,
+    action: "password-reset.completed"
+  });
+
+  return { ok: true };
+}

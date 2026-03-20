@@ -1,10 +1,44 @@
 import { Router } from "express";
+import * as rateLimitModule from "express-rate-limit";
 
-import { loginController, registerController } from "../controllers/auth.controller.js";
+import {
+  forgotPasswordController,
+  loginController,
+  logoutController,
+  meController,
+  refreshController,
+  registerController,
+  resetPasswordController
+} from "../controllers/auth.controller.js";
+import { requireAuth } from "../middleware/auth.middleware.js";
+import { requireTrustedBrowserOrigin } from "../middleware/origin-protection.middleware.js";
+import { getRateLimitStore } from "../services/rate-limit.service.js";
 
 const authRouter = Router();
+const rateLimit = ("default" in rateLimitModule
+  ? rateLimitModule.default
+  : (rateLimitModule as unknown as { rateLimit: typeof import("express-rate-limit").default }).rateLimit) as typeof import("express-rate-limit").default;
+const authWriteLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: getRateLimitStore()
+});
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: getRateLimitStore()
+});
 
-authRouter.post("/register", registerController);
-authRouter.post("/login", loginController);
+authRouter.post("/register", requireTrustedBrowserOrigin, authWriteLimiter, registerController);
+authRouter.post("/login", requireTrustedBrowserOrigin, authWriteLimiter, loginController);
+authRouter.get("/me", requireAuth, meController);
+authRouter.post("/refresh", requireTrustedBrowserOrigin, refreshLimiter, refreshController);
+authRouter.post("/logout", requireTrustedBrowserOrigin, refreshLimiter, logoutController);
+authRouter.post("/forgot-password", requireTrustedBrowserOrigin, authWriteLimiter, forgotPasswordController);
+authRouter.post("/reset-password", requireTrustedBrowserOrigin, authWriteLimiter, resetPasswordController);
 
 export { authRouter };

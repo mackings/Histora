@@ -16,7 +16,6 @@ import {
 } from "./app-data";
 import feedStory from "./assets/feed-story.svg";
 import heroMemory from "./assets/hero-memory.svg";
-import studioBoard from "./assets/studio-board.svg";
 
 function Icon({
   name,
@@ -181,8 +180,274 @@ type AnonymousFeedSource = {
   fromQuickMemory: boolean;
 };
 
+type AuthUser = {
+  id: string;
+  fullName: string;
+  username: string;
+  email: string;
+  subscriptionTier: "free" | "premium";
+};
+
+type AuthSession = {
+  accessToken: string;
+  user: AuthUser;
+};
+
+type ApiComment = {
+  id: string;
+  targetType: "status" | "storyChapter" | "anonymousMessage";
+  targetId: string;
+  authorName: string;
+  authorUsername: string;
+  body: string;
+  replyToCommentId?: string;
+  createdAt: string;
+};
+
+type ApiAnonymousMessage = {
+  id: string;
+  recipientUsername: string;
+  body: string;
+  shareSlug: string;
+  distribution: "app" | "external";
+  commentsCount: number;
+  helpFee: number;
+  helperContact?: {
+    name: string;
+    phone: string;
+  } | null;
+  createdAt: string;
+};
+
+type ApiStory = {
+  id: string;
+  slug: string;
+  status: "draft" | "published";
+  title: string;
+  summary: string;
+  coverImageUrl?: string | null;
+  visibility: "private" | "public" | "selected";
+  anonymous: boolean;
+  authorName: string;
+  authorUsername: string;
+  tags: string[];
+  readCount: number;
+  reactionsCount: number;
+  chapters: Array<{
+    title: string;
+    body: string;
+    type: "memory" | "reflection" | "milestone" | "anonymous";
+    order: number;
+    imageUrls: string[];
+    voiceNoteUrl?: string | null;
+    moments: Array<{
+      title: string;
+      description: string;
+      happenedAt: string;
+      imageUrls: string[];
+      voiceNoteUrl?: string | null;
+    }>;
+  }>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ApiFeedStory = ApiStory & {
+  chapterCount: number;
+  commentCount: number;
+};
+
+type ProfileDashboard = {
+  user: AuthUser & {
+    bio: string;
+    location: string;
+    profileVisibility: "public" | "selected" | "private";
+    defaultStoryVisibility: "public" | "selected" | "private" | "anonymous";
+    allowCommentsByDefault: boolean;
+    allowHelpRequests: boolean;
+    hideReadCounts: boolean;
+    showAnonymousActivity: boolean;
+  };
+  metrics: {
+    publishedStories: number;
+    totalChapters: number;
+    totalReads: number;
+    anonymousPosts: number;
+    followers: number;
+    following: number;
+  };
+  stories: Array<{
+    id: string;
+    title: string;
+    visibility: string;
+    chapters: string;
+    reads: string;
+    status: string;
+    updatedAt: string;
+  }>;
+  activity: Array<{
+    title: string;
+    detail: string;
+    time: string;
+  }>;
+};
+
+type ContributorInviteRecord = {
+  id: string;
+  email: string;
+  circle: "family" | "friend";
+  story: string;
+  status: string;
+  createdAt: string;
+};
+
+type ProfileSession = {
+  id: string;
+  userAgent: string;
+  ipAddress?: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+  revokedAt?: string | null;
+  active: boolean;
+};
+
 const anonymousStatusStorageKey = "histora-anonymous-feed-v1";
 const anonymousStatusUpdateEvent = "histora-anonymous-status-updated";
+const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
+
+class ApiRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+    this.status = status;
+  }
+}
+
+async function apiRequest<T>(
+  path: string,
+  options?: {
+    method?: "GET" | "POST" | "PATCH" | "DELETE";
+    body?: unknown;
+    accessToken?: string | null;
+  }
+) {
+  const method = options?.method ?? "GET";
+  const response = await fetch(`${apiBaseUrl}${path}`, {
+    method,
+    credentials: "include",
+    headers: {
+      ...(options?.body ? { "Content-Type": "application/json" } : {}),
+      ...(method !== "GET" ? { "X-Requested-With": "XMLHttpRequest" } : {}),
+      ...(options?.accessToken ? { Authorization: `Bearer ${options.accessToken}` } : {})
+    },
+    body: options?.body ? JSON.stringify(options.body) : undefined
+  });
+
+  if (!response.ok) {
+    let message = "Request failed.";
+
+    try {
+      const payload = (await response.json()) as { message?: string; error?: string };
+      message = payload.message ?? payload.error ?? message;
+    } catch {
+      const text = await response.text();
+      if (text.trim()) {
+        message = text;
+      }
+    }
+
+    throw new ApiRequestError(message, response.status);
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  return (await response.json()) as T;
+}
+
+const getErrorMessage = (error: unknown, fallback: string) =>
+  error instanceof Error && error.message.trim() ? error.message : fallback;
+
+const formatAnonymousMeta = (createdAt: string) =>
+  new Date(createdAt).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short"
+  });
+
+const toStoredAnonymousStatus = (
+  message: ApiAnonymousMessage,
+  source: "posted" | "received",
+  comments: Array<{ author: string; text: string }> = []
+): StoredAnonymousStatus => ({
+  id: message.id,
+  title: message.body.slice(0, 72),
+  body: message.body,
+  meta: formatAnonymousMeta(message.createdAt),
+  shareSlug: message.shareSlug,
+  comments,
+  helpFee: message.helpFee,
+  distribution: message.distribution,
+  source,
+  helperContact: message.helperContact ?? null
+});
+
+const storyTypeToGenre = (type: ApiStory["chapters"][number]["type"]) => {
+  if (type === "milestone") {
+    return "Milestone";
+  }
+  if (type === "reflection") {
+    return "Reflection";
+  }
+  if (type === "anonymous") {
+    return "Advice";
+  }
+  return "Life archive";
+};
+
+const toFeedStoryRecord = (story: ApiFeedStory): FeedStoryRecord => ({
+  author: story.authorName,
+  handle: `@${story.authorUsername}`,
+  title: story.title,
+  excerpt: story.summary,
+  reads: String(story.readCount),
+  visibility: story.anonymous ? "ANON" : story.visibility.toUpperCase(),
+  genre: storyTypeToGenre(story.chapters[0]?.type ?? "memory"),
+  chapterCount: story.chapterCount,
+  comments: story.commentCount,
+  saves: String(story.reactionsCount),
+  slug: story.slug,
+  anonymous: story.anonymous,
+  shares: 0,
+  likes: story.reactionsCount,
+  liked: false,
+  bookmarked: false,
+  following: false,
+  helpFee: story.anonymous ? 8 : undefined,
+  chapters: story.chapters.map((chapter) => ({
+    id: `${story.id}:${chapter.order}`,
+    title: chapter.title,
+    body: chapter.body.replace(/<[^>]+>/g, " "),
+    summary: chapter.body.replace(/<[^>]+>/g, " ").slice(0, 160),
+    likes: 0,
+    liked: false,
+    comments: [],
+    images: chapter.imageUrls.map((src, index) => ({
+      src,
+      alt: `${chapter.title} attachment ${index + 1}`
+    })),
+    voiceNotes: chapter.voiceNoteUrl
+      ? [{ name: `Voice note ${chapter.order}`, detail: "Attached voice note", src: chapter.voiceNoteUrl }]
+      : [],
+    timeline: chapter.moments.map((moment) => ({
+      label: new Date(moment.happenedAt).toLocaleDateString(),
+      title: moment.title,
+      body: moment.description
+    }))
+  }))
+});
 
 const readStoredAnonymousStatuses = (): StoredAnonymousStatus[] => {
   if (typeof window === "undefined") {
@@ -860,9 +1125,9 @@ function StoryCirclesRow() {
                     className="story-progress-fill"
                     style={{
                       width:
-                        index < activeIndex
+                        index < (activeIndex ?? -1)
                           ? "100%"
-                          : index === activeIndex
+                          : index === (activeIndex ?? -1)
                             ? `${progress}%`
                             : "0%"
                     }}
@@ -1014,7 +1279,7 @@ function AuthPage({
   onAuthenticated
 }: {
   mode: "signin" | "signup" | "forgot" | "reset";
-  onAuthenticated: () => void;
+  onAuthenticated: (session: AuthSession) => void;
 }) {
   const isSignup = mode === "signup";
   const isForgot = mode === "forgot";
@@ -1023,6 +1288,27 @@ function AuthPage({
   const navigate = useNavigate();
   const location = useLocation();
   const redirectAfterAuth = new URLSearchParams(location.search).get("redirect");
+  const authEyebrow = isSignup
+    ? "OPEN_YOUR_ARCHIVE"
+    : isForgot
+      ? "RECOVER_ACCESS"
+      : isReset
+        ? "RESET_ENTRY"
+        : "RETURN_TO_RECORD";
+  const authHeadline = isSignup
+    ? "Begin your archive."
+    : isForgot
+      ? "Recover access."
+      : isReset
+        ? "Choose a new password."
+        : "Welcome back.";
+  const authIntro = isSignup
+    ? "Build a private record first. Publish only when the story is ready."
+    : isForgot
+      ? "Request a reset code and get back to your drafts."
+      : isReset
+        ? "Set a stronger password and reopen your archive."
+        : "Sign in to continue writing, reading, and managing your archive.";
   const [form, setForm] = useState({
     fullName: "",
     username: "",
@@ -1035,6 +1321,7 @@ function AuthPage({
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formFeedback, setFormFeedback] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [visiblePasswords, setVisiblePasswords] = useState({
     password: false,
     newPassword: false,
@@ -1132,27 +1419,77 @@ function AuthPage({
     return Object.keys(nextErrors).length === 0;
   };
 
-  const handlePrimaryAction = () => {
+  const handlePrimaryAction = async () => {
     if (!validateForm()) {
       setFormFeedback("Please fix the highlighted fields.");
       return;
     }
 
-    if (isSignin || isSignup) {
-      onAuthenticated();
-      setFormFeedback(isSignup ? "Account created. Redirecting..." : "Sign-in complete. Redirecting...");
-      navigate(redirectAfterAuth || "/feed");
-      return;
-    }
+    setIsSubmitting(true);
+    setFormFeedback("");
 
-    if (isForgot) {
-      setFormFeedback(`Reset instructions would be sent to ${form.email.trim()}.`);
-      return;
-    }
+    try {
+      if (isSignin) {
+        const session = await apiRequest<AuthSession>("/auth/login", {
+          method: "POST",
+          body: {
+            email: form.email.trim(),
+            password: form.password
+          }
+        });
+        onAuthenticated(session);
+        setFormFeedback("Sign-in complete. Redirecting...");
+        navigate(redirectAfterAuth || "/feed");
+        return;
+      }
 
-    if (isReset) {
-      setFormFeedback("Password updated. Redirecting to sign in...");
-      navigate("/signin");
+      if (isSignup) {
+        const session = await apiRequest<AuthSession>("/auth/register", {
+          method: "POST",
+          body: {
+            fullName: form.fullName.trim(),
+            username: form.username.trim().replace(/^@/, "").toLowerCase(),
+            email: form.email.trim(),
+            password: form.password,
+            dateOfBirth: form.dateOfBirth
+          }
+        });
+        onAuthenticated(session);
+        setFormFeedback("Account created. Redirecting...");
+        navigate(redirectAfterAuth || "/feed");
+        return;
+      }
+
+      if (isForgot) {
+        const result = await apiRequest<{ ok: boolean; resetCode?: string }>("/auth/forgot-password", {
+          method: "POST",
+          body: {
+            email: form.email.trim()
+          }
+        });
+        setFormFeedback(
+          result.resetCode
+            ? `Reset code generated: ${result.resetCode}`
+            : `If an account exists for ${form.email.trim()}, reset instructions have been prepared.`
+        );
+        return;
+      }
+
+      if (isReset) {
+        await apiRequest<{ ok: boolean }>("/auth/reset-password", {
+          method: "POST",
+          body: {
+            code: form.resetCode.trim(),
+            password: form.newPassword
+          }
+        });
+        setFormFeedback("Password updated. Redirecting to sign in...");
+        navigate("/signin");
+      }
+    } catch (error) {
+      setFormFeedback(getErrorMessage(error, "Authentication request failed."));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1160,50 +1497,40 @@ function AuthPage({
     <main className="auth-page-shell auth-shell">
       <section className="auth-layout">
         <article className="auth-info card">
-          <SectionLabel>
-            {isSignup ? "CREATE_IDENTITY" : isForgot ? "RECOVERY_LINK" : isReset ? "RESET_ARCHIVE_ACCESS" : "RETURN_TO_ARCHIVE"}
-          </SectionLabel>
-          <h1>
-            {isSignup
-              ? "JOIN THE SOCIAL ARCHIVE."
-              : isForgot
-                ? "RESET ACCESS WITHOUT LOSING YOUR DRAFTS."
-                : isReset
-                  ? "SET A NEW PASSWORD FOR YOUR ARCHIVE."
-                  : "SIGN IN TO CONTINUE WRITING."}
-          </h1>
-          <p>
-            {isSignup
-              ? "Create your profile, draft in private, publish when ready, and control who can read each story."
-              : isForgot
-                ? "We will send a recovery link so you can return to your stories, drafts, statuses, and profile controls."
-                : isReset
-                  ? "Choose a stronger password and restore access to your protected archive, anonymous posts, and premium tools."
-                  : "Return to your feed, chapter drafts, status replies, premium tools, and profile controls."}
-          </p>
-          <div className="auth-feature-list">
-            <div className="auth-feature-row">
-              <strong>Private and public archive</strong>
-              <span>Choose exactly who can see each story, chapter, or anonymous post.</span>
-            </div>
-            <div className="auth-feature-row">
-              <strong>Profile and identity controls</strong>
-              <span>Manage your bio, reading stats, premium plan, and chapter visibility from one place.</span>
-            </div>
-            <div className="auth-feature-row">
-              <strong>Status and advice access</strong>
-              <span>Track anonymous responses, help requests, and consent-fee updates inside your account.</span>
-            </div>
+          <div className="auth-copy-stack">
+            <SectionLabel>{authEyebrow}</SectionLabel>
+            <h1>{authHeadline}</h1>
+            <p>{authIntro}</p>
           </div>
-          <div className="image-frame">
-            <img alt="Writing board preview" className="feature-image" src={studioBoard} />
+
+          <div className="auth-story-panel">
+            <div className="auth-pattern-band" aria-hidden="true">
+              <span className="auth-pattern-mark" />
+              <span className="auth-pattern-mark" />
+              <span className="auth-pattern-mark" />
+            </div>
+            <p className="auth-motto">From oral memory to written archive.</p>
+            <div className="auth-feature-list auth-heritage-grid">
+              <div className="auth-feature-row auth-heritage-card">
+                <strong>Griots and lineages</strong>
+                <span>Hold names, moments, migrations, and family memory in one place.</span>
+              </div>
+              <div className="auth-feature-row auth-heritage-card">
+                <strong>Bronze, cloth, manuscript</strong>
+                <span>Write with the patience of preserved craft, not the noise of the feed.</span>
+              </div>
+              <div className="auth-feature-row auth-heritage-card">
+                <strong>Private before public</strong>
+                <span>Keep drafts protected, then decide what becomes part of the public record.</span>
+              </div>
+            </div>
           </div>
         </article>
 
         <article className="auth-card card">
           <div className="auth-card-head">
-            <SectionLabel>{isSignup ? "ACCOUNT_SETUP" : isForgot ? "EMAIL_RECOVERY" : isReset ? "PASSWORD_RESET" : "AUTH_GATEWAY"}</SectionLabel>
-            <h2>{isSignup ? "Create your account" : isForgot ? "Forgot password" : isReset ? "Reset password" : "Sign in"}</h2>
+            <SectionLabel>{isSignup ? "ACCOUNT_SETUP" : isForgot ? "EMAIL_RECOVERY" : isReset ? "PASSWORD_RESET" : "SIGN_IN"}</SectionLabel>
+            <h2>{isSignup ? "Create account" : isForgot ? "Forgot password" : isReset ? "Reset password" : "Sign in"}</h2>
           </div>
           <form className="auth-form">
             {isSignup ? (
@@ -1314,8 +1641,16 @@ function AuthPage({
               </label>
             ) : null}
             {formFeedback ? <p className="auth-feedback">{formFeedback}</p> : null}
-            <button className="primary-action block-action" onClick={handlePrimaryAction} type="button">
-              {isSignup ? "CREATE ACCOUNT" : isForgot ? "SEND RESET LINK" : isReset ? "UPDATE PASSWORD" : "SIGN IN"}
+            <button className="primary-action block-action" disabled={isSubmitting} onClick={() => void handlePrimaryAction()} type="button">
+              {isSubmitting
+                ? "PROCESSING..."
+                : isSignup
+                  ? "CREATE ACCOUNT"
+                  : isForgot
+                    ? "SEND RESET LINK"
+                    : isReset
+                      ? "UPDATE PASSWORD"
+                      : "SIGN IN"}
               <Icon className="button-icon" name="arrow" />
             </button>
           </form>
@@ -1327,11 +1662,11 @@ function AuthPage({
             {isReset ? <NavLink to="/signin">Back to sign in</NavLink> : null}
           </div>
           <div className="auth-note card">
-            <strong>{isSignin ? "Protected access" : "Account setup details"}</strong>
+            <strong>{isSignin ? "Protected access" : "Archive settings"}</strong>
             <span>
               {isSignin
-                ? "Sign in to restore your saved studio draft, profile settings, anonymous advice activity, and premium limits."
-                : "Your account will control profile visibility, chapter defaults, anonymous post settings, and saved reading activity."}
+                ? "Your session restores drafts, saved stories, and archive controls."
+                : "Your account controls visibility, defaults, and archive ownership."}
             </span>
           </div>
         </article>
@@ -1355,22 +1690,54 @@ const sampleHelperContacts = [
   { name: "David O.", phone: "+234 812 555 0138" }
 ];
 
-function AnonymousHubPage() {
+function AnonymousHubPage({
+  accessToken,
+  currentUser
+}: {
+  accessToken: string;
+  currentUser: AuthUser;
+}) {
   const navigate = useNavigate();
   const [statuses, setStatuses] = useState<StoredAnonymousStatus[]>([]);
   const [shareFeedback, setShareFeedback] = useState("");
   const inboxLink =
-    typeof window === "undefined" ? "/anonymous/write/kingsleyarchive" : `${window.location.origin}/anonymous/write/kingsleyarchive`;
+    typeof window === "undefined"
+      ? `/anonymous/write/${currentUser.username}`
+      : `${window.location.origin}/anonymous/write/${currentUser.username}`;
   const receivedMessages = statuses.filter((status) => status.source === "received");
   const postedMessages = statuses.filter((status) => status.source === "posted");
 
   useEffect(() => {
-    const loadStatuses = () => setStatuses(readStoredAnonymousStatuses());
-    loadStatuses();
+    let cancelled = false;
 
-    window.addEventListener(anonymousStatusUpdateEvent, loadStatuses);
-    return () => window.removeEventListener(anonymousStatusUpdateEvent, loadStatuses);
-  }, []);
+    const loadStatuses = async () => {
+      try {
+        const [inboxMessages, sentMessages] = await Promise.all([
+          apiRequest<ApiAnonymousMessage[]>("/anonymous-messages/inbox", { accessToken }),
+          apiRequest<ApiAnonymousMessage[]>("/anonymous-messages/sent", { accessToken })
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        setStatuses([
+          ...inboxMessages.map((message) => toStoredAnonymousStatus(message, "received")),
+          ...sentMessages.map((message) => toStoredAnonymousStatus(message, "posted"))
+        ]);
+      } catch (error) {
+        if (!cancelled) {
+          setShareFeedback(getErrorMessage(error, "Could not load anonymous messages."));
+        }
+      }
+    };
+
+    void loadStatuses();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
 
   const copyAnonymousLink = async (status: StoredAnonymousStatus) => {
     if (typeof window === "undefined" || typeof navigator === "undefined") {
@@ -1398,23 +1765,33 @@ function AnonymousHubPage() {
     }
   };
 
-  const toggleDistribution = (status: StoredAnonymousStatus, distribution: "app" | "external") => {
-    const nextStatuses = statuses.map((entry) =>
-      entry.shareSlug === status.shareSlug
-        ? {
-            ...entry,
-            distribution
-          }
-        : entry
-    );
+  const toggleDistribution = async (status: StoredAnonymousStatus, distribution: "app" | "external") => {
+    try {
+      const updated = await apiRequest<ApiAnonymousMessage>(`/anonymous-messages/${status.id}/distribution`, {
+        method: "PATCH",
+        accessToken,
+        body: { distribution }
+      });
 
-    writeStoredAnonymousStatuses(nextStatuses);
-    setStatuses(nextStatuses);
-    setShareFeedback(
-      distribution === "app"
-        ? "Anonymous post will stay visible inside Histora."
-        : "Anonymous post is now marked for external sharing only."
-    );
+      setStatuses((current) =>
+        current.map((entry) =>
+          entry.id === status.id
+            ? {
+                ...entry,
+                distribution: updated.distribution,
+                helperContact: updated.helperContact ?? entry.helperContact
+              }
+            : entry
+        )
+      );
+      setShareFeedback(
+        distribution === "app"
+          ? "Anonymous post will stay visible inside Histora."
+          : "Anonymous post is now marked for external sharing only."
+      );
+    } catch (error) {
+      setShareFeedback(getErrorMessage(error, "Could not update anonymous distribution."));
+    }
   };
 
   const downloadAnonymousCard = (status: StoredAnonymousStatus) => {
@@ -1510,7 +1887,7 @@ function AnonymousHubPage() {
             <button className="ghost-action" onClick={copyInboxLink} type="button">
               COPY LINK
             </button>
-            <button className="primary-action" onClick={() => navigate("/anonymous/write/kingsleyarchive")} type="button">
+            <button className="primary-action" onClick={() => navigate(`/anonymous/write/${currentUser.username}`)} type="button">
               OPEN LINK PAGE
               <Icon className="button-icon" name="arrow" />
             </button>
@@ -1569,14 +1946,14 @@ function AnonymousHubPage() {
                   <div className="anonymous-distribution-row">
                     <button
                       className={status.distribution === "app" ? "composer-chip active-composer-chip" : "composer-chip"}
-                      onClick={() => toggleDistribution(status, "app")}
+                      onClick={() => void toggleDistribution(status, "app")}
                       type="button"
                     >
                       Show on app
                     </button>
                     <button
                       className={status.distribution === "external" ? "composer-chip active-composer-chip" : "composer-chip"}
-                      onClick={() => toggleDistribution(status, "external")}
+                      onClick={() => void toggleDistribution(status, "external")}
                       type="button"
                     >
                       Keep external
@@ -1604,7 +1981,7 @@ function AnonymousHubPage() {
                   <button className="ghost-action" onClick={copyInboxLink} type="button">
                     COPY INBOX LINK
                   </button>
-                  <button className="primary-action" onClick={() => navigate("/anonymous/write/kingsleyarchive")} type="button">
+                  <button className="primary-action" onClick={() => navigate(`/anonymous/write/${currentUser.username}`)} type="button">
                     PREVIEW INBOX PAGE
                     <Icon className="button-icon" name="arrow" />
                   </button>
@@ -1648,14 +2025,14 @@ function AnonymousHubPage() {
                   <div className="anonymous-distribution-row">
                     <button
                       className={status.distribution === "app" ? "composer-chip active-composer-chip" : "composer-chip"}
-                      onClick={() => toggleDistribution(status, "app")}
+                      onClick={() => void toggleDistribution(status, "app")}
                       type="button"
                     >
                       Keep on Histora
                     </button>
                     <button
                       className={status.distribution === "external" ? "composer-chip active-composer-chip" : "composer-chip"}
-                      onClick={() => toggleDistribution(status, "external")}
+                      onClick={() => void toggleDistribution(status, "external")}
                       type="button"
                     >
                       Share elsewhere
@@ -1693,66 +2070,134 @@ function AnonymousHubPage() {
   );
 }
 
-function AnonymousStoryPage() {
+function AnonymousStoryPage({
+  accessToken
+}: {
+  accessToken: string;
+}) {
   const { shareSlug = "" } = useParams();
   const navigate = useNavigate();
-  const [statuses, setStatuses] = useState<StoredAnonymousStatus[]>([]);
+  const [status, setStatus] = useState<ApiAnonymousMessage | null>(null);
+  const [comments, setComments] = useState<Array<{ author: string; text: string }>>([]);
   const [replyDraft, setReplyDraft] = useState("");
   const [shareFeedback, setShareFeedback] = useState("");
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [showHelpDialog, setShowHelpDialog] = useState(false);
 
   useEffect(() => {
-    const loadStatuses = () => setStatuses(readStoredAnonymousStatuses());
-    loadStatuses();
+    let cancelled = false;
 
-    window.addEventListener(anonymousStatusUpdateEvent, loadStatuses);
-    return () => window.removeEventListener(anonymousStatusUpdateEvent, loadStatuses);
-  }, []);
+    const loadMessage = async () => {
+      try {
+        const [publicMessage, privateMessage] = await Promise.all([
+          apiRequest<ApiAnonymousMessage>(`/anonymous-messages/${shareSlug}`),
+          apiRequest<ApiAnonymousMessage>(`/anonymous-messages/${shareSlug}/private`, { accessToken }).catch(
+            () => null
+          )
+        ]);
 
-  const status = statuses.find((entry) => entry.shareSlug === shareSlug) ?? null;
+        if (cancelled) {
+          return;
+        }
 
-  const submitReply = () => {
+        const activeMessage = privateMessage ?? publicMessage;
+        setStatus(activeMessage);
+      } catch (error) {
+        if (!cancelled) {
+          setShareFeedback(getErrorMessage(error, "Could not load this anonymous message."));
+        }
+      }
+    };
+
+    void loadMessage();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, shareSlug]);
+
+  useEffect(() => {
+    if (!status) {
+      return;
+    }
+
+    void apiRequest<ApiComment[]>(
+      `/comments?targetType=anonymousMessage&targetId=${encodeURIComponent(status.id)}`
+    )
+      .then((messageComments) => {
+        setComments(
+          messageComments.map((comment) => ({
+            author: comment.authorName,
+            text: comment.body
+          }))
+        );
+      })
+      .catch(() => undefined);
+  }, [status?.id]);
+
+  const submitReply = async () => {
     if (!status || !replyDraft.trim()) {
       return;
     }
 
-    const nextStatuses = statuses.map((entry) =>
-      entry.shareSlug === status.shareSlug
-        ? {
-            ...entry,
-            comments: [...entry.comments, { author: "Anonymous reply", text: replyDraft.trim() }]
-          }
-        : entry
-    );
+    try {
+      const createdComment = await apiRequest<ApiComment>("/comments", {
+        method: "POST",
+        accessToken,
+        body: {
+          targetType: "anonymousMessage",
+          targetId: status.id,
+          body: replyDraft.trim()
+        }
+      });
 
-    writeStoredAnonymousStatuses(nextStatuses);
-    setStatuses(nextStatuses);
-    setReplyDraft("");
-    setShareFeedback("Anonymous advice sent.");
+      setComments((current) => [
+        { author: createdComment.authorName, text: createdComment.body },
+        ...current
+      ]);
+      setStatus((current) =>
+        current
+          ? {
+              ...current,
+              commentsCount: current.commentsCount + 1
+            }
+          : current
+      );
+      setReplyDraft("");
+      setShareFeedback("Anonymous advice sent.");
+    } catch (error) {
+      setShareFeedback(getErrorMessage(error, "Could not send your anonymous reply."));
+    }
   };
 
-  const confirmHelpRequest = () => {
+  const confirmHelpRequest = async () => {
     if (!status || !consentAccepted) {
       setShareFeedback("Accept the consent fee first to continue.");
       return;
     }
 
     const helperContact = sampleHelperContacts[Math.abs(status.shareSlug.length) % sampleHelperContacts.length];
-    const nextStatuses = statuses.map((entry) =>
-      entry.shareSlug === status.shareSlug
-        ? {
-            ...entry,
-            helperContact
-          }
-        : entry
-    );
 
-    writeStoredAnonymousStatuses(nextStatuses);
-    setStatuses(nextStatuses);
-    setShowHelpDialog(false);
-    setConsentAccepted(false);
-    setShareFeedback(`Consent fee confirmed. ${helperContact.name} is now available to help.`);
+    try {
+      const updatedMessage = await apiRequest<ApiAnonymousMessage>(
+        `/anonymous-messages/${status.id}/helper-contact/unlock`,
+        {
+          method: "POST",
+          accessToken,
+          body: {
+            helperName: helperContact.name,
+            helperPhone: helperContact.phone
+          }
+        }
+      );
+
+      setStatus(updatedMessage);
+      setShowHelpDialog(false);
+      setConsentAccepted(false);
+      setShareFeedback(`Consent fee confirmed. ${helperContact.name} is now available to help.`);
+    } catch (error) {
+      setShareFeedback(getErrorMessage(error, "Could not unlock helper contact."));
+    }
   };
 
   const copyAnonymousLink = async () => {
@@ -1787,7 +2232,7 @@ function AnonymousStoryPage() {
       <section className="topbar card feed-reader-topbar">
         <div className="topbar-copy">
           <SectionLabel>ANONYMOUS_MESSAGE</SectionLabel>
-          <span>{status.meta} // {status.comments.length} replies // Consent fee ${status.helpFee}</span>
+          <span>{formatAnonymousMeta(status.createdAt)} // {comments.length} replies // Consent fee ${status.helpFee}</span>
         </div>
         <div className="topbar-actions">
           <button className="ghost-action" onClick={() => navigate("/anonymous")} type="button">
@@ -1807,7 +2252,7 @@ function AnonymousStoryPage() {
             </span>
             <div>
               <strong>Anonymous</strong>
-              <span>{status.meta}</span>
+              <span>{formatAnonymousMeta(status.createdAt)}</span>
             </div>
           </div>
           <div className="story-reader-stage-actions">
@@ -1838,7 +2283,7 @@ function AnonymousStoryPage() {
             <h2>Anonymous advice thread</h2>
           </div>
           <div className="story-comment-list">
-            {status.comments.map((comment, index) => (
+            {comments.map((comment, index) => (
               <div className="story-comment-card" key={`${comment.author}-${index}`}>
                 <strong>{comment.author}</strong>
                 <p>{comment.text}</p>
@@ -1847,7 +2292,7 @@ function AnonymousStoryPage() {
           </div>
           <div className="story-reply-bar">
             <input onChange={(event) => setReplyDraft(event.target.value)} placeholder="Reply anonymously..." value={replyDraft} />
-            <button className="primary-action" onClick={submitReply} type="button">
+            <button className="primary-action" onClick={() => void submitReply()} type="button">
               Send anonymous reply
             </button>
           </div>
@@ -1873,7 +2318,7 @@ function AnonymousStoryPage() {
             </label>
             <div className="status-composer-footer">
               <button className="ghost-action" onClick={() => setShowHelpDialog(false)} type="button">Cancel</button>
-              <button className="primary-action" onClick={confirmHelpRequest} type="button">Pay consent fee</button>
+              <button className="primary-action" onClick={() => void confirmHelpRequest()} type="button">Pay consent fee</button>
             </div>
           </article>
         </div>
@@ -1882,13 +2327,17 @@ function AnonymousStoryPage() {
   );
 }
 
-function AnonymousInboxComposePage() {
+function AnonymousInboxComposePage({
+  accessToken
+}: {
+  accessToken: string;
+}) {
   const { recipientSlug = "kingsleyarchive" } = useParams();
   const navigate = useNavigate();
   const [body, setBody] = useState("I need perspective before I decide what the next chapter should be.");
   const [feedback, setFeedback] = useState("");
 
-  const submitAnonymousMessage = () => {
+  const submitAnonymousMessage = async () => {
     const trimmedBody = body.trim();
 
     if (!trimmedBody) {
@@ -1896,24 +2345,21 @@ function AnonymousInboxComposePage() {
       return;
     }
 
-    const currentStatuses = readStoredAnonymousStatuses();
-    writeStoredAnonymousStatuses([
-      {
-        id: `received-${Date.now().toString(36)}`,
-        title: trimmedBody.slice(0, 72),
-        body: trimmedBody,
-        meta: "New message",
-        shareSlug: `received-${Date.now().toString(36)}`,
-        comments: [],
-        helpFee: 8,
-        distribution: "external",
-        source: "received",
-        helperContact: null
-      },
-      ...currentStatuses
-    ]);
-    setFeedback("Anonymous message sent. The recipient can now review it in their anonymous inbox.");
-    window.setTimeout(() => navigate("/anonymous"), 260);
+    try {
+      await apiRequest<ApiAnonymousMessage>("/anonymous-messages", {
+        method: "POST",
+        accessToken,
+        body: {
+          recipientUsername: recipientSlug.toLowerCase(),
+          body: trimmedBody,
+          distribution: "external"
+        }
+      });
+      setFeedback("Anonymous message sent. The recipient can now review it in their anonymous inbox.");
+      window.setTimeout(() => navigate("/anonymous"), 260);
+    } catch (error) {
+      setFeedback(getErrorMessage(error, "Could not send the anonymous message."));
+    }
   };
 
   return (
@@ -1950,7 +2396,7 @@ function AnonymousInboxComposePage() {
           <button className="ghost-action" onClick={() => navigate("/anonymous")} type="button">
             CANCEL
           </button>
-          <button className="primary-action" onClick={submitAnonymousMessage} type="button">
+          <button className="primary-action" onClick={() => void submitAnonymousMessage()} type="button">
             SEND ANONYMOUS MESSAGE
             <Icon className="button-icon" name="arrow" />
           </button>
@@ -1992,6 +2438,11 @@ type FeedStoryRecord = (typeof feedPreview)[number] & {
   following: boolean;
   helpFee?: number;
   chapters: FeedStoryChapter[];
+};
+
+type StudioChapter = (typeof chapterDrafts)[number] & {
+  title: string;
+  body: string;
 };
 
 type ShareSheetPayload = {
@@ -2266,7 +2717,47 @@ const buildFeedStories = (): FeedStoryRecord[] =>
             ]
   }));
 
-function ProfilePage() {
+function ProfilePage({
+  accessToken
+}: {
+  accessToken: string;
+}) {
+  const [dashboard, setDashboard] = useState<ProfileDashboard | null>(null);
+  const [savedStories, setSavedStories] = useState<ApiStory[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void apiRequest<ProfileDashboard>("/profile/me", { accessToken })
+      .then((payload) => {
+        if (!cancelled) {
+          setDashboard(payload);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setDashboard(null);
+        }
+      });
+
+    void apiRequest<{ stories: ApiStory[] }>("/profile/saved", { accessToken })
+      .then((payload) => {
+        if (!cancelled) {
+          setSavedStories(payload.stories);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
+
+  const profileStoriesData = dashboard?.stories ?? [];
+  const profileActivityData = dashboard?.activity ?? [];
+  const profileMetrics = dashboard?.metrics;
+  const profileUser = dashboard?.user;
+
   return (
     <main className="page-shell">
       <section className="topbar card profile-utility-bar">
@@ -2287,19 +2778,19 @@ function ProfilePage() {
 
       <section className="profile-stage card">
         <div className="profile-stage-copy">
-          <h1>Kingsley Udoma</h1>
-          <strong>@kingsleyarchive</strong>
-          <p>Archivist of movement, family memory, hard-earned reinventions, and anonymous advice threads that help others breathe.</p>
+          <h1>{profileUser?.fullName ?? "Loading profile..."}</h1>
+          <strong>{profileUser ? `@${profileUser.username}` : "@..."}</strong>
+          <p>{profileUser?.bio || "Update your profile to describe your archive."}</p>
         </div>
 
         <div className="profile-header">
-          <span className="profile-avatar-xl">K</span>
+          <span className="profile-avatar-xl">{(profileUser?.fullName ?? "H").slice(0, 1).toUpperCase()}</span>
           <div className="profile-header-copy">
             <div className="profile-header-meta">
-              <span className="story-tag">PUBLIC PROFILE</span>
-              <span className="story-tag">PRO PLAN</span>
+              <span className="story-tag">{(profileUser?.profileVisibility ?? "public").toUpperCase()} PROFILE</span>
+              <span className="story-tag">{(profileUser?.subscriptionTier ?? "free").toUpperCase()} PLAN</span>
             </div>
-            <p>Writing real-life chapters about home, migration, rebuilding, and the timelines that made identity visible.</p>
+            <p>{profileUser?.location || "Add your location in profile settings."}</p>
           </div>
           <div className="profile-header-actions">
             <NavLink className="primary-action" to="/profile/edit">
@@ -2315,12 +2806,26 @@ function ProfilePage() {
       </section>
 
       <section className="profile-metric-strip">
-        {profileStats.map((stat) => (
-          <article className="profile-stat-card" key={stat.label}>
-            <span>{stat.label}</span>
-            <strong>{stat.value}</strong>
-          </article>
-        ))}
+        <article className="profile-stat-card">
+          <span>Published stories</span>
+          <strong>{profileMetrics?.publishedStories ?? 0}</strong>
+        </article>
+        <article className="profile-stat-card">
+          <span>Total chapters</span>
+          <strong>{profileMetrics?.totalChapters ?? 0}</strong>
+        </article>
+        <article className="profile-stat-card">
+          <span>Total reads</span>
+          <strong>{profileMetrics?.totalReads ?? 0}</strong>
+        </article>
+        <article className="profile-stat-card">
+          <span>Anonymous posts</span>
+          <strong>{profileMetrics?.anonymousPosts ?? 0}</strong>
+        </article>
+        <article className="profile-stat-card">
+          <span>Followers</span>
+          <strong>{profileMetrics?.followers ?? 0}</strong>
+        </article>
       </section>
 
       <section className="profile-content-grid">
@@ -2332,7 +2837,7 @@ function ProfilePage() {
                 <h2>Stories and chapter packs</h2>
               </div>
               <div className="profile-story-list">
-                {profileStories.map((story) => (
+                {profileStoriesData.map((story) => (
                   <div className="profile-story-card" key={story.title}>
                     <div className="profile-story-head">
                       <div className="profile-story-copy">
@@ -2355,7 +2860,7 @@ function ProfilePage() {
                 <h2>Archive notifications</h2>
               </div>
               <div className="profile-activity-list">
-                {profileActivity.map((item) => (
+                {profileActivityData.map((item) => (
                   <div className="profile-activity-row" key={item.title}>
                     <strong>{item.title}</strong>
                     <span>{item.detail}</span>
@@ -2394,15 +2899,15 @@ function ProfilePage() {
               <div className="profile-settings-list">
                 <div className="profile-setting-row">
                   <strong>Anonymous advice posts</strong>
-                  <span>8 active advice drops, with one-response-per-user protection and shareable safe links.</span>
+                  <span>{profileMetrics?.anonymousPosts ?? 0} active anonymous messages tied to your account.</span>
                 </div>
                 <div className="profile-setting-row">
                   <strong>Consent-fee requests</strong>
-                  <span>2 pending helper requests waiting for your approval before contact access is shared.</span>
+                  <span>{profileUser?.allowHelpRequests ? "Help requests are enabled on your account." : "Help requests are disabled on your account."}</span>
                 </div>
                 <div className="profile-setting-row">
                   <strong>Comment defaults</strong>
-                  <span>Comments are enabled for public chapters and disabled for sensitive archive entries.</span>
+                  <span>{profileUser?.allowCommentsByDefault ? "Comments are enabled by default for new stories." : "Comments are disabled by default for new stories."}</span>
                 </div>
               </div>
             </div>
@@ -2415,7 +2920,10 @@ function ProfilePage() {
                 <h2>Saved reading and plan status</h2>
               </div>
               <div className="profile-story-list">
-                {profileSavedShelf.map((item) => (
+                {(savedStories.length
+                  ? savedStories.map((story) => ({ title: story.title, meta: `${story.readCount} reads` }))
+                  : profileSavedShelf
+                ).map((item) => (
                   <div className="profile-story-card" key={item.title}>
                     <div className="profile-story-copy">
                       <strong>{item.title}</strong>
@@ -2437,48 +2945,164 @@ function ProfilePage() {
   );
 }
 
-function EditProfilePage() {
+function EditProfilePage({
+  accessToken
+}: {
+  accessToken: string;
+}) {
+  const [dashboard, setDashboard] = useState<ProfileDashboard | null>(null);
+  const [sessions, setSessions] = useState<ProfileSession[]>([]);
+  const [formFeedback, setFormFeedback] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteCircle, setInviteCircle] = useState<"family" | "friend">("family");
-  const [inviteStory, setInviteStory] = useState(profileStories[0]?.title ?? "");
-  const [contributorInvites, setContributorInvites] = useState([
-    {
-      email: "auntie.grace@example.com",
-      circle: "family",
-      story: "From borrowed rooms to my own front door",
-      status: "Pending"
-    },
-    {
-      email: "nora.friend@example.com",
-      circle: "friend",
-      story: "Need advice on forgiving a parent",
-      status: "Accepted"
-    }
-  ]);
+  const [stories, setStories] = useState<ApiStory[]>([]);
+  const [inviteStoryId, setInviteStoryId] = useState("");
+  const [contributorInvites, setContributorInvites] = useState<ContributorInviteRecord[]>([]);
+  const [profileForm, setProfileForm] = useState({
+    fullName: "",
+    username: "",
+    bio: "",
+    location: "",
+    profileVisibility: "public",
+    defaultStoryVisibility: "selected",
+    allowCommentsByDefault: true,
+    allowHelpRequests: true,
+    hideReadCounts: false,
+    showAnonymousActivity: true
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void apiRequest<ProfileDashboard>("/profile/me", { accessToken })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+
+        setDashboard(payload);
+        setProfileForm({
+          fullName: payload.user.fullName,
+          username: payload.user.username,
+          bio: payload.user.bio,
+          location: payload.user.location,
+          profileVisibility: payload.user.profileVisibility,
+          defaultStoryVisibility: payload.user.defaultStoryVisibility,
+          allowCommentsByDefault: payload.user.allowCommentsByDefault,
+          allowHelpRequests: payload.user.allowHelpRequests,
+          hideReadCounts: payload.user.hideReadCounts,
+          showAnonymousActivity: payload.user.showAnonymousActivity
+        });
+      })
+      .catch(() => undefined);
+
+    void apiRequest<ApiStory[]>("/stories/mine", { accessToken })
+      .then((payload) => {
+        if (!cancelled) {
+          setStories(payload);
+          setInviteStoryId(payload[0]?.id ?? "");
+        }
+      })
+      .catch(() => undefined);
+
+    void apiRequest<{ invites: ContributorInviteRecord[] }>("/profile/invites", { accessToken })
+      .then((payload) => {
+        if (!cancelled) {
+          setContributorInvites(payload.invites);
+        }
+      })
+      .catch(() => undefined);
+
+    void apiRequest<{ sessions: ProfileSession[] }>("/profile/sessions", { accessToken })
+      .then((payload) => {
+        if (!cancelled) {
+          setSessions(payload.sessions);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
 
   const handleInviteContributor = () => {
     const trimmedEmail = inviteEmail.trim();
 
-    if (!trimmedEmail) {
+    if (!trimmedEmail || !inviteStoryId) {
       return;
     }
 
-    setContributorInvites((current) => [
-      {
+    void apiRequest<{ invite: ContributorInviteRecord }>("/profile/invites", {
+      method: "POST",
+      accessToken,
+      body: {
         email: trimmedEmail,
         circle: inviteCircle,
-        story: inviteStory,
-        status: "Pending"
-      },
-      ...current
-    ]);
-    setInviteEmail("");
-    setInviteCircle("family");
-    setInviteStory(profileStories[0]?.title ?? inviteStory);
+        storyId: inviteStoryId
+      }
+    })
+      .then((payload) => {
+        setContributorInvites((current) => [payload.invite, ...current]);
+        setInviteEmail("");
+        setInviteCircle("family");
+        setInviteStoryId(stories[0]?.id ?? inviteStoryId);
+      })
+      .catch((error) => {
+        setFormFeedback(getErrorMessage(error, "Could not create invite."));
+      });
   };
 
-  const handleRemoveInvite = (email: string) => {
-    setContributorInvites((current) => current.filter((invite) => invite.email !== email));
+  const handleRemoveInvite = (inviteId: string) => {
+    void apiRequest<{ invite: ContributorInviteRecord }>(`/profile/invites/${inviteId}`, {
+      method: "DELETE",
+      accessToken
+    })
+      .then((payload) => {
+        setContributorInvites((current) =>
+          current.map((invite) => (invite.id === inviteId ? payload.invite : invite))
+        );
+      })
+      .catch((error) => {
+        setFormFeedback(getErrorMessage(error, "Could not revoke invite."));
+      });
+  };
+
+  const handleProfileInput = (field: keyof typeof profileForm, value: string | boolean) => {
+    setProfileForm((current) => ({ ...current, [field]: value }));
+  };
+
+  const saveProfile = async () => {
+    try {
+      const result = await apiRequest<{ user: ProfileDashboard["user"] }>("/profile/me", {
+        method: "PATCH",
+        accessToken,
+        body: profileForm
+      });
+      setProfileForm((current) => ({
+        ...current,
+        fullName: result.user.fullName,
+        username: result.user.username
+      }));
+      setFormFeedback("Profile saved.");
+    } catch (error) {
+      setFormFeedback(getErrorMessage(error, "Could not save profile."));
+    }
+  };
+
+  const revokeSession = async (sessionId: string) => {
+    try {
+      const payload = await apiRequest<{ session: ProfileSession }>(`/profile/sessions/${sessionId}/revoke`, {
+        method: "POST",
+        accessToken
+      });
+      setSessions((current) =>
+        current.map((session) => (session.id === sessionId ? payload.session : session))
+      );
+      setFormFeedback("Session revoked.");
+    } catch (error) {
+      setFormFeedback(getErrorMessage(error, "Could not revoke session."));
+    }
   };
 
   return (
@@ -2519,23 +3143,23 @@ function EditProfilePage() {
             <div className="profile-form-grid">
               <label>
                 Display name
-                <input defaultValue="Kingsley Udoma" />
+                <input onChange={(event) => handleProfileInput("fullName", event.target.value)} value={profileForm.fullName} />
               </label>
               <label>
                 Username
-                <input defaultValue="@kingsleyarchive" />
+                <input onChange={(event) => handleProfileInput("username", event.target.value.replace(/^@/, ""))} value={`@${profileForm.username}`} />
               </label>
               <label>
                 Bio
-                <textarea defaultValue="Writing real-life chapters about home, movement, identity, healing, and hard-earned rebuilding." />
+                <textarea onChange={(event) => handleProfileInput("bio", event.target.value)} value={profileForm.bio} />
               </label>
               <label>
                 Location
-                <input defaultValue="Lagos, Nigeria" />
+                <input onChange={(event) => handleProfileInput("location", event.target.value)} value={profileForm.location} />
               </label>
               <label>
                 Profile visibility
-                <select defaultValue="public">
+                <select onChange={(event) => handleProfileInput("profileVisibility", event.target.value)} value={profileForm.profileVisibility}>
                   <option value="public">Public</option>
                   <option value="selected">Selected readers</option>
                   <option value="private">Private</option>
@@ -2543,7 +3167,7 @@ function EditProfilePage() {
               </label>
               <label>
                 Default chapter visibility
-                <select defaultValue="selected">
+                <select onChange={(event) => handleProfileInput("defaultStoryVisibility", event.target.value)} value={profileForm.defaultStoryVisibility}>
                   <option value="public">Public</option>
                   <option value="selected">Selected readers</option>
                   <option value="private">Private</option>
@@ -2576,9 +3200,9 @@ function EditProfilePage() {
                 </label>
                 <label>
                   Story to contribute to
-                  <select onChange={(event) => setInviteStory(event.target.value)} value={inviteStory}>
-                    {profileStories.map((story) => (
-                      <option key={story.title} value={story.title}>
+                  <select onChange={(event) => setInviteStoryId(event.target.value)} value={inviteStoryId}>
+                    {stories.map((story) => (
+                      <option key={story.id} value={story.id}>
                         {story.title}
                       </option>
                     ))}
@@ -2593,13 +3217,13 @@ function EditProfilePage() {
               </div>
               <div className="profile-settings-list">
                 {contributorInvites.map((invite) => (
-                  <div className="profile-setting-row" key={invite.email}>
+                  <div className="profile-setting-row" key={invite.id}>
                     <strong>{invite.email}</strong>
                     <span>
                       {invite.circle === "family" ? "Family" : "Friend"} // {invite.story}
                     </span>
                     <small>{invite.status}</small>
-                    <button className="ghost-action slim-action" onClick={() => handleRemoveInvite(invite.email)} type="button">
+                    <button className="ghost-action slim-action" onClick={() => handleRemoveInvite(invite.id)} type="button">
                       REVOKE
                     </button>
                   </div>
@@ -2616,25 +3240,26 @@ function EditProfilePage() {
               </div>
               <div className="profile-toggle-stack">
                 <label className="toggle-row">
-                  <input defaultChecked type="checkbox" />
+                  <input checked={profileForm.allowCommentsByDefault} onChange={(event) => handleProfileInput("allowCommentsByDefault", event.target.checked)} type="checkbox" />
                   <span>Allow comments on published chapters</span>
                 </label>
                 <label className="toggle-row">
-                  <input defaultChecked type="checkbox" />
+                  <input checked={profileForm.allowHelpRequests} onChange={(event) => handleProfileInput("allowHelpRequests", event.target.checked)} type="checkbox" />
                   <span>Let readers request to help through consent-fee flow</span>
                 </label>
                 <label className="toggle-row">
-                  <input type="checkbox" />
+                  <input checked={profileForm.hideReadCounts} onChange={(event) => handleProfileInput("hideReadCounts", event.target.checked)} type="checkbox" />
                   <span>Hide read counts from public profile view</span>
                 </label>
                 <label className="toggle-row">
-                  <input defaultChecked type="checkbox" />
+                  <input checked={profileForm.showAnonymousActivity} onChange={(event) => handleProfileInput("showAnonymousActivity", event.target.checked)} type="checkbox" />
                   <span>Show anonymous advice activity inside profile dashboard</span>
                 </label>
               </div>
+              {formFeedback ? <p className="status-feedback">{formFeedback}</p> : null}
               <div className="chapter-controls">
                 <button className="ghost-action" type="button">CANCEL</button>
-                <button className="primary-action" type="button">
+                <button className="primary-action" onClick={() => void saveProfile()} type="button">
                   SAVE PROFILE
                   <Icon className="button-icon" name="arrow" />
                 </button>
@@ -2651,16 +3276,21 @@ function EditProfilePage() {
               <div className="profile-settings-list">
                 <div className="profile-setting-row">
                   <strong>Email verification</strong>
-                  <span>Verified // kingsley@example.com</span>
+                  <span>{dashboard?.user.email ?? "Loading email..."}</span>
                 </div>
                 <div className="profile-setting-row">
                   <strong>Password</strong>
                   <span>Last changed 14 days ago</span>
                 </div>
-                <div className="profile-setting-row">
-                  <strong>Active sessions</strong>
-                  <span>MacBook Pro, iPhone Safari, Chrome desktop</span>
-                </div>
+                {sessions.map((session) => (
+                  <div className="profile-setting-row" key={session.id}>
+                    <strong>{session.userAgent}</strong>
+                    <span>{session.active ? "Active session" : "Revoked"}{session.ipAddress ? ` // ${session.ipAddress}` : ""}</span>
+                    <button className="ghost-action slim-action" onClick={() => void revokeSession(session.id)} type="button">
+                      {session.active ? "REVOKE" : "REVOKED"}
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
           </article>
@@ -2670,10 +3300,13 @@ function EditProfilePage() {
   );
 }
 
-function FeedPage() {
+function FeedPage({
+  accessToken
+}: {
+  accessToken: string;
+}) {
   const navigate = useNavigate();
-  const [feedPosts, setFeedPosts] = useState<FeedStoryRecord[]>(buildFeedStories);
-  const [storedAnonymousStatuses, setStoredAnonymousStatuses] = useState<StoredAnonymousStatus[]>([]);
+  const [feedPosts, setFeedPosts] = useState<FeedStoryRecord[]>([]);
   const [shareSheet, setShareSheet] = useState<ShareSheetPayload | null>(null);
   const [activeAnonymousIndex, setActiveAnonymousIndex] = useState<number | null>(null);
   const [anonymousReplyDraft, setAnonymousReplyDraft] = useState("");
@@ -2690,30 +3323,28 @@ function FeedPage() {
   };
   const [shareFeedback, setShareFeedback] = useState("");
   const anonymousFeedPosts = feedPosts.filter((post) => post.anonymous);
-  const loadStoredAnonymousStatuses = () => setStoredAnonymousStatuses(readStoredAnonymousStatuses());
 
   useEffect(() => {
-    loadStoredAnonymousStatuses();
+    let cancelled = false;
 
-    const handleStatusUpdate = () => loadStoredAnonymousStatuses();
-    window.addEventListener(anonymousStatusUpdateEvent, handleStatusUpdate);
+    void apiRequest<ApiFeedStory[]>("/stories/feed")
+      .then((stories) => {
+        if (!cancelled) {
+          setFeedPosts(stories.map((story) => toFeedStoryRecord(story)));
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setShareFeedback(getErrorMessage(error, "Could not load the public feed."));
+        }
+      });
 
-    return () => window.removeEventListener(anonymousStatusUpdateEvent, handleStatusUpdate);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const anonymousFeedSources: AnonymousFeedSource[] = [
-    ...storedAnonymousStatuses
-      .filter((status) => status.distribution !== "external")
-      .map((status) => ({
-      id: status.id,
-      slug: status.shareSlug,
-      title: status.title,
-      excerpt: status.body,
-      meta: status.meta,
-      comments: status.comments,
-      helpFee: status.helpFee,
-      fromQuickMemory: true
-    })),
     ...anonymousFeedPosts.map((post) => ({
       id: post.slug,
       slug: post.slug,
@@ -2751,19 +3382,51 @@ function FeedPage() {
     activeAnonymousMessage ? anonymousFeedSources.find((source) => source.slug === activeAnonymousMessage.postSlug) ?? null : null;
 
   const toggleFeedLike = (slug: string) => {
-    setFeedPosts((current) =>
-      current.map((post) =>
-        post.slug === slug
-          ? { ...post, liked: !post.liked, likes: post.liked ? post.likes - 1 : post.likes + 1 }
-          : post
-      )
-    );
+    const targetPost = feedPosts.find((post) => post.slug === slug);
+    if (!targetPost) {
+      return;
+    }
+
+    void apiRequest<{ storyId: string; action: "like" | "bookmark"; active: boolean }>(
+      `/stories/${targetPost.chapters[0]?.id.split(":")[0] ?? ""}/reactions`,
+      {
+        method: "POST",
+        accessToken,
+        body: { action: "like" }
+      }
+    )
+      .then((result) => {
+        setFeedPosts((current) =>
+          current.map((post) =>
+            post.slug === slug
+              ? { ...post, liked: result.active, likes: Math.max(0, post.likes + (result.active ? 1 : -1)) }
+              : post
+          )
+        );
+      })
+      .catch((error) => setShareFeedback(getErrorMessage(error, "Could not update story like.")));
   };
 
   const toggleFeedBookmark = (slug: string) => {
-    setFeedPosts((current) =>
-      current.map((post) => (post.slug === slug ? { ...post, bookmarked: !post.bookmarked } : post))
-    );
+    const targetPost = feedPosts.find((post) => post.slug === slug);
+    if (!targetPost) {
+      return;
+    }
+
+    void apiRequest<{ storyId: string; action: "like" | "bookmark"; active: boolean }>(
+      `/stories/${targetPost.chapters[0]?.id.split(":")[0] ?? ""}/reactions`,
+      {
+        method: "POST",
+        accessToken,
+        body: { action: "bookmark" }
+      }
+    )
+      .then((result) => {
+        setFeedPosts((current) =>
+          current.map((post) => (post.slug === slug ? { ...post, bookmarked: result.active } : post))
+        );
+      })
+      .catch((error) => setShareFeedback(getErrorMessage(error, "Could not update bookmark.")));
   };
 
   const submitAnonymousReply = () => {
@@ -2771,45 +3434,47 @@ function FeedPage() {
       return;
     }
 
-    if (activeAnonymousPost.fromQuickMemory) {
-      const nextStatuses = storedAnonymousStatuses.map((status) =>
-        status.shareSlug === activeAnonymousPost.slug
-          ? {
-              ...status,
-              comments: [...status.comments, { author: "Anonymous reply", text: anonymousReplyDraft.trim() }]
-            }
-          : status
-      );
-
-      writeStoredAnonymousStatuses(nextStatuses);
-      setStoredAnonymousStatuses(nextStatuses);
-      setAnonymousReplyDraft("");
-      setShareFeedback("Anonymous advice sent.");
-      return;
-    }
-
-    setFeedPosts((current) =>
-      current.map((post) =>
-        post.slug === activeAnonymousPost.slug
-          ? {
-              ...post,
-              chapters: post.chapters.map((chapter, index) =>
-                index === 0
-                  ? {
-                      ...chapter,
-                      comments: [
-                        ...chapter.comments,
-                        { author: "Anonymous reply", handle: "@advice", text: anonymousReplyDraft.trim(), time: "now" }
-                      ]
-                    }
-                  : chapter
-              )
-            }
-          : post
-      )
-    );
-    setAnonymousReplyDraft("");
-    setShareFeedback("Anonymous advice sent.");
+    void apiRequest<ApiComment>("/comments", {
+      method: "POST",
+      accessToken,
+      body: {
+        targetType: "storyChapter",
+        targetId: activeAnonymousPost.id,
+        body: anonymousReplyDraft.trim()
+      }
+    })
+      .then((comment) => {
+        setFeedPosts((current) =>
+          current.map((post) =>
+            post.slug === activeAnonymousPost.slug
+              ? {
+                  ...post,
+                  chapters: post.chapters.map((chapter, index) =>
+                    index === 0
+                      ? {
+                          ...chapter,
+                          comments: [
+                            ...chapter.comments,
+                            {
+                              author: comment.authorName,
+                              handle: `@${comment.authorUsername}`,
+                              text: comment.body,
+                              time: "now"
+                            }
+                          ]
+                        }
+                      : chapter
+                  )
+                }
+              : post
+          )
+        );
+        setAnonymousReplyDraft("");
+        setShareFeedback("Anonymous advice sent.");
+      })
+      .catch((error) => {
+        setShareFeedback(getErrorMessage(error, "Could not send the anonymous reply."));
+      });
   };
 
   const confirmHelpRequest = () => {
@@ -3085,10 +3750,14 @@ function FeedPage() {
   );
 }
 
-function FeedStoryPage() {
+function FeedStoryPage({
+  accessToken
+}: {
+  accessToken: string;
+}) {
   const navigate = useNavigate();
   const { storySlug } = useParams();
-  const [stories, setStories] = useState<FeedStoryRecord[]>(buildFeedStories);
+  const [stories, setStories] = useState<FeedStoryRecord[]>([]);
   const [chapterReplyDrafts, setChapterReplyDrafts] = useState<Record<string, string>>({});
   const [shareFeedback, setShareFeedback] = useState("");
   const [shareSheet, setShareSheet] = useState<ShareSheetPayload | null>(null);
@@ -3102,6 +3771,60 @@ function FeedStoryPage() {
   const activeChapterIndex = story?.chapters.findIndex((chapter) => chapter.id === activeChapter?.id) ?? 0;
   const relatedChapters = story?.chapters.filter((chapter) => chapter.id !== activeChapter?.id) ?? [];
   const activeChapterNumber = activeChapterIndex >= 0 ? activeChapterIndex + 1 : 1;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!storySlug) {
+      return;
+    }
+
+    void apiRequest<ApiStory>(`/stories/public/${storySlug}`)
+      .then(async (storyPayload) => {
+        const nextStory = toFeedStoryRecord({
+          ...storyPayload,
+          chapterCount: storyPayload.chapters.length,
+          commentCount: 0
+        });
+
+        const chapterComments = await Promise.all(
+          storyPayload.chapters.map(async (chapter) => {
+            const comments = await apiRequest<ApiComment[]>(
+              `/comments?targetType=storyChapter&targetId=${encodeURIComponent(`${storyPayload.id}:${chapter.order}`)}`
+            );
+
+            return [chapter.order, comments] as const;
+          })
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        const commentMap = new Map(chapterComments);
+        nextStory.chapters = nextStory.chapters.map((chapter, index) => ({
+          ...chapter,
+          comments:
+            commentMap.get(index + 1)?.map((comment) => ({
+              author: comment.authorName,
+              handle: `@${comment.authorUsername}`,
+              text: comment.body,
+              time: new Date(comment.createdAt).toLocaleDateString()
+            })) ?? []
+        }));
+
+        setStories([nextStory]);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setShareFeedback(getErrorMessage(error, "Could not load this story."));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [storySlug]);
 
   useEffect(() => {
     if (!story) {
@@ -3120,19 +3843,59 @@ function FeedStoryPage() {
   };
 
   const toggleFollow = () => {
-    updateStory((current) => ({ ...current, following: !current.following }));
+    if (!story) {
+      return;
+    }
+
+    void apiRequest<{ username: string; active: boolean }>(
+      `/profile/follows/${story.handle.replace(/^@/, "")}/toggle`,
+      {
+        method: "POST",
+        accessToken
+      }
+    )
+      .then((result) => {
+        updateStory((current) => ({ ...current, following: result.active }));
+      })
+      .catch((error) => {
+        setShareFeedback(getErrorMessage(error, "Could not update follow state."));
+      });
   };
 
   const toggleStoryLike = () => {
-    updateStory((current) => ({
-      ...current,
-      liked: !current.liked,
-      likes: current.liked ? current.likes - 1 : current.likes + 1
-    }));
+    if (!story) {
+      return;
+    }
+
+    void apiRequest<{ active: boolean }>(`/stories/${story.chapters[0]?.id.split(":")[0] ?? ""}/reactions`, {
+      method: "POST",
+      accessToken,
+      body: { action: "like" }
+    })
+      .then((result) => {
+        updateStory((current) => ({
+          ...current,
+          liked: result.active,
+          likes: Math.max(0, current.likes + (result.active ? 1 : -1))
+        }));
+      })
+      .catch((error) => setShareFeedback(getErrorMessage(error, "Could not update story like.")));
   };
 
   const toggleStoryBookmark = () => {
-    updateStory((current) => ({ ...current, bookmarked: !current.bookmarked }));
+    if (!story) {
+      return;
+    }
+
+    void apiRequest<{ active: boolean }>(`/stories/${story.chapters[0]?.id.split(":")[0] ?? ""}/reactions`, {
+      method: "POST",
+      accessToken,
+      body: { action: "bookmark" }
+    })
+      .then((result) => {
+        updateStory((current) => ({ ...current, bookmarked: result.active }));
+      })
+      .catch((error) => setShareFeedback(getErrorMessage(error, "Could not update bookmark.")));
   };
 
   const openShareSheet = (payload: ShareSheetPayload) => {
@@ -3168,20 +3931,34 @@ function FeedStoryPage() {
       return;
     }
 
-    const nextComment: FeedThreadComment = {
-      author: "You",
-      handle: "@yourarchive",
-      text: draft,
-      time: "now"
-    };
+    void apiRequest<ApiComment>("/comments", {
+      method: "POST",
+      accessToken,
+      body: {
+        targetType: "storyChapter",
+        targetId: chapterId,
+        body: draft
+      }
+    })
+      .then((comment) => {
+        const nextComment: FeedThreadComment = {
+          author: comment.authorName,
+          handle: `@${comment.authorUsername}`,
+          text: comment.body,
+          time: new Date(comment.createdAt).toLocaleDateString()
+        };
 
-    updateStory((current) => ({
-      ...current,
-      chapters: current.chapters.map((chapter) =>
-        chapter.id === chapterId ? { ...chapter, comments: [...chapter.comments, nextComment] } : chapter
-      )
-    }));
-    setChapterReplyDrafts((current) => ({ ...current, [chapterId]: "" }));
+        updateStory((current) => ({
+          ...current,
+          chapters: current.chapters.map((chapter) =>
+            chapter.id === chapterId ? { ...chapter, comments: [...chapter.comments, nextComment] } : chapter
+          )
+        }));
+        setChapterReplyDrafts((current) => ({ ...current, [chapterId]: "" }));
+      })
+      .catch((error) => {
+        setShareFeedback(getErrorMessage(error, "Could not post this chapter reply."));
+      });
   };
 
   const confirmHelpRequest = () => {
@@ -3245,7 +4022,7 @@ function FeedStoryPage() {
               <span>{story.reads} reads</span>
             </div>
           </div>
-          <div className="post-actions feed-thread-actions story-reader-stage-actions">
+          <div className="post-actions story-reader-stage-actions">
             <button className={story.liked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={toggleStoryLike} type="button">
               <Icon className="inline-icon" name="heart" />
               {story.likes}
@@ -3351,7 +4128,7 @@ function FeedStoryPage() {
                 ) : null}
               </div>
 
-              <div className="post-actions feed-thread-actions story-reader-chapter-actions">
+              <div className="post-actions story-reader-chapter-actions">
               <button className={activeChapter.liked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={() => toggleChapterLike(activeChapter.id)} type="button">
                 <Icon className="inline-icon" name="heart" />
                 {activeChapter.likes}
@@ -3496,7 +4273,13 @@ function FeedStoryPage() {
   );
 }
 
-function StudioPage() {
+function StudioPage({
+  accessToken,
+  currentUser
+}: {
+  accessToken: string;
+  currentUser: ProfileDashboard["user"];
+}) {
   const navigate = useNavigate();
   const normalizeChapterTitle = (title: string) => title.replace(/^Chapter\s+\d+:\s*/i, "").trim();
   const monthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -3564,7 +4347,7 @@ function StudioPage() {
   } as const;
   const [isEnteringStudio, setIsEnteringStudio] = useState(true);
   const [activeChapter, setActiveChapter] = useState(normalizeChapterTitle(chapterDrafts[1]?.title ?? "Chapter 2"));
-  const [isPremium, setIsPremium] = useState(false);
+  const [isPremium, setIsPremium] = useState(currentUser.subscriptionTier === "premium");
   const [visibility, setVisibility] = useState("selected");
   const [anonymous, setAnonymous] = useState(true);
   const [storyTitle, setStoryTitle] = useState("From borrowed rooms to my own front door");
@@ -3573,7 +4356,7 @@ function StudioPage() {
   );
   const [chapterType, setChapterType] = useState("milestone");
   const [allowComments, setAllowComments] = useState(true);
-  const [chapters, setChapters] = useState(
+  const [chapters, setChapters] = useState<StudioChapter[]>(
     chapterDrafts.map((chapter) => ({
       ...chapter,
       title: normalizeChapterTitle(chapter.title),
@@ -3581,6 +4364,7 @@ function StudioPage() {
     }))
   );
   const [studioMessage, setStudioMessage] = useState("Studio synced locally.");
+  const [currentStoryId, setCurrentStoryId] = useState<string | null>(null);
   const [hasReviewedPreview, setHasReviewedPreview] = useState(false);
   const [isDraftHistoryVisible, setIsDraftHistoryVisible] = useState(false);
   const [isEditingChapterTitle, setIsEditingChapterTitle] = useState(false);
@@ -3697,6 +4481,53 @@ function StudioPage() {
     const timer = window.setTimeout(() => setIsEnteringStudio(false), 1200);
     return () => window.clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void apiRequest<ApiStory[]>("/stories/mine", { accessToken })
+      .then((stories) => {
+        if (cancelled || stories.length === 0) {
+          return;
+        }
+
+        const draft = stories.find((story) => story.status === "draft") ?? stories[0];
+        setCurrentStoryId(draft.id);
+        setStoryTitle(draft.title);
+        setStorySummary(draft.summary);
+        setVisibility(draft.visibility);
+        setAnonymous(draft.anonymous);
+        setChapters(
+          draft.chapters.map((chapter) => ({
+            title: chapter.title,
+            type: chapter.type.toUpperCase(),
+            words: getChapterWordCount(chapter.body),
+            status: draft.status === "published" ? "Published" : "Draft saved",
+            moments: chapter.moments.length,
+            body: chapter.body
+          }))
+        );
+        setTimelineEntries(
+          draft.chapters.flatMap((chapter) =>
+            chapter.moments.map((moment) => {
+              const momentDate = new Date(moment.happenedAt);
+              return {
+                year: String(momentDate.getFullYear()),
+                month: String(momentDate.getMonth() + 1).padStart(2, "0"),
+                day: String(momentDate.getDate()).padStart(2, "0"),
+                title: moment.title,
+                body: moment.description
+              };
+            })
+          )
+        );
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken]);
 
   useEffect(() => {
     if (typeof window !== "undefined" && window.sessionStorage.getItem("histora-studio-reviewed") === "true") {
@@ -4045,7 +4876,7 @@ function StudioPage() {
     });
   };
 
-  const updateChapter = (updater: (chapter: (typeof chapters)[number]) => (typeof chapters)[number]) => {
+  const updateChapter = (updater: (chapter: StudioChapter) => StudioChapter) => {
     setChapters((current) =>
       current.map((chapter, index) => (index === (activeChapterIndex >= 0 ? activeChapterIndex : 0) ? updater(chapter) : chapter))
     );
@@ -4174,7 +5005,9 @@ function StudioPage() {
           {
             method: "POST",
             headers: {
-              "Content-Type": audioBlob.type || "audio/webm"
+              "Content-Type": audioBlob.type || "audio/webm",
+              Authorization: `Bearer ${accessToken}`,
+              "X-Requested-With": "XMLHttpRequest"
             },
             body: audioBlob
           }
@@ -4341,6 +5174,7 @@ function StudioPage() {
     const protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
     const relayUrl = new URL(`${protocol}//${apiUrl.host}/ws/transcription`);
     relayUrl.searchParams.set("language", language);
+    relayUrl.searchParams.set("token", accessToken);
     return relayUrl;
   };
 
@@ -4595,7 +5429,8 @@ function StudioPage() {
 
   const openVoiceTranscriptionPanel = () => {
     setIsTranscriptionPanelVisible(true);
-    startVoiceTranscription();
+    setTranscriptionStatus("Choose a language, then start voice transcription");
+    setStudioMessage("Voice transcription panel opened. Select a language, then start.");
   };
 
   const stopVoiceTranscription = () => {
@@ -4666,11 +5501,14 @@ function StudioPage() {
   };
 
   const saveCurrentDraft = () => {
+    const storyPayload = buildStoryPayload("draft");
+
     setChapters((current) =>
       current.map((chapter) =>
         chapter.title === activeChapter ? { ...chapter, status: "Draft saved", words: wordCount } : chapter
       )
     );
+    void persistStory(storyPayload, "Draft saved to API.");
     if (currentChapterRequiredItems.length > 0 || currentChapterOptionalItems.length > 0) {
       const missingRequiredText = currentChapterRequiredItems.length
         ? `Still required: ${currentChapterRequiredItems.join(", ")}.`
@@ -4718,6 +5556,7 @@ function StudioPage() {
           : chapter
       )
     );
+    void persistStory(buildStoryPayload("published"), "Story published to API.");
     setStudioMessage(
       startedIncompleteChapters.length > 0
         ? `Publishing ${readyChapters.map((chapter) => chapter.title).join(", ")}. Unfinished chapters stay in draft.`
@@ -4729,6 +5568,61 @@ function StudioPage() {
         : `Story published with chapters: ${readyChapters.map((chapter) => chapter.title).join(", ")}.`,
       ...current
     ].slice(0, 6));
+  };
+
+  const buildStoryPayload = (status: "draft" | "published") => ({
+    title: storyTitle,
+    summary: storySummary,
+    coverImageUrl: imageAttachments[0]?.url,
+    visibility: anonymous ? "public" : visibility,
+    anonymous,
+    allowedViewerIds: [],
+    tags: [],
+    status,
+    chapters: chapters.map((chapter, index) => ({
+      title: chapter.title,
+      body: chapter.body,
+      type:
+        chapter.type.toLowerCase() === "anon"
+          ? "anonymous"
+          : (chapter.type.toLowerCase() as "memory" | "reflection" | "milestone"),
+      order: index + 1,
+      imageUrls: imageAttachments.map((attachment) => attachment.url),
+      voiceNoteUrl: voiceNotes[0]?.url,
+      moments: timelineEntries
+        .filter((entry) => entry.title.trim() || entry.body.trim())
+        .map((entry) => ({
+          title: entry.title,
+          description: entry.body,
+          happenedAt: new Date(
+            `${entry.year || currentYear}-${entry.month || "01"}-${entry.day || "01"}T00:00:00.000Z`
+          ).toISOString(),
+          imageUrls: [],
+          voiceNoteUrl: undefined
+        }))
+    }))
+  });
+
+  const persistStory = async (payload: ReturnType<typeof buildStoryPayload>, successMessage: string) => {
+    try {
+      const story = currentStoryId
+        ? await apiRequest<ApiStory>(`/stories/${currentStoryId}`, {
+            method: "PATCH",
+            accessToken,
+            body: payload
+          })
+        : await apiRequest<ApiStory>("/stories", {
+            method: "POST",
+            accessToken,
+            body: payload
+          });
+
+      setCurrentStoryId(story.id);
+      setStudioMessage(successMessage);
+      setDraftHistory((current) => [successMessage, ...current].slice(0, 6));
+    } catch (error) {
+      setStudioMessage(getErrorMessage(error, "Could not save story to API."));
+    }
   };
 
   const updateTimelineEntry = (index: number, field: "title" | "body", value: string) => {
@@ -5002,8 +5896,8 @@ function StudioPage() {
                   <option value="anonymous">Anonymous advice</option>
                 </select>
               </label>
-              <label>
-                Body
+              <div>
+                <span>Body</span>
                 <div className="editor-field-shell">
                   <div
                     className="editor-surface"
@@ -5023,7 +5917,7 @@ function StudioPage() {
                     </button>
                   ) : null}
                 </div>
-              </label>
+              </div>
             </div>
             {isTranscriptionPanelVisible ? (
               <>
@@ -5629,40 +6523,111 @@ function PricingPage() {
 }
 
 export default function App() {
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
+    let cancelled = false;
 
-    setIsLoggedIn(window.localStorage.getItem("histora-auth") === "true");
+    const bootstrapSession = async () => {
+      try {
+        const session = await apiRequest<AuthSession>("/auth/refresh", { method: "POST" });
+        if (!cancelled) {
+          setAuthSession(session);
+        }
+      } catch {
+        if (!cancelled) {
+          setAuthSession(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsAuthReady(true);
+        }
+      }
+    };
+
+    void bootstrapSession();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const handleAuthenticated = () => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("histora-auth", "true");
-    }
-
-    setIsLoggedIn(true);
+  const handleAuthenticated = (session: AuthSession) => {
+    setAuthSession(session);
   };
+
+  const isLoggedIn = Boolean(authSession?.accessToken && authSession.user);
+
+  if (!isAuthReady) {
+    return (
+      <AppShell isLoggedIn={false}>
+        <main className="feed-reader-shell">
+          <article className="story-reader-stage card">
+            <SectionLabel>AUTH_LOADING</SectionLabel>
+            <h1>Restoring your session...</h1>
+          </article>
+        </main>
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell isLoggedIn={isLoggedIn}>
       <Routes>
-        <Route element={isLoggedIn ? <FeedPage /> : <OnboardingPage />} path="/" />
-        <Route element={<FeedPage />} path="/feed" />
-        <Route element={<FeedStoryPage />} path="/feed/story/:storySlug" />
-        <Route element={isLoggedIn ? <AnonymousHubPage /> : <RequireSignInRedirect redirectTo="/anonymous" />} path="/anonymous" />
         <Route
-          element={isLoggedIn ? <AnonymousInboxComposePage /> : <RequireCurrentLocationSignInRedirect />}
+          element={isLoggedIn && authSession ? <FeedPage accessToken={authSession.accessToken} /> : <OnboardingPage />}
+          path="/"
+        />
+        <Route
+          element={authSession ? <FeedPage accessToken={authSession.accessToken} /> : <OnboardingPage />}
+          path="/feed"
+        />
+        <Route
+          element={authSession ? <FeedStoryPage accessToken={authSession.accessToken} /> : <RequireCurrentLocationSignInRedirect />}
+          path="/feed/story/:storySlug"
+        />
+        <Route
+          element={
+            isLoggedIn && authSession
+              ? <AnonymousHubPage accessToken={authSession.accessToken} currentUser={authSession.user} />
+              : <RequireSignInRedirect redirectTo="/anonymous" />
+          }
+          path="/anonymous"
+        />
+        <Route
+          element={
+            isLoggedIn && authSession
+              ? <AnonymousInboxComposePage accessToken={authSession.accessToken} />
+              : <RequireCurrentLocationSignInRedirect />
+          }
           path="/anonymous/write/:recipientSlug"
         />
-        <Route element={isLoggedIn ? <AnonymousStoryPage /> : <RequireCurrentLocationSignInRedirect />} path="/anonymous/:shareSlug" />
-        <Route element={<ProfilePage />} path="/profile" />
-        <Route element={<EditProfilePage />} path="/profile/edit" />
+        <Route
+          element={
+            isLoggedIn && authSession
+              ? <AnonymousStoryPage accessToken={authSession.accessToken} />
+              : <RequireCurrentLocationSignInRedirect />
+          }
+          path="/anonymous/:shareSlug"
+        />
+        <Route
+          element={authSession ? <ProfilePage accessToken={authSession.accessToken} /> : <RequireCurrentLocationSignInRedirect />}
+          path="/profile"
+        />
+        <Route
+          element={authSession ? <EditProfilePage accessToken={authSession.accessToken} /> : <RequireCurrentLocationSignInRedirect />}
+          path="/profile/edit"
+        />
         <Route element={<StudioPreviewPage />} path="/studio/preview" />
-        <Route element={<StudioPage />} path="/studio" />
+        <Route
+          element={
+            authSession
+              ? <StudioPage accessToken={authSession.accessToken} currentUser={authSession.user as ProfileDashboard["user"]} />
+              : <RequireCurrentLocationSignInRedirect />
+          }
+          path="/studio"
+        />
         <Route element={<PricingPage />} path="/pricing" />
         <Route element={<AuthPage mode="signin" onAuthenticated={handleAuthenticated} />} path="/signin" />
         <Route element={<Navigate replace to="/signin" />} path="/login" />

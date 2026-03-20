@@ -2,6 +2,8 @@ import express, { Router } from "express";
 import * as rateLimitModule from "express-rate-limit";
 
 import { createAssemblyStreamingTokenController, createTranscriptionController } from "../controllers/transcription.controller.js";
+import { requireAuth } from "../middleware/auth.middleware.js";
+import { getRateLimitStore } from "../services/rate-limit.service.js";
 
 const transcriptionRouter = Router();
 const rateLimit = ("default" in rateLimitModule
@@ -10,22 +12,27 @@ const rateLimit = ("default" in rateLimitModule
 
 transcriptionRouter.get(
   "/token",
+  requireAuth,
   rateLimit({
     windowMs: 60 * 1000,
-    limit: 30,
+    limit: 10,
     standardHeaders: true,
     legacyHeaders: false
+    ,
+    store: getRateLimitStore()
   }),
   createAssemblyStreamingTokenController
 );
 
 transcriptionRouter.post(
   "/",
+  requireAuth,
   rateLimit({
     windowMs: 60 * 1000,
-    limit: 20,
+    limit: 8,
     standardHeaders: true,
-    legacyHeaders: false
+    legacyHeaders: false,
+    store: getRateLimitStore()
   }),
   express.raw({
     type: ["audio/webm", "audio/mp4", "audio/mpeg", "audio/wav", "audio/ogg"],

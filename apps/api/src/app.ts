@@ -8,8 +8,14 @@ import morgan from "morgan";
 import { createCorsOptions } from "./config/cors.js";
 import { env } from "./config/env.js";
 import { authRouter } from "./routes/auth.routes.js";
+import { anonymousMessageRouter } from "./routes/anonymous-message.routes.js";
+import { commentRouter } from "./routes/comment.routes.js";
+import { mediaRouter } from "./routes/media.routes.js";
+import { profileRouter } from "./routes/profile.routes.js";
+import { statusRouter } from "./routes/status.routes.js";
 import { storyRouter } from "./routes/story.routes.js";
 import { transcriptionRouter } from "./routes/transcription.routes.js";
+import { getRateLimitStore } from "./services/rate-limit.service.js";
 import { errorMiddleware, notFoundMiddleware } from "./middleware/error.middleware.js";
 
 export function createApp() {
@@ -22,6 +28,7 @@ export function createApp() {
   const app = express();
 
   app.set("trust proxy", 1);
+  app.disable("x-powered-by");
 
   app.use(cors(createCorsOptions()));
   app.use(helmet());
@@ -29,6 +36,7 @@ export function createApp() {
     rateLimit({
       windowMs: 15 * 60 * 1000,
       limit: 200,
+      store: getRateLimitStore(),
       standardHeaders: true,
       legacyHeaders: false,
       skip: (request) => request.path.startsWith("/api/transcriptions")
@@ -43,6 +51,11 @@ export function createApp() {
   });
 
   app.use("/api/auth", authRouter);
+  app.use("/api/statuses", statusRouter);
+  app.use("/api/comments", commentRouter);
+  app.use("/api/anonymous-messages", anonymousMessageRouter);
+  app.use("/api/media", mediaRouter);
+  app.use("/api/profile", profileRouter);
   app.use("/api/stories", storyRouter);
   app.use("/api/transcriptions", transcriptionRouter);
 

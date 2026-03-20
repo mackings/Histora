@@ -5,7 +5,16 @@ export interface UserDocument extends mongoose.Document {
   username: string;
   email: string;
   passwordHash: string;
+  dateOfBirth?: Date;
+  bio?: string;
+  location?: string;
   subscriptionTier: "free" | "premium";
+  profileVisibility: "public" | "selected" | "private";
+  defaultStoryVisibility: "public" | "selected" | "private" | "anonymous";
+  allowCommentsByDefault: boolean;
+  allowHelpRequests: boolean;
+  hideReadCounts: boolean;
+  showAnonymousActivity: boolean;
   isAnonymousPostingEnabled: boolean;
   selectedViewerIds: mongoose.Types.ObjectId[];
 }
@@ -16,7 +25,20 @@ const userSchema = new Schema<UserDocument>(
     username: { type: String, required: true, unique: true, lowercase: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true },
+    dateOfBirth: { type: Date },
+    bio: { type: String, trim: true, default: "" },
+    location: { type: String, trim: true, default: "" },
     subscriptionTier: { type: String, enum: ["free", "premium"], default: "free" },
+    profileVisibility: { type: String, enum: ["public", "selected", "private"], default: "public" },
+    defaultStoryVisibility: {
+      type: String,
+      enum: ["public", "selected", "private", "anonymous"],
+      default: "selected"
+    },
+    allowCommentsByDefault: { type: Boolean, default: true },
+    allowHelpRequests: { type: Boolean, default: true },
+    hideReadCounts: { type: Boolean, default: false },
+    showAnonymousActivity: { type: Boolean, default: true },
     isAnonymousPostingEnabled: { type: Boolean, default: true },
     selectedViewerIds: [{ type: Schema.Types.ObjectId, ref: "User" }]
   },

@@ -1,6 +1,8 @@
 import type { Server as HttpServer, IncomingMessage } from "http";
+import jwt from "jsonwebtoken";
 import { WebSocket, WebSocketServer } from "ws";
 
+import { isTrustedBrowserOrigin } from "../config/cors.js";
 import { env } from "../config/env.js";
 
 const ASSEMBLYAI_STREAMING_URL = "wss://streaming.assemblyai.com/v3/ws";
@@ -55,11 +57,42 @@ const isUpgradeRequestForRelay = (request: IncomingMessage) => {
   return requestUrl.pathname === "/ws/transcription";
 };
 
+const getUserIdFromToken = (request: IncomingMessage) => {
+  const host = request.headers.host;
+
+  if (!host || !request.url) {
+    return undefined;
+  }
+
+  try {
+    const requestUrl = new URL(request.url, `http://${host}`);
+    const token = requestUrl.searchParams.get("token");
+
+    if (!token) {
+      return undefined;
+    }
+
+    const payload = jwt.verify(token, env.JWT_SECRET) as { sub: string; typ?: string };
+    if (payload.typ !== "access" || !payload.sub) {
+      return undefined;
+    }
+
+    return payload.sub;
+  } catch {
+    return undefined;
+  }
+};
+
 export function registerTranscriptionRelay(server: HttpServer) {
-  const relayServer = new WebSocketServer({ noServer: true });
+  const relayServer = new WebSocketServer({ noServer: true, maxPayload: 512 * 1024 });
 
   server.on("upgrade", (request, socket, head) => {
     if (!isUpgradeRequestForRelay(request)) {
+      return;
+    }
+
+    if (!request.headers.origin || !isTrustedBrowserOrigin(request.headers.origin) || !getUserIdFromToken(request)) {
+      socket.destroy();
       return;
     }
 

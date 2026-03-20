@@ -21,7 +21,11 @@ export function requireAuth(request: Request, _response: Response, next: NextFun
   }
 
   try {
-    const payload = jwt.verify(token, env.JWT_SECRET) as { sub: string };
+    const payload = jwt.verify(token, env.JWT_SECRET) as { sub: string; typ?: string };
+    if (payload.typ !== "access" || !payload.sub) {
+      throw new Error("Invalid token type");
+    }
+
     request.auth = { userId: payload.sub };
     next();
   } catch {
