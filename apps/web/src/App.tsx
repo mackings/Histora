@@ -972,6 +972,8 @@ const toFeedStoryRecord = (story: ApiFeedStory): FeedStoryRecord => ({
   }))
 });
 
+const bumpStorySaveCount = (value: string, delta: number) => String(Math.max(0, Number.parseInt(value, 10) + delta || 0));
+
 const readStoredAnonymousStatuses = (): StoredAnonymousStatus[] => {
   if (typeof window === "undefined") {
     return [];
@@ -4651,6 +4653,7 @@ function FeedPage({
   const [anonymousReplyDraft, setAnonymousReplyDraft] = useState("");
   const [helpTarget, setHelpTarget] = useState<AnonymousFeedSource | null>(null);
   const [consentAccepted, setConsentAccepted] = useState(false);
+  const [pendingFeedActions, setPendingFeedActions] = useState<Record<string, boolean>>({});
   const openStory = (story: FeedStoryRecord) => navigate(`/feed/story/${story.slug}`, { state: { prefetchedStory: story } });
   const openShareSheet = (post: FeedStoryRecord) => {
     const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
@@ -4778,9 +4781,18 @@ function FeedPage({
 
   const toggleFeedLike = (slug: string) => {
     const targetPost = feedPosts.find((post) => post.slug === slug);
-    if (!targetPost) {
+    if (!targetPost || pendingFeedActions[`${slug}:like`]) {
       return;
     }
+
+    const optimisticPost = {
+      ...targetPost,
+      liked: !targetPost.liked,
+      likes: Math.max(0, targetPost.likes + (targetPost.liked ? -1 : 1))
+    };
+
+    setPendingFeedActions((current) => ({ ...current, [`${slug}:like`]: true }));
+    setFeedPosts((current) => current.map((post) => (post.slug === slug ? optimisticPost : post)));
 
     void apiRequest<{ storyId: string; action: "like" | "bookmark"; active: boolean; likesCount: number; bookmarksCount: number; reactionsCount: number }>(
       `/stories/${targetPost.id}/reactions`,
@@ -4803,15 +4815,29 @@ function FeedPage({
               : post
           )
         );
+        setPendingFeedActions((current) => ({ ...current, [`${slug}:like`]: false }));
       })
-      .catch((error) => setShareFeedback(getErrorMessage(error, "Could not update story like.")));
+      .catch((error) => {
+        setFeedPosts((current) => current.map((post) => (post.slug === slug ? targetPost : post)));
+        setPendingFeedActions((current) => ({ ...current, [`${slug}:like`]: false }));
+        setShareFeedback(getErrorMessage(error, "Could not update story like."));
+      });
   };
 
   const toggleFeedBookmark = (slug: string) => {
     const targetPost = feedPosts.find((post) => post.slug === slug);
-    if (!targetPost) {
+    if (!targetPost || pendingFeedActions[`${slug}:bookmark`]) {
       return;
     }
+
+    const optimisticPost = {
+      ...targetPost,
+      bookmarked: !targetPost.bookmarked,
+      saves: bumpStorySaveCount(targetPost.saves, targetPost.bookmarked ? -1 : 1)
+    };
+
+    setPendingFeedActions((current) => ({ ...current, [`${slug}:bookmark`]: true }));
+    setFeedPosts((current) => current.map((post) => (post.slug === slug ? optimisticPost : post)));
 
     void apiRequest<{ storyId: string; action: "like" | "bookmark"; active: boolean; likesCount: number; bookmarksCount: number; reactionsCount: number }>(
       `/stories/${targetPost.id}/reactions`,
@@ -4834,8 +4860,13 @@ function FeedPage({
               : post
           )
         );
+        setPendingFeedActions((current) => ({ ...current, [`${slug}:bookmark`]: false }));
       })
-      .catch((error) => setShareFeedback(getErrorMessage(error, "Could not update bookmark.")));
+      .catch((error) => {
+        setFeedPosts((current) => current.map((post) => (post.slug === slug ? targetPost : post)));
+        setPendingFeedActions((current) => ({ ...current, [`${slug}:bookmark`]: false }));
+        setShareFeedback(getErrorMessage(error, "Could not update bookmark."));
+      });
   };
 
   const submitAnonymousReply = () => {
@@ -5024,7 +5055,7 @@ function FeedPage({
                     <button className={post.liked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={(event) => {
                       event.stopPropagation();
                       toggleFeedLike(post.slug);
-                    }} type="button">
+                    }} disabled={pendingFeedActions[`${post.slug}:like`]} type="button">
                       <Icon className="inline-icon" name="heart" />
                       {post.likes}
                     </button>
@@ -5038,7 +5069,7 @@ function FeedPage({
                     <button className={post.bookmarked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={(event) => {
                       event.stopPropagation();
                       toggleFeedBookmark(post.slug);
-                    }} type="button">
+                    }} disabled={pendingFeedActions[`${post.slug}:bookmark`]} type="button">
                       <Icon className="inline-icon" name="bookmark" />
                       {post.saves}
                     </button>
@@ -5205,6 +5236,11 @@ function FeedStoryPage({
   const [helpTarget, setHelpTarget] = useState<FeedStoryRecord | null>(null);
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [activeChapterId, setActiveChapterId] = useState("");
+  const [pendingStoryActions, setPendingStoryActions] = useState<Record<"like" | "bookmark" | "follow", boolean>>({
+    like: false,
+    bookmark: false,
+    follow: false
+  });
 
   const story = stories.find((entry) => entry.slug === storySlug) ?? null;
   const totalChapterComments = story?.chapters.reduce((total, chapter) => total + chapter.comments.length, 0) ?? 0;
@@ -5290,9 +5326,13 @@ function FeedStoryPage({
   };
 
   const toggleFollow = () => {
-    if (!story) {
+    if (!story || pendingStoryActions.follow) {
       return;
     }
+
+    const previousFollowing = story.following;
+    updateStory((current) => ({ ...current, following: !current.following }));
+    setPendingStoryActions((current) => ({ ...current, follow: true }));
 
     void apiRequest<{ username: string; active: boolean }>(
       `/profile/follows/${story.handle.replace(/^@/, "")}/toggle`,
@@ -5303,16 +5343,27 @@ function FeedStoryPage({
     )
       .then((result) => {
         updateStory((current) => ({ ...current, following: result.active }));
+        setPendingStoryActions((current) => ({ ...current, follow: false }));
       })
       .catch((error) => {
+        updateStory((current) => ({ ...current, following: previousFollowing }));
+        setPendingStoryActions((current) => ({ ...current, follow: false }));
         setShareFeedback(getErrorMessage(error, "Could not update follow state."));
       });
   };
 
   const toggleStoryLike = () => {
-    if (!story) {
+    if (!story || pendingStoryActions.like) {
       return;
     }
+
+    const previousStory = story;
+    updateStory((current) => ({
+      ...current,
+      liked: !current.liked,
+      likes: Math.max(0, current.likes + (current.liked ? -1 : 1))
+    }));
+    setPendingStoryActions((current) => ({ ...current, like: true }));
 
     void apiRequest<{ active: boolean; likesCount: number; bookmarksCount: number; reactionsCount: number }>(`/stories/${story.id}/reactions`, {
       method: "POST",
@@ -5326,14 +5377,27 @@ function FeedStoryPage({
           likes: result.likesCount,
           saves: String(result.bookmarksCount)
         }));
+        setPendingStoryActions((current) => ({ ...current, like: false }));
       })
-      .catch((error) => setShareFeedback(getErrorMessage(error, "Could not update story like.")));
+      .catch((error) => {
+        updateStory(() => previousStory);
+        setPendingStoryActions((current) => ({ ...current, like: false }));
+        setShareFeedback(getErrorMessage(error, "Could not update story like."));
+      });
   };
 
   const toggleStoryBookmark = () => {
-    if (!story) {
+    if (!story || pendingStoryActions.bookmark) {
       return;
     }
+
+    const previousStory = story;
+    updateStory((current) => ({
+      ...current,
+      bookmarked: !current.bookmarked,
+      saves: bumpStorySaveCount(current.saves, current.bookmarked ? -1 : 1)
+    }));
+    setPendingStoryActions((current) => ({ ...current, bookmark: true }));
 
     void apiRequest<{ active: boolean; likesCount: number; bookmarksCount: number; reactionsCount: number }>(`/stories/${story.id}/reactions`, {
       method: "POST",
@@ -5347,8 +5411,13 @@ function FeedStoryPage({
           likes: result.likesCount,
           saves: String(result.bookmarksCount)
         }));
+        setPendingStoryActions((current) => ({ ...current, bookmark: false }));
       })
-      .catch((error) => setShareFeedback(getErrorMessage(error, "Could not update bookmark.")));
+      .catch((error) => {
+        updateStory(() => previousStory);
+        setPendingStoryActions((current) => ({ ...current, bookmark: false }));
+        setShareFeedback(getErrorMessage(error, "Could not update bookmark."));
+      });
   };
 
   const openShareSheet = (payload: ShareSheetPayload) => {
@@ -5459,7 +5528,7 @@ function FeedStoryPage({
         </div>
         <div className="topbar-actions">
           <button className="ghost-action" onClick={() => navigate("/feed")} type="button">BACK TO FEED</button>
-          <button className={story.following ? "primary-action" : "ghost-action"} onClick={toggleFollow} type="button">
+          <button className={story.following ? "primary-action" : "ghost-action"} disabled={pendingStoryActions.follow} onClick={toggleFollow} type="button">
             {story.following ? "UNFOLLOW" : "FOLLOW"}
           </button>
         </div>
@@ -5487,11 +5556,11 @@ function FeedStoryPage({
             </div>
           </div>
           <div className="post-actions story-reader-stage-actions">
-            <button className={story.liked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={toggleStoryLike} type="button">
+            <button className={story.liked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} disabled={pendingStoryActions.like} onClick={toggleStoryLike} type="button">
               <Icon className="inline-icon" name="heart" />
               {story.likes}
             </button>
-            <button className={story.bookmarked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={toggleStoryBookmark} type="button">
+            <button className={story.bookmarked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} disabled={pendingStoryActions.bookmark} onClick={toggleStoryBookmark} type="button">
               <Icon className="inline-icon" name="bookmark" />
               {story.bookmarked ? "Saved" : story.saves}
             </button>
