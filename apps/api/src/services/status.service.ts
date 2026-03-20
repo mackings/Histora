@@ -71,19 +71,7 @@ export async function createStatus(userId: string, payload: StatusCreateInput) {
   // Broadcast a tiny event envelope so feeds can update without reloading.
   broadcastAppEvent("feed", {
     kind: "status.created",
-    status: {
-      id: status.id,
-      body: status.body,
-      anonymous: status.anonymous,
-      visibility: status.visibility,
-      imageUrl: status.imageUrl,
-      likesCount: status.likesCount,
-      bookmarksCount: status.bookmarksCount,
-      commentsCount: status.commentsCount,
-      authorName: status.authorName,
-      authorUsername: status.authorUsername,
-      createdAt: status.createdAt
-    }
+    status: toStatusResponse(status)
   });
 
   return toStatusResponse(status);

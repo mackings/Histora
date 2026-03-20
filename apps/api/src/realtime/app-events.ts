@@ -84,14 +84,17 @@ export function broadcastAppEvent(channel: string, payload: unknown) {
   const envelope: EventEnvelope = { type: "event", channel, payload };
   const serialized = JSON.stringify(envelope);
 
-  deliverEvent(serialized, envelope);
-
   const redis = getRedisClient();
   if (redis) {
     void safeRedisConnect(redis)
       .then(() => redis.publish(redisEventChannel, serialized))
-      .catch(() => undefined);
+      .catch(() => {
+        deliverEvent(serialized, envelope);
+      });
+    return;
   }
+
+  deliverEvent(serialized, envelope);
 }
 
 function deliverEvent(serialized: string, envelope: EventEnvelope) {
