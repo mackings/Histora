@@ -5819,12 +5819,14 @@ function StudioPage({
   const activeChapterReady = chapterMetrics[activeChapterIndex >= 0 ? activeChapterIndex : 0];
   const activeChapterNumber = Math.max(activeChapterIndex + 1, 1);
   const activeChapterNumberLabel = `Chapter ${activeChapterNumber}`;
+  const liveEditorBody = chapterBodyRef.current?.innerHTML ?? chapterBody;
   const autoSaveSignature = JSON.stringify({
     activeChapter,
     anonymous,
     chapterType,
     allowComments,
     chapters,
+    liveEditorBody,
     storySummary,
     storyTitle,
     timelineEntries,
@@ -6069,6 +6071,7 @@ function StudioPage({
     draftHistory,
     isPremium,
     currentStoryId,
+    liveEditorBody,
     storySummary,
     storyTitle,
     timelineEntries,
@@ -6431,11 +6434,41 @@ function StudioPage({
     if (typeof window !== "undefined") {
       window.sessionStorage.removeItem("histora-studio-reviewed");
     }
+    const nextSnapshot = chapters.map((chapter, index) =>
+      index === (activeChapterIndex >= 0 ? activeChapterIndex : 0)
+        ? {
+            ...chapter,
+            body: nextHtml,
+            words: nextText.trim().length === 0 ? 0 : nextText.trim().split(/\s+/).length,
+            imageAttachments: [...imageAttachmentsRef.current],
+            voiceNotes: [...voiceNotesRef.current],
+            timelineEntries: [...timelineEntries]
+          }
+        : chapter
+    );
     updateChapter((chapter) => ({
       ...chapter,
       body: nextHtml,
       words: nextText.trim().length === 0 ? 0 : nextText.trim().split(/\s+/).length
     }));
+    if (typeof window !== "undefined" && hasLoadedStudioDraftRef.current) {
+      const draftPayload = {
+        currentStoryId,
+        activeChapter,
+        isPremium,
+        visibility,
+        anonymous,
+        storyTitle,
+        storySummary,
+        chapterType,
+        allowComments,
+        chapters: nextSnapshot,
+        timelineEntries,
+        draftHistory,
+        transcriptionLanguage
+      };
+      window.localStorage.setItem(studioStorageKey, JSON.stringify(draftPayload));
+    }
     refreshEditorState();
   };
 
@@ -7210,7 +7243,7 @@ function StudioPage({
   });
 
   const validateStoryBeforePersist = () => {
-    const summaryLength = storySummary.trim().length;
+    const summaryWords = storySummary.trim().split(/\s+/).filter(Boolean).length;
 
     if (storyTitle.trim().length < 3) {
       const message = "Add a clearer story title before continuing.";
@@ -7220,10 +7253,10 @@ function StudioPage({
       return false;
     }
 
-    if (summaryLength < 40) {
-      const message = `Story summary needs at least 40 characters. You currently have ${summaryLength}.`;
+    if (summaryWords < 20) {
+      const message = `Add a fuller story summary with at least 20 words. You currently have ${summaryWords}.`;
       setStudioMessage(message);
-      openStudioNotice("Story summary too short", message);
+      openStudioNotice("Story summary needs more detail", message);
       scrollToSectionTop(mediaSectionRef);
       return false;
     }

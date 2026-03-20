@@ -35,7 +35,13 @@ export const chapterSchema = z.object({
 
 export const storySchema = z.object({
   title: z.string().min(3).max(140),
-  summary: z.string().min(40).max(500),
+  summary: z
+    .string()
+    .trim()
+    .refine(
+      (value) => value.split(/\s+/).filter(Boolean).length >= 20,
+      "Write a fuller story summary with at least 20 words."
+    ),
   coverImageUrl: mediaReferenceSchema.optional(),
   visibility: visibilitySchema.default("private"),
   anonymous: z.boolean().default(false),
