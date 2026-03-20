@@ -122,12 +122,16 @@ async function run() {
     const editor = document.querySelector(".editor-surface");
     const draftRaw = window.localStorage.getItem("histora-studio-local-draft-v1");
     const draft = draftRaw ? JSON.parse(draftRaw) : null;
+    const imageElements = Array.from(document.querySelectorAll(".media-preview-image"));
+    const voiceElements = Array.from(document.querySelectorAll("audio.voice-player"));
 
     return {
       heading: document.querySelector(".chapter-heading-row h2")?.textContent ?? null,
       editorInnerHTML: editor?.innerHTML ?? null,
       editorTextContent: editor?.textContent ?? null,
       activeDraftChapter: draft?.activeChapter ?? null,
+      imageSrcs: imageElements.map((element) => element.getAttribute("src")),
+      voiceSrcs: voiceElements.map((element) => element.getAttribute("src")),
       draftChapterBodies: Array.isArray(draft?.chapters)
         ? draft.chapters.map((chapter) => ({
             title: chapter.title,
