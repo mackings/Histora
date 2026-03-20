@@ -50,7 +50,7 @@ export async function enqueueCounterSync(targetType: "status" | "anonymousMessag
         statusId
       },
       {
-        jobId: `${targetType}:${statusId}`,
+        jobId: `${targetType}-${statusId}`,
         removeOnComplete: 100,
         removeOnFail: 100
       }
