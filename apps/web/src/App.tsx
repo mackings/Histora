@@ -390,19 +390,24 @@ async function apiRequest<T>(
   options?: {
     method?: "GET" | "POST" | "PATCH" | "DELETE";
     body?: unknown;
+    headers?: Record<string, string>;
+    rawBody?: BodyInit;
     accessToken?: string | null;
   }
 ) {
   const method = options?.method ?? "GET";
+  const hasRawBody = typeof options?.rawBody !== "undefined";
+  const isJsonBody = typeof options?.body !== "undefined" && !hasRawBody;
   const response = await fetch(`${apiBaseUrl}${path}`, {
     method,
     credentials: "include",
     headers: {
-      ...(options?.body ? { "Content-Type": "application/json" } : {}),
+      ...(isJsonBody ? { "Content-Type": "application/json" } : {}),
       ...(method !== "GET" ? { "X-Requested-With": "XMLHttpRequest" } : {}),
-      ...(options?.accessToken ? { Authorization: `Bearer ${options.accessToken}` } : {})
+      ...(options?.accessToken ? { Authorization: `Bearer ${options.accessToken}` } : {}),
+      ...(options?.headers ?? {})
     },
-    body: options?.body ? JSON.stringify(options.body) : undefined
+    body: hasRawBody ? options?.rawBody : isJsonBody ? JSON.stringify(options.body) : undefined
   });
 
   if (!response.ok) {
@@ -464,33 +469,47 @@ async function uploadMediaAsset(
     }
   });
 
-  const uploadResponse = await fetch(signedUpload.uploadUrl, {
-    method: "PUT",
-    headers: {
-      "Content-Type": asset.contentType
-    },
-    body: asset.blob
-  });
+  try {
+    const uploadResponse = await fetch(signedUpload.uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": asset.contentType
+      },
+      body: asset.blob
+    });
 
-  if (!uploadResponse.ok) {
-    throw new Error("Could not upload media asset.");
-  }
+    if (!uploadResponse.ok) {
+      throw new Error("Direct upload failed.");
+    }
 
-  if (signedUpload.publicUrl) {
+    if (signedUpload.publicUrl) {
+      return {
+        objectKey: signedUpload.objectKey,
+        readUrl: signedUpload.publicUrl
+      };
+    }
+
+    const signedRead = await apiRequest<SignedReadResponse>(`/media/signed-read?objectKey=${encodeURIComponent(signedUpload.objectKey)}`, {
+      accessToken
+    });
+
     return {
       objectKey: signedUpload.objectKey,
-      readUrl: signedUpload.publicUrl
+      readUrl: signedRead.readUrl
     };
+  } catch {
+    return apiRequest<SignedReadResponse & { objectKey: string }>(
+      `/media/upload?fileName=${encodeURIComponent(asset.fileName)}&contentType=${encodeURIComponent(asset.contentType)}`,
+      {
+        method: "POST",
+        accessToken,
+        headers: {
+          "Content-Type": asset.contentType
+        },
+        rawBody: asset.blob
+      }
+    );
   }
-
-  const signedRead = await apiRequest<SignedReadResponse>(`/media/signed-read?objectKey=${encodeURIComponent(signedUpload.objectKey)}`, {
-    accessToken
-  });
-
-  return {
-    objectKey: signedUpload.objectKey,
-    readUrl: signedRead.readUrl
-  };
 }
 
 const isBlobUrl = (value: string) => value.startsWith("blob:");
@@ -5562,6 +5581,7 @@ function StudioPage({
   const noticeAudioContextRef = useRef<AudioContext | null>(null);
   const hasLoadedStudioDraftRef = useRef(false);
   const lastAutoSavedSignatureRef = useRef("");
+  const restoredLocalDraftRef = useRef(false);
 
   const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
   const studioStorageKey = "histora-studio-local-draft-v1";
@@ -5656,7 +5676,7 @@ function StudioPage({
 
     void apiRequest<ApiStory[]>("/stories/mine", { accessToken })
       .then((stories) => {
-        if (cancelled || stories.length === 0) {
+        if (cancelled || stories.length === 0 || restoredLocalDraftRef.current) {
           return;
         }
 
@@ -5772,6 +5792,7 @@ function StudioPage({
         setAllowComments(savedDraft.allowComments);
       }
       if (Array.isArray(savedDraft.chapters) && savedDraft.chapters.length > 0) {
+        restoredLocalDraftRef.current = true;
         setChapters(
           savedDraft.chapters.map((chapter) => ({
             ...chapter,
@@ -5782,6 +5803,7 @@ function StudioPage({
         );
       }
       if (Array.isArray(savedDraft.timelineEntries) && (!savedDraft.chapters || savedDraft.chapters.length === 0)) {
+        restoredLocalDraftRef.current = true;
         setTimelineEntries(savedDraft.timelineEntries.length ? savedDraft.timelineEntries : [createEmptyTimelineEntry()]);
       }
       if (Array.isArray(savedDraft.draftHistory) && savedDraft.draftHistory.length > 0) {
@@ -5791,7 +5813,7 @@ function StudioPage({
         setTranscriptionLanguage(savedDraft.transcriptionLanguage);
       }
 
-      setStudioMessage("Local studio draft restored.");
+      setStudioMessage("Autosaved draft restored.");
     } catch {
       setStudioMessage("Could not restore the last local studio draft.");
     } finally {
@@ -6769,7 +6791,7 @@ function StudioPage({
       )
     );
     void ensureStoryMediaUploaded(snapshot)
-      .then((uploadedChapters) => persistStory(buildStoryPayload("draft", uploadedChapters), "Draft saved to API."))
+      .then((uploadedChapters) => persistStory(buildStoryPayload("draft", uploadedChapters), "Autosaved."))
       .catch((error) => {
         setStudioMessage(getErrorMessage(error, "Could not upload chapter media."));
       });
@@ -6863,7 +6885,7 @@ function StudioPage({
       )
     );
     void ensureStoryMediaUploaded(snapshot)
-      .then((uploadedChapters) => persistStory(buildStoryPayload("published", uploadedChapters), "Story published to API."))
+      .then((uploadedChapters) => persistStory(buildStoryPayload("published", uploadedChapters), "Story published."))
       .catch((error) => {
         setStudioMessage(getErrorMessage(error, "Could not publish story media."));
       });
@@ -7049,7 +7071,7 @@ function StudioPage({
       const snapshot = buildChaptersSnapshot();
       const uploadedChapters = await ensureStoryMediaUploaded(snapshot);
       const draftPayload = buildStoryPayload("draft", uploadedChapters);
-      const story = await persistStory(draftPayload, "Draft saved to API.");
+      const story = await persistStory(draftPayload, "Autosaved.");
       const uploadedActiveChapter = uploadedChapters[activeChapterIndex >= 0 ? activeChapterIndex : 0];
       const previewPayload: StudioPreviewPayload = {
         storyId: story.id,

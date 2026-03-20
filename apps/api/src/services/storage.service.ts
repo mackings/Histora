@@ -1,4 +1,4 @@
-import { GetObjectCommand, S3Client, type PutObjectCommandInput } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client, type PutObjectCommandInput } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { env } from "../config/env.js";
@@ -52,6 +52,32 @@ export async function createSignedUploadUrl(input: {
 
   return {
     uploadUrl,
+    objectKey: input.objectKey,
+    publicUrl
+  };
+}
+
+export async function uploadObjectDirect(input: {
+  objectKey: string;
+  contentType: string;
+  body: Uint8Array;
+}) {
+  const client = getStorageClient();
+
+  await client.send(
+    new PutObjectCommand({
+      Bucket: env.R2_BUCKET_NAME,
+      Key: input.objectKey,
+      Body: input.body,
+      ContentType: input.contentType
+    } satisfies PutObjectCommandInput)
+  );
+
+  const publicUrl = env.R2_PUBLIC_BASE_URL
+    ? `${env.R2_PUBLIC_BASE_URL.replace(/\/$/, "")}/${input.objectKey}`
+    : null;
+
+  return {
     objectKey: input.objectKey,
     publicUrl
   };
