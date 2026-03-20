@@ -5174,6 +5174,7 @@ function FeedStoryPage({
   const navigate = useNavigate();
   const { storySlug } = useParams();
   const [stories, setStories] = useState<FeedStoryRecord[]>([]);
+  const [isStoryLoading, setIsStoryLoading] = useState(true);
   const [chapterReplyDrafts, setChapterReplyDrafts] = useState<Record<string, string>>({});
   const [shareFeedback, setShareFeedback] = useState("");
   const [shareSheet, setShareSheet] = useState<ShareSheetPayload | null>(null);
@@ -5192,9 +5193,11 @@ function FeedStoryPage({
     let cancelled = false;
 
     if (!storySlug) {
+      setIsStoryLoading(false);
       return;
     }
 
+    setIsStoryLoading(true);
     void apiRequest<ApiStory>(`/stories/public/${storySlug}`)
       .then(async (storyPayload) => {
         const nextStory = toFeedStoryRecord({
@@ -5230,10 +5233,12 @@ function FeedStoryPage({
         }));
 
         setStories([nextStory]);
+        setIsStoryLoading(false);
       })
       .catch((error) => {
         if (!cancelled) {
           setShareFeedback(getErrorMessage(error, "Could not load this story."));
+          setIsStoryLoading(false);
         }
       });
 
@@ -5389,6 +5394,17 @@ function FeedStoryPage({
     setHelpTarget(null);
     setConsentAccepted(false);
   };
+
+  if (isStoryLoading) {
+    return (
+      <main className="page-shell">
+        <section className="card feed-reader-empty">
+          <h1>Loading story...</h1>
+          <p>Fetching the published story and chapter thread.</p>
+        </section>
+      </main>
+    );
+  }
 
   if (!story) {
     return (

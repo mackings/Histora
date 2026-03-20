@@ -36,24 +36,28 @@ export async function enqueueCounterSync(targetType: "status" | "anonymousMessag
     return;
   }
 
-  await queue.add(
-    `${targetType}-counter-sync`,
-    {
-      type:
-        targetType === "status"
-          ? "statusCounterSync"
-          : targetType === "story"
-            ? "storyCounterSync"
-            : "anonymousMessageCounterSync",
-      targetType,
-      statusId
-    },
-    {
-      jobId: `${targetType}:${statusId}`,
-      removeOnComplete: 100,
-      removeOnFail: 100
-    }
-  );
+  try {
+    await queue.add(
+      `${targetType}-counter-sync`,
+      {
+        type:
+          targetType === "status"
+            ? "statusCounterSync"
+            : targetType === "story"
+              ? "storyCounterSync"
+              : "anonymousMessageCounterSync",
+        targetType,
+        statusId
+      },
+      {
+        jobId: `${targetType}:${statusId}`,
+        removeOnComplete: 100,
+        removeOnFail: 100
+      }
+    );
+  } catch (error) {
+    console.error("Failed to enqueue counter sync", { targetType, statusId, error });
+  }
 }
 
 export function registerQueueWorkers() {
