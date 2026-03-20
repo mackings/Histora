@@ -188,6 +188,7 @@ export const signedUploadSchema = z.object({
     .string()
     .min(3)
     .max(120)
+    .transform((value) => value.split(";")[0]?.trim().toLowerCase() ?? value)
     .refine(
       (value) =>
         [

@@ -495,12 +495,13 @@ async function uploadMediaAsset(
   accessToken: string,
   asset: { blob: Blob; fileName: string; contentType: string }
 ) {
+  const normalizedContentType = asset.contentType.split(";")[0]?.trim().toLowerCase() || asset.contentType;
   const signedUpload = await apiRequest<SignedUploadResponse>("/media/signed-upload", {
     method: "POST",
     accessToken,
     body: {
       fileName: asset.fileName,
-      contentType: asset.contentType
+      contentType: normalizedContentType
     }
   });
 
@@ -508,7 +509,7 @@ async function uploadMediaAsset(
     const uploadResponse = await fetch(signedUpload.uploadUrl, {
       method: "PUT",
       headers: {
-        "Content-Type": asset.contentType
+        "Content-Type": normalizedContentType
       },
       body: asset.blob
     });
@@ -534,12 +535,12 @@ async function uploadMediaAsset(
     };
   } catch {
     return apiRequest<SignedReadResponse & { objectKey: string }>(
-      `/media/upload?fileName=${encodeURIComponent(asset.fileName)}&contentType=${encodeURIComponent(asset.contentType)}`,
+      `/media/upload?fileName=${encodeURIComponent(asset.fileName)}&contentType=${encodeURIComponent(normalizedContentType)}`,
       {
         method: "POST",
         accessToken,
         headers: {
-          "Content-Type": asset.contentType
+          "Content-Type": normalizedContentType
         },
         rawBody: asset.blob
       }
@@ -7208,6 +7209,28 @@ function StudioPage({
     }))
   });
 
+  const validateStoryBeforePersist = () => {
+    const summaryLength = storySummary.trim().length;
+
+    if (storyTitle.trim().length < 3) {
+      const message = "Add a clearer story title before continuing.";
+      setStudioMessage(message);
+      openStudioNotice("Story title too short", message);
+      scrollToSectionTop(mediaSectionRef);
+      return false;
+    }
+
+    if (summaryLength < 40) {
+      const message = `Story summary needs at least 40 characters. You currently have ${summaryLength}.`;
+      setStudioMessage(message);
+      openStudioNotice("Story summary too short", message);
+      scrollToSectionTop(mediaSectionRef);
+      return false;
+    }
+
+    return true;
+  };
+
   const persistStory = async (payload: ReturnType<typeof buildStoryPayload>, successMessage: string) => {
     const story = currentStoryId
       ? await apiRequest<ApiStory>(`/stories/${currentStoryId}`, {
@@ -7287,6 +7310,10 @@ function StudioPage({
   };
 
   const handlePreviewToggle = async () => {
+    if (!validateStoryBeforePersist()) {
+      return;
+    }
+
     try {
       const snapshot = buildChaptersSnapshot();
       const uploadedChapters = await ensureStoryMediaUploaded(snapshot);
@@ -7328,7 +7355,9 @@ function StudioPage({
       setStudioMessage(`Preview opened for ${uploadedActiveChapter?.title || activeChapterLabel}. Review it before publishing.`);
       navigate("/studio/preview");
     } catch (error) {
-      setStudioMessage(getErrorMessage(error, "Could not open preview."));
+      const message = getErrorMessage(error, "Could not open preview.");
+      setStudioMessage(message);
+      openStudioNotice("Preview failed", message);
     }
   };
 
