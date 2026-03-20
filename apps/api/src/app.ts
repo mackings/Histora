@@ -3,7 +3,6 @@ import cors from "cors";
 import express from "express";
 import * as rateLimitModule from "express-rate-limit";
 import * as helmetModule from "helmet";
-import morgan from "morgan";
 
 import { createCorsOptions } from "./config/cors.js";
 import { env } from "./config/env.js";
@@ -26,22 +25,54 @@ export function createApp() {
     ? rateLimitModule.default
     : (rateLimitModule as unknown as { rateLimit: typeof import("express-rate-limit").default }).rateLimit) as typeof import("express-rate-limit").default;
   const app = express();
-  const shouldSkipRequestLog = (request: express.Request) => {
-    const userAgent = request.header("user-agent") ?? "";
-
-    if (request.path === "/health") {
-      return true;
+  const truncateLogValue = (value: string) => (value.length > 1200 ? `${value.slice(0, 1200)}...` : value);
+  const formatLogPayload = (value: unknown) => {
+    if (typeof value === "undefined") {
+      return "";
     }
 
-    if (request.path === "/" && (request.method === "HEAD" || userAgent.includes("Go-http-client"))) {
-      return true;
+    if (typeof value === "string") {
+      return truncateLogValue(value);
     }
 
-    if (userAgent.includes("Render/1.0")) {
-      return true;
+    try {
+      return truncateLogValue(JSON.stringify(value));
+    } catch {
+      return "[unserializable]";
+    }
+  };
+  const apiResponseLogger: express.RequestHandler = (request, response, next) => {
+    if (!request.path.startsWith("/api/")) {
+      next();
+      return;
     }
 
-    return false;
+    let responsePayload: unknown;
+    const originalJson = response.json.bind(response);
+    const originalSend = response.send.bind(response);
+
+    response.json = ((body: unknown) => {
+      responsePayload = body;
+      return originalJson(body);
+    }) as typeof response.json;
+
+    response.send = ((body?: unknown) => {
+      if (typeof responsePayload === "undefined") {
+        responsePayload = body;
+      }
+      return originalSend(body);
+    }) as typeof response.send;
+
+    response.on("finish", () => {
+      const payloadText = formatLogPayload(responsePayload);
+      const parts = [`[API] ${request.method} ${request.originalUrl} ${response.statusCode}`];
+      if (payloadText) {
+        parts.push(`body=${payloadText}`);
+      }
+      console.log(parts.join(" "));
+    });
+
+    next();
   };
 
   app.set("trust proxy", 1);
@@ -61,11 +92,7 @@ export function createApp() {
   );
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
-  app.use(
-    morgan(env.NODE_ENV === "production" ? "combined" : "dev", {
-      skip: shouldSkipRequestLog
-    })
-  );
+  app.use(apiResponseLogger);
 
   app.get("/", (_request, response) => {
     response.status(200).json({ ok: true, service: "Histora API" });

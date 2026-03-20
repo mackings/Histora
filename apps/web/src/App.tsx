@@ -552,6 +552,52 @@ const isBlobUrl = (value: string) => value.startsWith("blob:");
 const getErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error && error.message.trim() ? error.message : fallback;
 
+const playStudioNoticeTone = (audioContextRef: { current: AudioContext | null }) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const AudioContextConstructor =
+    window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+  if (!AudioContextConstructor) {
+    return;
+  }
+
+  const audioContext = audioContextRef.current ?? new AudioContextConstructor();
+  audioContextRef.current = audioContext;
+
+  void audioContext.resume().then(() => {
+    const startAt = audioContext.currentTime;
+    const pulse = (offset: number, frequency: number, duration: number) => {
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      const pulseStart = startAt + offset;
+
+      oscillator.type = "triangle";
+      oscillator.frequency.setValueAtTime(frequency, pulseStart);
+      oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.88, pulseStart + duration);
+      gainNode.gain.setValueAtTime(0.0001, pulseStart);
+      gainNode.gain.exponentialRampToValueAtTime(0.09, pulseStart + 0.02);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, pulseStart + duration);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      oscillator.start(pulseStart);
+      oscillator.stop(pulseStart + duration);
+
+      oscillator.onended = () => {
+        oscillator.disconnect();
+        gainNode.disconnect();
+      };
+    };
+
+    pulse(0, 720, 0.16);
+    pulse(0.2, 620, 0.22);
+  }).catch(() => undefined);
+};
+
 const buildDeviceLabel = () => {
   if (typeof navigator === "undefined") {
     return "Unknown device";
@@ -5994,6 +6040,8 @@ function StudioPage({
       return;
     }
 
+    const snapshotChapters = getLiveChaptersSnapshot();
+
     const draftPayload = {
       currentStoryId,
       activeChapter,
@@ -6004,7 +6052,7 @@ function StudioPage({
       storySummary,
       chapterType,
       allowComments,
-      chapters,
+      chapters: snapshotChapters,
       timelineEntries,
       draftHistory,
       transcriptionLanguage
@@ -6071,53 +6119,6 @@ function StudioPage({
       }
     };
   }, []);
-
-  useEffect(() => {
-    if (!studioNotice || typeof window === "undefined") {
-      return;
-    }
-
-    const AudioContextConstructor =
-      window.AudioContext ||
-      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-
-    if (!AudioContextConstructor) {
-      return;
-    }
-
-    const audioContext = noticeAudioContextRef.current ?? new AudioContextConstructor();
-    noticeAudioContextRef.current = audioContext;
-
-    void audioContext.resume().then(() => {
-      const startAt = audioContext.currentTime;
-      const playWarningPulse = (offset: number, frequency: number, duration: number) => {
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-        const pulseStart = startAt + offset;
-
-        oscillator.type = "triangle";
-        oscillator.frequency.setValueAtTime(frequency, pulseStart);
-        oscillator.frequency.exponentialRampToValueAtTime(frequency * 0.88, pulseStart + duration);
-
-        gainNode.gain.setValueAtTime(0.0001, pulseStart);
-        gainNode.gain.exponentialRampToValueAtTime(0.09, pulseStart + 0.02);
-        gainNode.gain.exponentialRampToValueAtTime(0.0001, pulseStart + duration);
-
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        oscillator.start(pulseStart);
-        oscillator.stop(pulseStart + duration);
-
-        oscillator.onended = () => {
-          oscillator.disconnect();
-          gainNode.disconnect();
-        };
-      };
-
-      playWarningPulse(0, 720, 0.16);
-      playWarningPulse(0.2, 620, 0.22);
-    }).catch(() => undefined);
-  }, [studioNotice]);
 
   const appendImages = (files: FileList | null, source: string) => {
     if (!files?.length) {
@@ -6188,27 +6189,58 @@ function StudioPage({
       recorder.onstop = () => {
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
         const url = URL.createObjectURL(blob);
+        const nextVoiceName = `Voice note ${voiceNotesRef.current.length + 1}`;
 
-        setVoiceNotes((current) => {
-          const updated = [
-            ...current,
-            {
-              name: `Voice note ${current.length + 1}`,
-              url,
-              source: "Recorded in studio",
-              blob
+        setVoiceRecordingStatus("Uploading voice note...");
+
+        void uploadMediaAsset(accessToken, {
+          blob,
+          fileName: `${nextVoiceName}.webm`,
+          contentType: blob.type || "audio/webm"
+        })
+          .then((uploaded) => {
+            setVoiceNotes((current) => {
+              const updated = [
+                ...current,
+                {
+                  name: nextVoiceName,
+                  url: uploaded.readUrl,
+                  source: "Recorded in studio",
+                  objectKey: uploaded.objectKey,
+                  blob
+                }
+              ];
+              updateActiveChapterMedia("voiceNotes", updated);
+              return updated;
+            });
+            if (isBlobUrl(url)) {
+              URL.revokeObjectURL(url);
             }
-          ];
-          updateActiveChapterMedia("voiceNotes", updated);
-          return updated;
-        });
+            setVoiceRecordingStatus("Recording stopped. Voice note saved.");
+          })
+          .catch((error) => {
+            setMediaError(getErrorMessage(error, "Could not save the voice note."));
+            setVoiceNotes((current) => {
+              const updated = [
+                ...current,
+                {
+                  name: nextVoiceName,
+                  url,
+                  source: "Recorded in studio",
+                  blob
+                }
+              ];
+              updateActiveChapterMedia("voiceNotes", updated);
+              return updated;
+            });
+            setVoiceRecordingStatus("Recording stopped. Voice note saved locally.");
+          });
 
         stream.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
         mediaRecorderRef.current = null;
         setIsRecordingVoice(false);
         setIsVoiceRecordingPaused(false);
-        setVoiceRecordingStatus("Recording stopped. Voice note saved.");
       };
 
       recorder.start();
@@ -6345,6 +6377,25 @@ function StudioPage({
       words: getChapterWordCount(chapter.body),
       isComplete: isChapterComplete(chapter)
     }));
+
+  const getLiveChaptersSnapshot = () => {
+    const latestBody = chapterBodyRef.current?.innerHTML ?? activeChapterEntry?.body ?? "";
+    const latestWords = getChapterWordCount(latestBody);
+    const targetIndex = activeChapterIndex >= 0 ? activeChapterIndex : 0;
+
+    return chapters.map((chapter, index) =>
+      index === targetIndex
+        ? {
+            ...chapter,
+            body: latestBody,
+            words: latestWords,
+            imageAttachments: [...imageAttachments],
+            voiceNotes: [...voiceNotes],
+            timelineEntries: [...timelineEntries]
+          }
+        : chapter
+    );
+  };
 
   const refreshEditorState = () => {
     const selection = typeof window !== "undefined" ? window.getSelection() : null;
@@ -6898,6 +6949,7 @@ function StudioPage({
 
   const openStudioNotice = (title: string, body: string) => {
     setStudioNotice({ title, body });
+    playStudioNoticeTone(noticeAudioContextRef);
   };
 
   useEffect(() => {
