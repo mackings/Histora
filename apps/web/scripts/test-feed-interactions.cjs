@@ -4,6 +4,12 @@ const baseUrl = process.env.HISTORA_WEB_URL || "http://localhost:3000";
 const targetStoryTitle = "Feed author public story";
 const targetStorySlug = "feed-author-public-story";
 
+async function feedButtonsCount(card, index) {
+  const text = (await card.locator(".feed-card-actions button").nth(index).innerText().catch(() => "")) || "";
+  const match = text.match(/\d+/);
+  return match ? Number(match[0]) : 0;
+}
+
 async function run() {
   const browser = await chromium.launch({
     headless: true,
@@ -54,6 +60,8 @@ async function run() {
 
   const targetCard = page.locator("article.post-card").filter({ hasText: targetStoryTitle }).first();
   await targetCard.waitFor({ state: "visible", timeout: 15000 });
+  const feedLikeCountBefore = await feedButtonsCount(targetCard, 0);
+  const feedBookmarkCountBefore = await feedButtonsCount(targetCard, 2);
 
   const feedButtons = targetCard.locator(".feed-card-actions button");
   const feedLikeButton = feedButtons.nth(0);
@@ -73,6 +81,11 @@ async function run() {
   await page.waitForLoadState("networkidle");
 
   const storyTitle = await page.locator(".story-reader-stage h1").innerText().catch(() => null);
+  const storyOpenedWithoutNotFoundFlash = !(await page.locator("text=Story not found").count());
+  const stageActionButtons = page.locator(".story-reader-stage-actions button");
+  const stageActionCount = await stageActionButtons.count();
+  const storyLikeCount = await stageActionButtons.nth(0).innerText().catch(() => "");
+  const storyBookmarkText = await stageActionButtons.nth(1).innerText().catch(() => "");
   const topFollowButton = page.getByRole("button", { name: /^FOLLOW$|^UNFOLLOW$/i }).first();
   const initialFollowText = await topFollowButton.innerText();
 
@@ -114,7 +127,13 @@ async function run() {
       {
         feedLikeActive,
         feedBookmarkActive,
+        feedLikeCountBefore,
+        feedBookmarkCountBefore,
         storyTitle,
+        storyOpenedWithoutNotFoundFlash,
+        stageActionCount,
+        storyLikeCount,
+        storyBookmarkText,
         initialFollowText,
         afterFollowText,
         afterUnfollowText,

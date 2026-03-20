@@ -264,6 +264,9 @@ type ApiStory = {
   tags: string[];
   readCount: number;
   reactionsCount: number;
+  likesCount: number;
+  bookmarksCount: number;
+  commentsCount: number;
   chapters: Array<{
     title: string;
     body: string;
@@ -927,6 +930,7 @@ const storyTypeToGenre = (type: ApiStory["chapters"][number]["type"]) => {
 };
 
 const toFeedStoryRecord = (story: ApiFeedStory): FeedStoryRecord => ({
+  id: story.id,
   author: story.authorName,
   handle: `@${story.authorUsername}`,
   title: story.title,
@@ -936,11 +940,11 @@ const toFeedStoryRecord = (story: ApiFeedStory): FeedStoryRecord => ({
   genre: storyTypeToGenre(story.chapters[0]?.type ?? "memory"),
   chapterCount: story.chapterCount,
   comments: story.commentCount,
-  saves: String(story.reactionsCount),
+  saves: String(story.bookmarksCount),
   slug: story.slug,
   anonymous: story.anonymous,
   shares: 0,
-  likes: story.reactionsCount,
+  likes: story.likesCount,
   liked: false,
   bookmarked: false,
   following: false,
@@ -3367,6 +3371,7 @@ type FeedStoryChapter = {
 };
 
 type FeedStoryRecord = (typeof feedPreview)[number] & {
+  id: string;
   slug: string;
   anonymous: boolean;
   shares: number;
@@ -3627,6 +3632,7 @@ function ShareSheet({
 
 const buildFeedStories = (): FeedStoryRecord[] =>
   feedPreview.map((post, index) => ({
+    id: `preview-story-${index + 1}`,
     ...post,
     slug: slugifyStoryTitle(post.title),
     anonymous: post.visibility === "ANON",
@@ -4645,7 +4651,7 @@ function FeedPage({
   const [anonymousReplyDraft, setAnonymousReplyDraft] = useState("");
   const [helpTarget, setHelpTarget] = useState<AnonymousFeedSource | null>(null);
   const [consentAccepted, setConsentAccepted] = useState(false);
-  const openStory = (slug: string) => navigate(`/feed/story/${slug}`);
+  const openStory = (story: FeedStoryRecord) => navigate(`/feed/story/${story.slug}`, { state: { prefetchedStory: story } });
   const openShareSheet = (post: FeedStoryRecord) => {
     const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
     setShareSheet({
@@ -4776,8 +4782,8 @@ function FeedPage({
       return;
     }
 
-    void apiRequest<{ storyId: string; action: "like" | "bookmark"; active: boolean }>(
-      `/stories/${targetPost.chapters[0]?.id.split(":")[0] ?? ""}/reactions`,
+    void apiRequest<{ storyId: string; action: "like" | "bookmark"; active: boolean; likesCount: number; bookmarksCount: number; reactionsCount: number }>(
+      `/stories/${targetPost.id}/reactions`,
       {
         method: "POST",
         accessToken,
@@ -4788,7 +4794,12 @@ function FeedPage({
         setFeedPosts((current) =>
           current.map((post) =>
             post.slug === slug
-              ? { ...post, liked: result.active, likes: Math.max(0, post.likes + (result.active ? 1 : -1)) }
+              ? {
+                  ...post,
+                  liked: result.active,
+                  likes: result.likesCount,
+                  saves: String(result.bookmarksCount)
+                }
               : post
           )
         );
@@ -4802,8 +4813,8 @@ function FeedPage({
       return;
     }
 
-    void apiRequest<{ storyId: string; action: "like" | "bookmark"; active: boolean }>(
-      `/stories/${targetPost.chapters[0]?.id.split(":")[0] ?? ""}/reactions`,
+    void apiRequest<{ storyId: string; action: "like" | "bookmark"; active: boolean; likesCount: number; bookmarksCount: number; reactionsCount: number }>(
+      `/stories/${targetPost.id}/reactions`,
       {
         method: "POST",
         accessToken,
@@ -4812,7 +4823,16 @@ function FeedPage({
     )
       .then((result) => {
         setFeedPosts((current) =>
-          current.map((post) => (post.slug === slug ? { ...post, bookmarked: result.active } : post))
+          current.map((post) =>
+            post.slug === slug
+              ? {
+                  ...post,
+                  bookmarked: result.active,
+                  likes: result.likesCount,
+                  saves: String(result.bookmarksCount)
+                }
+              : post
+          )
         );
       })
       .catch((error) => setShareFeedback(getErrorMessage(error, "Could not update bookmark.")));
@@ -4978,7 +4998,7 @@ function FeedPage({
         <div className="feed-column">
           {feedPosts.map((post, index) => (
             <Fragment key={post.title}>
-              <article className="post-card card post-card-clickable" onClick={() => openStory(post.slug)}>
+              <article className="post-card card post-card-clickable" onClick={() => openStory(post)}>
                 <div className="post-top">
                   <div className="post-author">
                     <span className="post-avatar">{post.author.slice(0, 1)}</span>
@@ -5010,7 +5030,7 @@ function FeedPage({
                     </button>
                     <button className="feed-action-pill" onClick={(event) => {
                       event.stopPropagation();
-                      openStory(post.slug);
+                      openStory(post);
                     }} type="button">
                       <Icon className="inline-icon" name="comment" />
                       {post.comments}
@@ -5172,9 +5192,13 @@ function FeedStoryPage({
   accessToken: string;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { storySlug } = useParams();
-  const [stories, setStories] = useState<FeedStoryRecord[]>([]);
-  const [isStoryLoading, setIsStoryLoading] = useState(true);
+  const prefetchedStory = (location.state as { prefetchedStory?: FeedStoryRecord } | null)?.prefetchedStory ?? null;
+  const [stories, setStories] = useState<FeedStoryRecord[]>(() =>
+    prefetchedStory && prefetchedStory.slug === storySlug ? [prefetchedStory] : []
+  );
+  const [isStoryLoading, setIsStoryLoading] = useState(!prefetchedStory || prefetchedStory.slug !== storySlug);
   const [chapterReplyDrafts, setChapterReplyDrafts] = useState<Record<string, string>>({});
   const [shareFeedback, setShareFeedback] = useState("");
   const [shareSheet, setShareSheet] = useState<ShareSheetPayload | null>(null);
@@ -5197,7 +5221,9 @@ function FeedStoryPage({
       return;
     }
 
-    setIsStoryLoading(true);
+    if (!prefetchedStory || prefetchedStory.slug !== storySlug) {
+      setIsStoryLoading(true);
+    }
     void apiRequest<ApiStory>(`/stories/public/${storySlug}`)
       .then(async (storyPayload) => {
         const nextStory = toFeedStoryRecord({
@@ -5245,7 +5271,7 @@ function FeedStoryPage({
     return () => {
       cancelled = true;
     };
-  }, [storySlug]);
+  }, [prefetchedStory, storySlug]);
 
   useEffect(() => {
     if (!story) {
@@ -5288,7 +5314,7 @@ function FeedStoryPage({
       return;
     }
 
-    void apiRequest<{ active: boolean }>(`/stories/${story.chapters[0]?.id.split(":")[0] ?? ""}/reactions`, {
+    void apiRequest<{ active: boolean; likesCount: number; bookmarksCount: number; reactionsCount: number }>(`/stories/${story.id}/reactions`, {
       method: "POST",
       accessToken,
       body: { action: "like" }
@@ -5297,7 +5323,8 @@ function FeedStoryPage({
         updateStory((current) => ({
           ...current,
           liked: result.active,
-          likes: Math.max(0, current.likes + (result.active ? 1 : -1))
+          likes: result.likesCount,
+          saves: String(result.bookmarksCount)
         }));
       })
       .catch((error) => setShareFeedback(getErrorMessage(error, "Could not update story like.")));
@@ -5308,13 +5335,18 @@ function FeedStoryPage({
       return;
     }
 
-    void apiRequest<{ active: boolean }>(`/stories/${story.chapters[0]?.id.split(":")[0] ?? ""}/reactions`, {
+    void apiRequest<{ active: boolean; likesCount: number; bookmarksCount: number; reactionsCount: number }>(`/stories/${story.id}/reactions`, {
       method: "POST",
       accessToken,
       body: { action: "bookmark" }
     })
       .then((result) => {
-        updateStory((current) => ({ ...current, bookmarked: result.active }));
+        updateStory((current) => ({
+          ...current,
+          bookmarked: result.active,
+          likes: result.likesCount,
+          saves: String(result.bookmarksCount)
+        }));
       })
       .catch((error) => setShareFeedback(getErrorMessage(error, "Could not update bookmark.")));
   };
@@ -5559,31 +5591,6 @@ function FeedStoryPage({
                   </section>
                 ) : null}
               </div>
-
-              <div className="post-actions story-reader-chapter-actions">
-              <button className={activeChapter.liked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={() => toggleChapterLike(activeChapter.id)} type="button">
-                <Icon className="inline-icon" name="heart" />
-                {activeChapter.likes}
-              </button>
-              <button
-                className="feed-action-pill"
-                onClick={() =>
-                  openShareSheet({
-                    title: `${story.title} — ${activeChapter.title}`,
-                    text: `${activeChapter.title} from ${story.title} by ${story.author}`,
-                    url: `${typeof window !== "undefined" ? window.location.origin : ""}/feed/story/${story.slug}#${activeChapter.id}`
-                  })
-                }
-                type="button"
-              >
-                <Icon className="inline-icon" name="share" />
-                Share chapter
-              </button>
-              <button className={story.following ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={toggleFollow} type="button">
-                <Icon className="inline-icon" name="spark" />
-                {story.following ? "Following" : "Follow"}
-              </button>
-            </div>
 
               <footer className="chapter-thread-footer">
                 <div className="chapter-section-head">

@@ -158,7 +158,7 @@ export async function getMyStories(authorId: string) {
   const stories = await StoryModel.find({ authorId })
     .sort({ updatedAt: -1 })
     .select(
-      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount chapters createdAt updatedAt"
+      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount likesCount bookmarksCount commentsCount chapters createdAt updatedAt"
     );
 
   const payload = await Promise.all(stories.map((story) => serializeStory(story)));
@@ -200,7 +200,7 @@ export async function getPublicFeed() {
     .sort({ createdAt: -1 })
     .limit(20)
     .select(
-      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount chapters createdAt updatedAt"
+      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount likesCount bookmarksCount commentsCount chapters createdAt updatedAt"
     );
 
   const chapterCommentCounts = await Promise.all(
@@ -249,6 +249,17 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
     active = true;
   }
 
+  if (action === "like") {
+    story.likesCount = Math.max(0, story.likesCount + (active ? 1 : -1));
+  }
+
+  if (action === "bookmark") {
+    story.bookmarksCount = Math.max(0, story.bookmarksCount + (active ? 1 : -1));
+  }
+
+  story.reactionsCount = Math.max(0, story.likesCount + story.bookmarksCount);
+  await story.save();
+
   await enqueueCounterSync("story", story.id);
   await deleteCache("stories:feed");
   await deleteCache(`stories:public:${story.slug}`);
@@ -257,7 +268,10 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
   return {
     storyId: story.id,
     action,
-    active
+    active,
+    likesCount: story.likesCount,
+    bookmarksCount: story.bookmarksCount,
+    reactionsCount: story.reactionsCount
   };
 }
 
