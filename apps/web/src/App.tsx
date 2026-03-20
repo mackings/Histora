@@ -378,9 +378,69 @@ const deviceIdentityStorageKey = "histora-device-identity-v1";
 const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
 const pushServiceWorkerPath = "/histora-push-sw.js";
 let latestAccessToken: string | null = null;
+const storyPrefetchCache = new Map<string, ApiStory>();
+const storyPrefetchInflight = new Map<string, Promise<ApiStory>>();
+
+type RealtimeEventMessage =
+  | {
+      type: "event";
+      channel: string;
+      payload:
+        | {
+            kind: "story.reaction.updated";
+            storyId: string;
+            action?: "like" | "bookmark";
+            active?: boolean;
+            likesCount: number;
+            bookmarksCount: number;
+            reactionsCount: number;
+          }
+        | {
+            kind: "comment.created";
+            comment: ApiComment;
+          }
+        | {
+            kind: "follow.updated";
+            username: string;
+            active: boolean;
+          }
+        | {
+            kind: "status.created" | "status.deleted" | "status.reaction.updated";
+            [key: string]: unknown;
+          }
+        | {
+            kind: "anonymous.public.created";
+            [key: string]: unknown;
+          };
+    }
+  | {
+      type: "ready" | "subscribed" | "error";
+      channel?: string;
+      error?: string;
+      channels?: string[];
+    };
 
 const updateLatestAccessToken = (token: string | null) => {
   latestAccessToken = token;
+};
+
+const getEventsSocketUrl = (accessToken: string) => {
+  const baseUrl = new URL(apiBaseUrl);
+  const protocol = baseUrl.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${baseUrl.host}/ws/events?token=${encodeURIComponent(accessToken)}`;
+};
+
+const getCachedStory = (slug: string) => storyPrefetchCache.get(slug) ?? null;
+
+const updateCachedStoryCounts = (
+  storyId: string,
+  updater: (story: ApiStory) => ApiStory
+) => {
+  for (const [slug, story] of storyPrefetchCache.entries()) {
+    if (story.id === storyId) {
+      storyPrefetchCache.set(slug, updater(story));
+    }
+  }
 };
 
 class ApiRequestError extends Error {
@@ -490,6 +550,32 @@ async function apiRequest<T>(
   }
 
   return (await response.json()) as T;
+}
+
+async function prefetchStoryBySlug(slug: string) {
+  const cachedStory = storyPrefetchCache.get(slug);
+  if (cachedStory) {
+    return cachedStory;
+  }
+
+  const inflightRequest = storyPrefetchInflight.get(slug);
+  if (inflightRequest) {
+    return inflightRequest;
+  }
+
+  const request = apiRequest<ApiStory>(`/stories/public/${slug}`)
+    .then((story) => {
+      storyPrefetchCache.set(slug, story);
+      storyPrefetchInflight.delete(slug);
+      return story;
+    })
+    .catch((error) => {
+      storyPrefetchInflight.delete(slug);
+      throw error;
+    });
+
+  storyPrefetchInflight.set(slug, request);
+  return request;
 }
 
 async function uploadMediaAsset(
@@ -935,6 +1021,7 @@ const toFeedStoryRecord = (story: ApiFeedStory): FeedStoryRecord => ({
   handle: `@${story.authorUsername}`,
   title: story.title,
   excerpt: story.summary,
+  coverImageUrl: story.coverImageUrl ?? null,
   reads: String(story.readCount),
   visibility: story.anonymous ? "ANON" : story.visibility.toUpperCase(),
   genre: storyTypeToGenre(story.chapters[0]?.type ?? "memory"),
@@ -3376,6 +3463,7 @@ type FeedStoryChapter = {
 type FeedStoryRecord = (typeof feedPreview)[number] & {
   id: string;
   slug: string;
+  coverImageUrl?: string | null;
   anonymous: boolean;
   shares: number;
   likes: number;
@@ -3637,6 +3725,7 @@ const buildFeedStories = (): FeedStoryRecord[] =>
   feedPreview.map((post, index) => ({
     id: `preview-story-${index + 1}`,
     ...post,
+    coverImageUrl: null,
     slug: slugifyStoryTitle(post.title),
     anonymous: post.visibility === "ANON",
     shares: [48, 31, 66][index] ?? 12,
@@ -4641,9 +4730,11 @@ function EditProfilePage({
 }
 
 function FeedPage({
-  accessToken
+  accessToken,
+  currentUserId
 }: {
   accessToken: string;
+  currentUserId: string;
 }) {
   const navigate = useNavigate();
   const [feedPosts, setFeedPosts] = useState<FeedStoryRecord[]>([]);
@@ -4656,6 +4747,9 @@ function FeedPage({
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [pendingFeedActions, setPendingFeedActions] = useState<Record<string, boolean>>({});
   const openStory = (story: FeedStoryRecord) => navigate(`/feed/story/${story.slug}`, { state: { prefetchedStory: story } });
+  const warmStory = (slug: string) => {
+    void prefetchStoryBySlug(slug).catch(() => undefined);
+  };
   const openShareSheet = (post: FeedStoryRecord) => {
     const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
     setShareSheet({
@@ -4694,6 +4788,32 @@ function FeedPage({
   }, [accessToken]);
 
   useEffect(() => {
+    if (!feedPosts.length) {
+      return;
+    }
+
+    const warmPosts = () => {
+      feedPosts.slice(0, 4).forEach((post) => warmStory(post.slug));
+    };
+
+    if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+      const idleId = (window as typeof window & {
+        requestIdleCallback: (callback: IdleRequestCallback) => number;
+        cancelIdleCallback?: (id: number) => void;
+      }).requestIdleCallback(() => warmPosts());
+
+      return () => {
+        if ((window as typeof window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback) {
+          (window as typeof window & { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback?.(idleId);
+        }
+      };
+    }
+
+    const timer = globalThis.setTimeout(warmPosts, 180);
+    return () => globalThis.clearTimeout(timer);
+  }, [feedPosts]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -4727,6 +4847,99 @@ function FeedPage({
     window.addEventListener(statusUpdateEvent, handleStatusUpdate as EventListener);
     return () => window.removeEventListener(statusUpdateEvent, handleStatusUpdate as EventListener);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !accessToken) {
+      return;
+    }
+
+    const socket = new WebSocket(getEventsSocketUrl(accessToken));
+
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({ type: "subscribe", channel: "feed" }));
+      socket.send(JSON.stringify({ type: "subscribe", channel: `user:${currentUserId}` }));
+    });
+
+    socket.addEventListener("message", (event) => {
+      try {
+        const message = JSON.parse(event.data as string) as RealtimeEventMessage;
+        if (message.type !== "event") {
+          return;
+        }
+
+        const payload = message.payload;
+
+        if (payload.kind === "story.reaction.updated") {
+          const reactionEvent = payload as Extract<RealtimeEventMessage, { type: "event" }>["payload"] & {
+            kind: "story.reaction.updated";
+            storyId: string;
+            action?: "like" | "bookmark";
+            active?: boolean;
+            likesCount: number;
+            bookmarksCount: number;
+          };
+          updateCachedStoryCounts(reactionEvent.storyId, (story) => ({
+            ...story,
+            likesCount: reactionEvent.likesCount,
+            bookmarksCount: reactionEvent.bookmarksCount,
+            reactionsCount: reactionEvent.likesCount + reactionEvent.bookmarksCount
+          }));
+          setFeedPosts((current) =>
+            current.map((post) =>
+              post.id === reactionEvent.storyId
+                ? {
+                    ...post,
+                    likes: reactionEvent.likesCount,
+                    saves: String(reactionEvent.bookmarksCount),
+                    ...(message.channel === `user:${currentUserId}` && reactionEvent.action
+                      ? {
+                          liked: reactionEvent.action === "like" ? !!reactionEvent.active : post.liked,
+                          bookmarked: reactionEvent.action === "bookmark" ? !!reactionEvent.active : post.bookmarked
+                        }
+                      : {})
+                  }
+                : post
+            )
+          );
+          return;
+        }
+
+        if (payload.kind === "comment.created" && payload.comment.targetType === "storyChapter") {
+          const commentEvent = payload.comment;
+          const [storyId] = commentEvent.targetId.split(":");
+          setFeedPosts((current) =>
+            current.map((post) =>
+              post.id === storyId
+                ? { ...post, comments: post.comments + 1 }
+                : post
+            )
+          );
+          return;
+        }
+
+        if (payload.kind === "follow.updated") {
+          const followEvent = payload as Extract<RealtimeEventMessage, { type: "event" }>["payload"] & {
+            kind: "follow.updated";
+            username: string;
+            active: boolean;
+          };
+          setFeedPosts((current) =>
+            current.map((post) =>
+              post.handle.replace(/^@/, "") === followEvent.username
+                ? { ...post, following: followEvent.active }
+                : post
+            )
+          );
+        }
+      } catch {
+        return;
+      }
+    });
+
+    return () => {
+      socket.close();
+    };
+  }, [accessToken, currentUserId]);
 
   const anonymousFeedSources: AnonymousFeedSource[] = [
     ...feedStatuses.map((status) => ({
@@ -4804,6 +5017,12 @@ function FeedPage({
       }
     )
       .then((result) => {
+        updateCachedStoryCounts(targetPost.id, (story) => ({
+          ...story,
+          likesCount: result.likesCount,
+          bookmarksCount: result.bookmarksCount,
+          reactionsCount: result.reactionsCount
+        }));
         setFeedPosts((current) =>
           current.map((post) =>
             post.slug === slug
@@ -4849,6 +5068,12 @@ function FeedPage({
       }
     )
       .then((result) => {
+        updateCachedStoryCounts(targetPost.id, (story) => ({
+          ...story,
+          likesCount: result.likesCount,
+          bookmarksCount: result.bookmarksCount,
+          reactionsCount: result.reactionsCount
+        }));
         setFeedPosts((current) =>
           current.map((post) =>
             post.slug === slug
@@ -5030,7 +5255,12 @@ function FeedPage({
         <div className="feed-column">
           {feedPosts.map((post, index) => (
             <Fragment key={post.title}>
-              <article className="post-card card post-card-clickable" onClick={() => openStory(post)}>
+              <article
+                className="post-card card post-card-clickable"
+                onClick={() => openStory(post)}
+                onMouseEnter={() => warmStory(post.slug)}
+                onTouchStart={() => warmStory(post.slug)}
+              >
                 <div className="post-top">
                   <div className="post-author">
                     <span className="post-avatar">{post.author.slice(0, 1)}</span>
@@ -5042,7 +5272,14 @@ function FeedPage({
                   <span className="story-tag">{post.visibility}</span>
                 </div>
                 <div className="image-frame">
-                  <img alt={post.title} className="post-image" src={post.chapters[0]?.images[0]?.src || feedStory} />
+                  <img
+                    alt={post.title}
+                    className="post-image"
+                    decoding="async"
+                    fetchPriority={index === 0 ? "high" : "auto"}
+                    loading={index < 2 ? "eager" : "lazy"}
+                    src={post.coverImageUrl || post.chapters[0]?.images[0]?.src || feedStory}
+                  />
                 </div>
                 <div className="post-body">
                   <div className="post-meta-row">
@@ -5219,9 +5456,11 @@ function FeedPage({
 }
 
 function FeedStoryPage({
-  accessToken
+  accessToken,
+  currentUserId
 }: {
   accessToken: string;
+  currentUserId: string;
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -5263,12 +5502,23 @@ function FeedStoryPage({
     if (!prefetchedStory || prefetchedStory.slug !== storySlug) {
       setIsStoryLoading(true);
     }
-    void apiRequest<ApiStory>(`/stories/public/${storySlug}`)
+    const cachedStory = !prefetchedStory || prefetchedStory.slug !== storySlug ? getCachedStory(storySlug) : null;
+    if (cachedStory) {
+      const nextStory = toFeedStoryRecord({
+        ...cachedStory,
+        chapterCount: cachedStory.chapters.length,
+        commentCount: cachedStory.commentsCount
+      });
+      setStories([nextStory]);
+      setIsStoryLoading(false);
+    }
+
+    void prefetchStoryBySlug(storySlug)
       .then(async (storyPayload) => {
         const nextStory = toFeedStoryRecord({
           ...storyPayload,
           chapterCount: storyPayload.chapters.length,
-          commentCount: 0
+          commentCount: storyPayload.commentsCount
         });
 
         const chapterComments = await Promise.all(
@@ -5328,6 +5578,115 @@ function FeedStoryPage({
     const timer = window.setTimeout(() => setCommentToast(""), 2200);
     return () => window.clearTimeout(timer);
   }, [commentToast]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !accessToken) {
+      return;
+    }
+
+    const socket = new WebSocket(getEventsSocketUrl(accessToken));
+
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({ type: "subscribe", channel: "feed" }));
+      socket.send(JSON.stringify({ type: "subscribe", channel: `user:${currentUserId}` }));
+    });
+
+    socket.addEventListener("message", (event) => {
+      try {
+        const message = JSON.parse(event.data as string) as RealtimeEventMessage;
+        if (message.type !== "event" || !storySlug) {
+          return;
+        }
+
+        const payload = message.payload;
+
+        if (payload.kind === "story.reaction.updated") {
+          const reactionEvent = payload as Extract<RealtimeEventMessage, { type: "event" }>["payload"] & {
+            kind: "story.reaction.updated";
+            storyId: string;
+            action?: "like" | "bookmark";
+            active?: boolean;
+            likesCount: number;
+            bookmarksCount: number;
+          };
+          updateCachedStoryCounts(reactionEvent.storyId, (story) => ({
+            ...story,
+            likesCount: reactionEvent.likesCount,
+            bookmarksCount: reactionEvent.bookmarksCount,
+            reactionsCount: reactionEvent.likesCount + reactionEvent.bookmarksCount
+          }));
+          updateStory((current) =>
+            current.id === reactionEvent.storyId
+              ? {
+                  ...current,
+                  likes: reactionEvent.likesCount,
+                  saves: String(reactionEvent.bookmarksCount),
+                  ...(message.channel === `user:${currentUserId}` && reactionEvent.action
+                    ? {
+                        liked: reactionEvent.action === "like" ? !!reactionEvent.active : current.liked,
+                        bookmarked: reactionEvent.action === "bookmark" ? !!reactionEvent.active : current.bookmarked
+                      }
+                    : {})
+                }
+              : current
+          );
+          return;
+        }
+
+        if (payload.kind === "comment.created" && payload.comment.targetType === "storyChapter") {
+          const commentEvent = payload.comment;
+          const [storyId, chapterOrder] = commentEvent.targetId.split(":");
+          updateStory((current) =>
+            current.id === storyId
+              ? {
+                  ...current,
+                  comments: current.comments + 1,
+                  chapters: current.chapters.map((chapter, index) =>
+                    String(index + 1) === chapterOrder &&
+                    !chapter.comments.some(
+                      (entry) =>
+                        entry.text === commentEvent.body &&
+                        entry.handle === `@${commentEvent.authorUsername}`
+                    )
+                      ? {
+                          ...chapter,
+                          comments: [
+                            ...chapter.comments,
+                            {
+                              author: commentEvent.authorName,
+                              handle: `@${commentEvent.authorUsername}`,
+                              text: commentEvent.body,
+                              time: new Date(commentEvent.createdAt).toLocaleDateString()
+                            }
+                          ]
+                        }
+                      : chapter
+                  )
+                }
+              : current
+          );
+          return;
+        }
+
+        if (payload.kind === "follow.updated") {
+          const followEvent = payload as Extract<RealtimeEventMessage, { type: "event" }>["payload"] & {
+            kind: "follow.updated";
+            username: string;
+            active: boolean;
+          };
+          if (story?.handle.replace(/^@/, "") === followEvent.username) {
+            updateStory((current) => ({ ...current, following: followEvent.active }));
+          }
+        }
+      } catch {
+        return;
+      }
+    });
+
+    return () => {
+      socket.close();
+    };
+  }, [accessToken, currentUserId, story?.handle, storySlug]);
 
   const updateStory = (updater: (story: FeedStoryRecord) => FeedStoryRecord) => {
     if (!story) {
@@ -5505,7 +5864,14 @@ function FeedStoryPage({
             chapter.id === chapterId
               ? {
                   ...chapter,
-                  comments: [...chapter.comments.filter((entry) => entry !== optimisticComment), nextComment]
+                  comments: [
+                    ...chapter.comments.filter(
+                      (entry) =>
+                        entry !== optimisticComment &&
+                        !(entry.text === nextComment.text && entry.handle === nextComment.handle && !entry.pending)
+                    ),
+                    nextComment
+                  ]
                 }
               : chapter
           )
@@ -5657,7 +6023,7 @@ function FeedStoryPage({
                     <div className="feed-reader-media-grid">
                       {activeChapter.images.map((image, index) => (
                         <figure className="feed-reader-media-frame" key={image.alt}>
-                          <img alt={image.alt} className="post-image story-reader-image" src={image.src} />
+                          <img alt={image.alt} className="post-image story-reader-image" decoding="async" loading="lazy" src={image.src} />
                           <figcaption>{`Attachment ${index + 1} // ${image.alt}`}</figcaption>
                         </figure>
                       ))}
@@ -8846,15 +9212,15 @@ export default function App() {
     <AppShell isLoggedIn={isLoggedIn}>
       <Routes>
         <Route
-          element={isLoggedIn && authSession ? <FeedPage accessToken={authSession.accessToken} /> : <OnboardingPage />}
+          element={isLoggedIn && authSession ? <FeedPage accessToken={authSession.accessToken} currentUserId={authSession.user.id} /> : <OnboardingPage />}
           path="/"
         />
         <Route
-          element={authSession ? <FeedPage accessToken={authSession.accessToken} /> : <OnboardingPage />}
+          element={authSession ? <FeedPage accessToken={authSession.accessToken} currentUserId={authSession.user.id} /> : <OnboardingPage />}
           path="/feed"
         />
         <Route
-          element={authSession ? <FeedStoryPage accessToken={authSession.accessToken} /> : <RequireCurrentLocationSignInRedirect />}
+          element={authSession ? <FeedStoryPage accessToken={authSession.accessToken} currentUserId={authSession.user.id} /> : <RequireCurrentLocationSignInRedirect />}
           path="/feed/story/:storySlug"
         />
         <Route

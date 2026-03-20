@@ -8,6 +8,7 @@ import { StoryInteractionModel } from "../models/story-interaction.model.js";
 import { readJsonCache, writeJsonCache, deleteCache, deleteCacheByPrefix } from "./cache.service.js";
 import { enqueueCounterSync } from "./queue.service.js";
 import { resolveStoredObjectUrl } from "./storage.service.js";
+import { broadcastAppEvent } from "../realtime/app-events.js";
 
 function enforcePremiumLimits(input: StorySaveInput, tier: "free" | "premium") {
   const totalImages = input.chapters.reduce<number>((sum, chapter) => sum + chapter.imageUrls.length, 0);
@@ -264,6 +265,23 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
   await deleteCache("stories:feed");
   await deleteCache(`stories:public:${story.slug}`);
   await deleteCacheByPrefix(`stories:mine:${story.authorId.toString()}`);
+
+  broadcastAppEvent("feed", {
+    kind: "story.reaction.updated",
+    storyId: story.id,
+    likesCount: story.likesCount,
+    bookmarksCount: story.bookmarksCount,
+    reactionsCount: story.reactionsCount
+  });
+  broadcastAppEvent(`user:${userId}`, {
+    kind: "story.reaction.updated",
+    storyId: story.id,
+    action,
+    active,
+    likesCount: story.likesCount,
+    bookmarksCount: story.bookmarksCount,
+    reactionsCount: story.reactionsCount
+  });
 
   return {
     storyId: story.id,

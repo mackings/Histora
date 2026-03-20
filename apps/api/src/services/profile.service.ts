@@ -10,6 +10,7 @@ import type { ContributorInviteInput, DeviceRenameInput, ProfileUpdateInput } fr
 import { AppError } from "../utils/app-error.js";
 import { listBookmarkedStories } from "./story.service.js";
 import { resolveStoredObjectUrl } from "./storage.service.js";
+import { broadcastAppEvent } from "../realtime/app-events.js";
 
 function formatSessionDevice(session: {
   userAgent?: string;
@@ -264,6 +265,12 @@ export async function toggleFollowUser(followerUserId: string, username: string)
     });
     active = true;
   }
+
+  broadcastAppEvent(`user:${followerUserId}`, {
+    kind: "follow.updated",
+    username: followee.username,
+    active
+  });
 
   return {
     username: followee.username,

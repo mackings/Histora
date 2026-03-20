@@ -69,6 +69,10 @@ const canSubscribeToChannel = (channel: string, userId?: string) => {
     return true;
   }
 
+  if (channel.startsWith("user:")) {
+    return channel === `user:${userId}`;
+  }
+
   if (channel.startsWith("anonymous:inbox:")) {
     return channel === `anonymous:inbox:${userId}`;
   }
