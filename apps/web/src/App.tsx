@@ -2924,6 +2924,7 @@ type StudioChapter = (typeof chapterDrafts)[number] & {
 };
 
 type StudioPreviewPayload = {
+  storyId?: string | null;
   storyTitle: string;
   storySummary: string;
   activeChapterNumberLabel: string;
@@ -2940,6 +2941,35 @@ type StudioPreviewPayload = {
   chapterChecklist: {
     required: string[];
     optional: string[];
+  };
+};
+
+type StudioPublishPayload = {
+  storyId?: string | null;
+  payload: {
+    title: string;
+    summary: string;
+    coverImageUrl?: string;
+    visibility: "private" | "public" | "selected";
+    anonymous: boolean;
+    allowedViewerIds: string[];
+    tags: string[];
+    status: "draft" | "published";
+    chapters: Array<{
+      title: string;
+      body: string;
+      type: "memory" | "reflection" | "milestone" | "anonymous";
+      order: number;
+      imageUrls: string[];
+      voiceNoteUrl?: string;
+      moments: Array<{
+        title: string;
+        description: string;
+        happenedAt: string;
+        imageUrls: string[];
+        voiceNoteUrl?: string;
+      }>;
+    }>;
   };
 };
 
@@ -5145,7 +5175,7 @@ function StudioPage({
   const [isEnteringStudio, setIsEnteringStudio] = useState(true);
   const [activeChapter, setActiveChapter] = useState(normalizeChapterTitle(chapterDrafts[1]?.title ?? "Chapter 2"));
   const [isPremium, setIsPremium] = useState(currentUser.subscriptionTier === "premium");
-  const [visibility, setVisibility] = useState("selected");
+  const [visibility, setVisibility] = useState<"private" | "selected" | "public">("selected");
   const [anonymous, setAnonymous] = useState(true);
   const [storyTitle, setStoryTitle] = useState("From borrowed rooms to my own front door");
   const [storySummary, setStorySummary] = useState(
@@ -5177,6 +5207,7 @@ function StudioPage({
   const [hasReviewedPreview, setHasReviewedPreview] = useState(false);
   const [isDraftHistoryVisible, setIsDraftHistoryVisible] = useState(false);
   const [isEditingChapterTitle, setIsEditingChapterTitle] = useState(false);
+  const [chapterTitleDraft, setChapterTitleDraft] = useState("");
   const [draftHistory, setDraftHistory] = useState<string[]>(["Studio opened."]);
   const [studioNotice, setStudioNotice] = useState<null | { title: string; body: string }>(null);
   const [timelineEntries, setTimelineEntries] = useState<StudioTimelineEntry[]>([]);
@@ -5313,7 +5344,7 @@ function StudioPage({
         setCurrentStoryId(draft.id);
         setStoryTitle(draft.title);
         setStorySummary(draft.summary);
-        setVisibility(draft.visibility);
+        setVisibility(draft.visibility as "private" | "selected" | "public");
         setAnonymous(draft.anonymous);
         setChapters(
           draft.chapters.map((chapter) => ({
@@ -5376,6 +5407,7 @@ function StudioPage({
 
       const savedDraft = JSON.parse(rawDraft) as Partial<{
         activeChapter: string;
+        currentStoryId: string | null;
         isPremium: boolean;
         visibility: string;
         anonymous: boolean;
@@ -5392,11 +5424,14 @@ function StudioPage({
       if (savedDraft.activeChapter) {
         setActiveChapter(savedDraft.activeChapter);
       }
+      if (savedDraft.currentStoryId) {
+        setCurrentStoryId(savedDraft.currentStoryId);
+      }
       if (typeof savedDraft.isPremium === "boolean") {
         setIsPremium(savedDraft.isPremium);
       }
       if (savedDraft.visibility) {
-        setVisibility(savedDraft.visibility);
+        setVisibility(savedDraft.visibility as "private" | "selected" | "public");
       }
       if (typeof savedDraft.anonymous === "boolean") {
         setAnonymous(savedDraft.anonymous);
@@ -5446,20 +5481,8 @@ function StudioPage({
       return;
     }
 
-    if (window.sessionStorage.getItem("histora-studio-publish-on-return") !== "true") {
-      return;
-    }
-
-    window.sessionStorage.removeItem("histora-studio-publish-on-return");
-    window.setTimeout(() => publishWholeStory(), 120);
-  }, [activeChapter, chapters]);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !hasLoadedStudioDraftRef.current) {
-      return;
-    }
-
     const draftPayload = {
+      currentStoryId,
       activeChapter,
       isPremium,
       visibility,
@@ -5483,6 +5506,7 @@ function StudioPage({
     chapters,
     draftHistory,
     isPremium,
+    currentStoryId,
     storySummary,
     storyTitle,
     timelineEntries,
@@ -5763,8 +5787,36 @@ function StudioPage({
   };
 
   const submitActiveChapterTitle = () => {
+    updateActiveChapterTitle(chapterTitleDraft);
     setIsEditingChapterTitle(false);
   };
+
+  const buildChaptersSnapshot = () => {
+    const latestBody = chapterBodyRef.current?.innerHTML ?? activeChapterEntry?.body ?? "";
+    const latestWords = getChapterWordCount(latestBody);
+    const targetIndex = activeChapterIndex >= 0 ? activeChapterIndex : 0;
+    const snapshot = chapters.map((chapter, index) =>
+      index === targetIndex
+        ? {
+            ...chapter,
+            body: latestBody,
+            words: latestWords,
+            imageAttachments: [...imageAttachments],
+            voiceNotes: [...voiceNotes],
+            timelineEntries: [...timelineEntries]
+          }
+        : chapter
+    );
+    setChapters(snapshot);
+    return snapshot;
+  };
+
+  const getChapterMetrics = (sourceChapters: StudioChapter[]) =>
+    sourceChapters.map((chapter) => ({
+      ...chapter,
+      words: getChapterWordCount(chapter.body),
+      isComplete: isChapterComplete(chapter)
+    }));
 
   const refreshEditorState = () => {
     const selection = typeof window !== "undefined" ? window.getSelection() : null;
@@ -6371,12 +6423,13 @@ function StudioPage({
   };
 
   const saveCurrentDraft = () => {
+    const snapshot = buildChaptersSnapshot();
     setChapters((current) =>
       current.map((chapter) =>
         chapter.title === activeChapter ? { ...chapter, status: "Draft saved", words: wordCount } : chapter
       )
     );
-    void ensureStoryMediaUploaded()
+    void ensureStoryMediaUploaded(snapshot)
       .then((uploadedChapters) => persistStory(buildStoryPayload("draft", uploadedChapters), "Draft saved to API."))
       .catch((error) => {
         setStudioMessage(getErrorMessage(error, "Could not upload chapter media."));
@@ -6401,7 +6454,12 @@ function StudioPage({
   };
 
   const publishWholeStory = () => {
-    if (readyChapters.length === 0) {
+    const snapshot = buildChaptersSnapshot();
+    const metrics = getChapterMetrics(snapshot);
+    const readyChaptersSnapshot = metrics.filter((chapter) => chapter.isComplete);
+    const startedIncompleteChaptersSnapshot = metrics.filter((chapter) => !chapter.isComplete && chapter.words > 0);
+
+    if (readyChaptersSnapshot.length === 0) {
       guideToSection(
         chapterEditorSectionRef,
         `Finish at least one chapter before publishing. Chapters need a title and at least ${chapterCompletionThreshold} words.`
@@ -6412,36 +6470,36 @@ function StudioPage({
     if (!hasReviewedPreview) {
       openStudioNotice(
         "Review before publish",
-        startedIncompleteChapters.length > 0
-          ? `After preview review, these chapters will go live: ${readyChapters.map((chapter) => chapter.title).join(", ")}. Unfinished chapters will stay as drafts: ${startedIncompleteChapters.map((chapter) => chapter.title).join(", ")}.`
-          : `After preview review, these chapters will go live: ${readyChapters.map((chapter) => chapter.title).join(", ")}.`
+        startedIncompleteChaptersSnapshot.length > 0
+          ? `After preview review, these chapters will go live: ${readyChaptersSnapshot.map((chapter) => chapter.title).join(", ")}. Unfinished chapters will stay as drafts: ${startedIncompleteChaptersSnapshot.map((chapter) => chapter.title).join(", ")}.`
+          : `After preview review, these chapters will go live: ${readyChaptersSnapshot.map((chapter) => chapter.title).join(", ")}.`
       );
       scrollToSectionTop(publishSectionRef);
-      handlePreviewToggle();
+      void handlePreviewToggle();
       return;
     }
 
     setChapters((current) =>
       current.map((chapter) =>
-        readyChapters.some((readyChapter) => readyChapter.title === chapter.title)
+        readyChaptersSnapshot.some((readyChapter) => readyChapter.title === chapter.title)
           ? { ...chapter, status: "Published", words: getChapterWordCount(chapter.body) }
           : chapter
       )
     );
-    void ensureStoryMediaUploaded()
+    void ensureStoryMediaUploaded(snapshot)
       .then((uploadedChapters) => persistStory(buildStoryPayload("published", uploadedChapters), "Story published to API."))
       .catch((error) => {
         setStudioMessage(getErrorMessage(error, "Could not publish story media."));
       });
     setStudioMessage(
-      startedIncompleteChapters.length > 0
-        ? `Publishing ${readyChapters.map((chapter) => chapter.title).join(", ")}. Unfinished chapters stay in draft.`
-        : `Publishing ${readyChapters.map((chapter) => chapter.title).join(", ")} as ${anonymous ? "anonymous" : visibility}.`
+      startedIncompleteChaptersSnapshot.length > 0
+        ? `Publishing ${readyChaptersSnapshot.map((chapter) => chapter.title).join(", ")}. Unfinished chapters stay in draft.`
+        : `Publishing ${readyChaptersSnapshot.map((chapter) => chapter.title).join(", ")} as ${anonymous ? "anonymous" : visibility}.`
     );
     setDraftHistory((current) => [
-      startedIncompleteChapters.length > 0
-        ? `Published: ${readyChapters.map((chapter) => chapter.title).join(", ")}. Drafts kept: ${startedIncompleteChapters.map((chapter) => chapter.title).join(", ")}.`
-        : `Story published with chapters: ${readyChapters.map((chapter) => chapter.title).join(", ")}.`,
+      startedIncompleteChaptersSnapshot.length > 0
+        ? `Published: ${readyChaptersSnapshot.map((chapter) => chapter.title).join(", ")}. Drafts kept: ${startedIncompleteChaptersSnapshot.map((chapter) => chapter.title).join(", ")}.`
+        : `Story published with chapters: ${readyChaptersSnapshot.map((chapter) => chapter.title).join(", ")}.`,
       ...current
     ].slice(0, 6));
   };
@@ -6470,9 +6528,9 @@ function StudioPage({
     };
   };
 
-  const ensureStoryMediaUploaded = async () => {
+  const ensureStoryMediaUploaded = async (sourceChapters: StudioChapter[]) => {
     const uploadedChapters = await Promise.all(
-      chapters.map(async (chapter) => {
+      sourceChapters.map(async (chapter) => {
         const uploadedImages = await Promise.all(
           chapter.imageAttachments.map((attachment) =>
             ensureStudioAttachmentUploaded(attachment, ".jpg", attachment.blob?.type || "image/jpeg")
@@ -6496,7 +6554,10 @@ function StudioPage({
     return uploadedChapters;
   };
 
-  const buildStoryPayload = (status: "draft" | "published", sourceChapters: StudioChapter[]) => ({
+  const buildStoryPayload = (
+    status: "draft" | "published",
+    sourceChapters: StudioChapter[]
+  ): StudioPublishPayload["payload"] => ({
     title: storyTitle,
     summary: storySummary,
     coverImageUrl: sourceChapters.flatMap((chapter) => chapter.imageAttachments)[0]?.objectKey,
@@ -6511,7 +6572,7 @@ function StudioPage({
       type:
         chapter.type.toLowerCase() === "anon"
           ? "anonymous"
-          : (chapter.type.toLowerCase() as "memory" | "reflection" | "milestone"),
+          : (chapter.type.toLowerCase() as "memory" | "reflection" | "milestone" | "anonymous"),
       order: index + 1,
       imageUrls: chapter.imageAttachments.map((attachment) => attachment.objectKey ?? attachment.url),
       voiceNoteUrl: chapter.voiceNotes[0]?.objectKey ?? chapter.voiceNotes[0]?.url,
@@ -6530,25 +6591,22 @@ function StudioPage({
   });
 
   const persistStory = async (payload: ReturnType<typeof buildStoryPayload>, successMessage: string) => {
-    try {
-      const story = currentStoryId
-        ? await apiRequest<ApiStory>(`/stories/${currentStoryId}`, {
-            method: "PATCH",
-            accessToken,
-            body: payload
-          })
-        : await apiRequest<ApiStory>("/stories", {
-            method: "POST",
-            accessToken,
-            body: payload
-          });
+    const story = currentStoryId
+      ? await apiRequest<ApiStory>(`/stories/${currentStoryId}`, {
+          method: "PATCH",
+          accessToken,
+          body: payload
+        })
+      : await apiRequest<ApiStory>("/stories", {
+          method: "POST",
+          accessToken,
+          body: payload
+        });
 
-      setCurrentStoryId(story.id);
-      setStudioMessage(successMessage);
-      setDraftHistory((current) => [successMessage, ...current].slice(0, 6));
-    } catch (error) {
-      setStudioMessage(getErrorMessage(error, "Could not save story to API."));
-    }
+    setCurrentStoryId(story.id);
+    setStudioMessage(successMessage);
+    setDraftHistory((current) => [successMessage, ...current].slice(0, 6));
+    return story;
   };
 
   const updateTimelineEntry = (index: number, field: "title" | "body", value: string) => {
@@ -6615,34 +6673,50 @@ function StudioPage({
     invalidatePreviewReview();
   };
 
-  const handlePreviewToggle = () => {
-    const previewPayload: StudioPreviewPayload = {
-      storyTitle,
-      storySummary,
-      activeChapterNumberLabel,
-      activeChapter: activeChapterLabel,
-      chapterType,
-      visibility: anonymous ? "anonymous" : visibility,
-      chapterBody,
-      wordCount,
-      imageAttachments,
-      voiceNotes,
-      timelineEntries: timelineEntries.filter(
-        (entry) => entry.title.trim().length > 0 || entry.body.trim().length > 0 || entry.year || entry.month || entry.day
-      ),
-      allowComments,
-      chapterStatus: activeChapterEntry?.status ?? "Draft",
-      chapterChecklist: {
-        required: currentChapterRequiredItems,
-        optional: currentChapterOptionalItems
-      }
-    };
+  const handlePreviewToggle = async () => {
+    try {
+      const snapshot = buildChaptersSnapshot();
+      const uploadedChapters = await ensureStoryMediaUploaded(snapshot);
+      const draftPayload = buildStoryPayload("draft", uploadedChapters);
+      const story = await persistStory(draftPayload, "Draft saved to API.");
+      const uploadedActiveChapter = uploadedChapters[activeChapterIndex >= 0 ? activeChapterIndex : 0];
+      const previewPayload: StudioPreviewPayload = {
+        storyId: story.id,
+        storyTitle,
+        storySummary,
+        activeChapterNumberLabel,
+        activeChapter: uploadedActiveChapter?.title || activeChapterLabel,
+        chapterType,
+        visibility: anonymous ? "anonymous" : visibility,
+        chapterBody: uploadedActiveChapter?.body ?? chapterBody,
+        wordCount: getChapterWordCount(uploadedActiveChapter?.body ?? chapterBody),
+        imageAttachments: uploadedActiveChapter?.imageAttachments ?? [],
+        voiceNotes: uploadedActiveChapter?.voiceNotes ?? [],
+        timelineEntries: (uploadedActiveChapter?.timelineEntries ?? []).filter(
+          (entry) => entry.title.trim().length > 0 || entry.body.trim().length > 0 || entry.year || entry.month || entry.day
+        ),
+        allowComments,
+        chapterStatus: uploadedActiveChapter?.status ?? "Draft saved",
+        chapterChecklist: {
+          required: currentChapterRequiredItems,
+          optional: currentChapterOptionalItems
+        }
+      };
 
-    window.sessionStorage.setItem("histora-studio-preview", JSON.stringify(previewPayload));
-    window.sessionStorage.setItem("histora-studio-reviewed", "true");
-    setHasReviewedPreview(true);
-    setStudioMessage(`Preview opened for ${activeChapterLabel}. Review it before publishing.`);
-    navigate("/studio/preview");
+      const publishPayload: StudioPublishPayload = {
+        storyId: story.id,
+        payload: buildStoryPayload("published", uploadedChapters)
+      };
+
+      window.sessionStorage.setItem("histora-studio-preview", JSON.stringify(previewPayload));
+      window.sessionStorage.setItem("histora-studio-publish-payload", JSON.stringify(publishPayload));
+      window.sessionStorage.setItem("histora-studio-reviewed", "true");
+      setHasReviewedPreview(true);
+      setStudioMessage(`Preview opened for ${uploadedActiveChapter?.title || activeChapterLabel}. Review it before publishing.`);
+      navigate("/studio/preview");
+    } catch (error) {
+      setStudioMessage(getErrorMessage(error, "Could not open preview."));
+    }
   };
 
   const handleChapterSwitch = (chapterTitle: string, isLocked: boolean) => {
@@ -6723,7 +6797,7 @@ function StudioPage({
       ) : null}
       <div className="chapter-controls">
         <button className="ghost-action" onClick={saveCurrentDraft} type="button">SAVE AS DRAFT</button>
-        <button className="primary-action" onClick={publishWholeStory} type="button">PUBLISH STORY</button>
+        <button className="primary-action" onClick={() => void handlePreviewToggle()} type="button">FINISH AND PREVIEW</button>
       </div>
     </article>
   );
@@ -6842,14 +6916,15 @@ function StudioPage({
                     <input
                       className="chapter-title-input"
                       onBlur={submitActiveChapterTitle}
-                      onChange={(event) => updateActiveChapterTitle(event.target.value)}
+                      onChange={(event) => setChapterTitleDraft(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key === "Enter") {
                           event.preventDefault();
                           submitActiveChapterTitle();
                         }
                       }}
-                      value={activeChapterLabel}
+                      placeholder="Untitled chapter"
+                      value={chapterTitleDraft}
                     />
                   ) : (
                     <h2>{activeChapterLabel}</h2>
@@ -6857,7 +6932,10 @@ function StudioPage({
                   <button
                     aria-label="Edit chapter title"
                     className="chapter-edit-button"
-                    onClick={() => setIsEditingChapterTitle(true)}
+                    onClick={() => {
+                      setChapterTitleDraft(activeChapterLabel === "Untitled chapter" ? "" : activeChapterLabel);
+                      setIsEditingChapterTitle(true);
+                    }}
                     type="button"
                   >
                     <Icon className="button-icon" name="write" />
@@ -7131,7 +7209,7 @@ function StudioPage({
                 <button
                   key={option}
                   className={visibility === option ? "choice-button active-choice" : "choice-button"}
-                  onClick={() => setVisibility(option)}
+                  onClick={() => setVisibility(option as "private" | "selected" | "public")}
                   type="button"
                 >
                   {option}
@@ -7261,9 +7339,15 @@ function StudioPage({
   );
 }
 
-function StudioPreviewPage() {
+function StudioPreviewPage({
+  accessToken
+}: {
+  accessToken: string;
+}) {
   const navigate = useNavigate();
   const [preview, setPreview] = useState<StudioPreviewPayload | null>(null);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [previewError, setPreviewError] = useState("");
 
   useEffect(() => {
     const rawPreview = window.sessionStorage.getItem("histora-studio-preview");
@@ -7284,15 +7368,49 @@ function StudioPreviewPage() {
         <button className="ghost-action" onClick={() => navigate("/studio")} type="button">Back To Edit</button>
         <button
           className="primary-action"
+          disabled={isPublishing}
           onClick={() => {
-            window.sessionStorage.setItem("histora-studio-publish-on-return", "true");
-            navigate("/studio");
+            const rawPublishPayload = window.sessionStorage.getItem("histora-studio-publish-payload");
+            if (!rawPublishPayload) {
+              setPreviewError("Preview payload expired. Return to studio and preview again.");
+              return;
+            }
+
+            try {
+              const publishPayload = JSON.parse(rawPublishPayload) as StudioPublishPayload;
+              setIsPublishing(true);
+              setPreviewError("");
+              void (publishPayload.storyId
+                ? apiRequest<ApiStory>(`/stories/${publishPayload.storyId}`, {
+                    method: "PATCH",
+                    accessToken,
+                    body: publishPayload.payload
+                  })
+                : apiRequest<ApiStory>("/stories", {
+                    method: "POST",
+                    accessToken,
+                    body: publishPayload.payload
+                  }))
+                .then((story) => {
+                  window.sessionStorage.removeItem("histora-studio-preview");
+                  window.sessionStorage.removeItem("histora-studio-publish-payload");
+                  window.sessionStorage.removeItem("histora-studio-reviewed");
+                  navigate(`/feed/story/${story.slug}`);
+                })
+                .catch((error) => {
+                  setPreviewError(getErrorMessage(error, "Could not publish story."));
+                  setIsPublishing(false);
+                });
+            } catch {
+              setPreviewError("Preview payload expired. Return to studio and preview again.");
+            }
           }}
           type="button"
         >
-          Looks Good
+          {isPublishing ? "Publishing..." : "Publish"}
         </button>
       </section>
+      {previewError ? <p className="status-feedback">{previewError}</p> : null}
 
       <article className="studio-preview-reader card">
         <span className="story-tag">{preview?.visibility ?? "draft"}</span>
@@ -7562,7 +7680,10 @@ export default function App() {
           element={authSession ? <EditProfilePage accessToken={authSession.accessToken} /> : <RequireCurrentLocationSignInRedirect />}
           path="/profile/edit"
         />
-        <Route element={<StudioPreviewPage />} path="/studio/preview" />
+        <Route
+          element={authSession ? <StudioPreviewPage accessToken={authSession.accessToken} /> : <RequireCurrentLocationSignInRedirect />}
+          path="/studio/preview"
+        />
         <Route
           element={
             authSession
