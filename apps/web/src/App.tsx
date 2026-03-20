@@ -3357,6 +3357,7 @@ type FeedThreadComment = {
   text: string;
   time: string;
   replyTo?: string;
+  pending?: boolean;
 };
 
 type FeedStoryChapter = {
@@ -5236,11 +5237,13 @@ function FeedStoryPage({
   const [helpTarget, setHelpTarget] = useState<FeedStoryRecord | null>(null);
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [activeChapterId, setActiveChapterId] = useState("");
+  const [commentToast, setCommentToast] = useState("");
   const [pendingStoryActions, setPendingStoryActions] = useState<Record<"like" | "bookmark" | "follow", boolean>>({
     like: false,
     bookmark: false,
     follow: false
   });
+  const [pendingChapterComments, setPendingChapterComments] = useState<Record<string, boolean>>({});
 
   const story = stories.find((entry) => entry.slug === storySlug) ?? null;
   const totalChapterComments = story?.chapters.reduce((total, chapter) => total + chapter.comments.length, 0) ?? 0;
@@ -5316,6 +5319,15 @@ function FeedStoryPage({
 
     setActiveChapterId(story.chapters[0]?.id ?? "");
   }, [story?.slug]);
+
+  useEffect(() => {
+    if (!commentToast) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setCommentToast(""), 2200);
+    return () => window.clearTimeout(timer);
+  }, [commentToast]);
 
   const updateStory = (updater: (story: FeedStoryRecord) => FeedStoryRecord) => {
     if (!story) {
@@ -5449,9 +5461,26 @@ function FeedStoryPage({
 
   const submitChapterComment = (chapterId: string) => {
     const draft = chapterReplyDrafts[chapterId]?.trim();
-    if (!story || !draft) {
+    if (!story || !draft || pendingChapterComments[chapterId]) {
       return;
     }
+
+    const optimisticComment: FeedThreadComment = {
+      author: "You",
+      handle: "@you",
+      text: draft,
+      time: "Just now",
+      pending: true
+    };
+
+    setPendingChapterComments((current) => ({ ...current, [chapterId]: true }));
+    updateStory((current) => ({
+      ...current,
+      chapters: current.chapters.map((chapter) =>
+        chapter.id === chapterId ? { ...chapter, comments: [...chapter.comments, optimisticComment] } : chapter
+      )
+    }));
+    setChapterReplyDrafts((current) => ({ ...current, [chapterId]: "" }));
 
     void apiRequest<ApiComment>("/comments", {
       method: "POST",
@@ -5473,12 +5502,31 @@ function FeedStoryPage({
         updateStory((current) => ({
           ...current,
           chapters: current.chapters.map((chapter) =>
-            chapter.id === chapterId ? { ...chapter, comments: [...chapter.comments, nextComment] } : chapter
+            chapter.id === chapterId
+              ? {
+                  ...chapter,
+                  comments: [...chapter.comments.filter((entry) => entry !== optimisticComment), nextComment]
+                }
+              : chapter
           )
         }));
-        setChapterReplyDrafts((current) => ({ ...current, [chapterId]: "" }));
+        setPendingChapterComments((current) => ({ ...current, [chapterId]: false }));
+        setCommentToast("Your comment was posted.");
       })
       .catch((error) => {
+        updateStory((current) => ({
+          ...current,
+          chapters: current.chapters.map((chapter) =>
+            chapter.id === chapterId
+              ? {
+                  ...chapter,
+                  comments: chapter.comments.filter((entry) => entry !== optimisticComment)
+                }
+              : chapter
+          )
+        }));
+        setChapterReplyDrafts((current) => ({ ...current, [chapterId]: draft }));
+        setPendingChapterComments((current) => ({ ...current, [chapterId]: false }));
         setShareFeedback(getErrorMessage(error, "Could not post this chapter reply."));
       });
   };
@@ -5676,7 +5724,7 @@ function FeedStoryPage({
                         <div className="feed-thread-head">
                           <strong>{comment.author}</strong>
                           <span>{comment.handle}</span>
-                          <small>{comment.time}</small>
+                          <small>{comment.pending ? "Posting..." : comment.time}</small>
                         </div>
                         {comment.replyTo ? <span className="feed-thread-context">Replying to {comment.replyTo}</span> : null}
                         <p>{comment.text}</p>
@@ -5691,8 +5739,8 @@ function FeedStoryPage({
                     placeholder="Reply in thread..."
                     value={chapterReplyDrafts[activeChapter.id] ?? ""}
                   />
-                  <button className="primary-action" onClick={() => submitChapterComment(activeChapter.id)} type="button">
-                    Post reply
+                  <button className="primary-action" disabled={pendingChapterComments[activeChapter.id]} onClick={() => submitChapterComment(activeChapter.id)} type="button">
+                    {pendingChapterComments[activeChapter.id] ? "Posting..." : "Post reply"}
                   </button>
                 </div>
               </footer>
@@ -5748,6 +5796,12 @@ function FeedStoryPage({
           </div>
         </article>
       </section>
+
+      {commentToast ? (
+        <div className="bottom-toast" role="status">
+          {commentToast}
+        </div>
+      ) : null}
 
       {helpTarget ? (
         <div className="status-viewer-backdrop" onClick={() => setHelpTarget(null)} role="presentation">
