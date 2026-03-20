@@ -47,6 +47,7 @@ export function createApp() {
       return;
     }
 
+    const requestPayload = formatLogPayload(request.body);
     let responsePayload: unknown;
     const originalJson = response.json.bind(response);
     const originalSend = response.send.bind(response);
@@ -66,8 +67,11 @@ export function createApp() {
     response.on("finish", () => {
       const payloadText = formatLogPayload(responsePayload);
       const parts = [`[API] ${request.method} ${request.originalUrl} ${response.statusCode}`];
+      if (requestPayload) {
+        parts.push(`request=${requestPayload}`);
+      }
       if (payloadText) {
-        parts.push(`body=${payloadText}`);
+        parts.push(`response=${payloadText}`);
       }
       console.log(parts.join(" "));
     });
