@@ -387,10 +387,29 @@ async function apiRequest<T>(
     let details: Record<string, unknown> | undefined;
 
     if ((response.headers.get("content-type") ?? "").includes("application/json")) {
-      const payload = (await response.json()) as { message?: string; error?: string; code?: string; details?: Record<string, unknown> };
+      const payload = (await response.json()) as {
+        message?: string;
+        error?: string;
+        code?: string;
+        details?: Record<string, unknown>;
+        issues?: {
+          formErrors?: string[];
+          fieldErrors?: Record<string, string[] | undefined>;
+        };
+      };
       message = payload.message ?? payload.error ?? message;
       code = payload.code;
       details = payload.details;
+
+      if (payload.issues?.fieldErrors) {
+        const firstFieldError = Object.values(payload.issues.fieldErrors)
+          .flat()
+          .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+        if (firstFieldError) {
+          message = firstFieldError;
+        }
+      }
     } else {
       const text = await response.text();
       if (text.trim()) {
@@ -440,10 +459,17 @@ const getStoredDeviceIdentity = () => {
   if (existing) {
     try {
       const parsed = JSON.parse(existing) as { deviceId?: string; deviceName?: string };
-      if (parsed.deviceId && parsed.deviceName) {
+      if (
+        typeof parsed.deviceId === "string" &&
+        typeof parsed.deviceName === "string" &&
+        parsed.deviceId.trim().length >= 16 &&
+        parsed.deviceId.trim().length <= 160 &&
+        parsed.deviceName.trim().length >= 2 &&
+        parsed.deviceName.trim().length <= 80
+      ) {
         return {
-          deviceId: parsed.deviceId,
-          deviceName: parsed.deviceName
+          deviceId: parsed.deviceId.trim(),
+          deviceName: parsed.deviceName.trim()
         };
       }
     } catch {
@@ -1634,8 +1660,8 @@ function AuthPage({
     if (isSignin || isSignup) {
       if (!form.password) {
         nextErrors.password = "Password is required.";
-      } else if (form.password.length < 8) {
-        nextErrors.password = "Password must be at least 8 characters.";
+      } else if (form.password.length < 10) {
+        nextErrors.password = "Password must be at least 10 characters.";
       }
     }
 
@@ -1675,8 +1701,8 @@ function AuthPage({
 
       if (!form.newPassword) {
         nextErrors.newPassword = "New password is required.";
-      } else if (form.newPassword.length < 8) {
-        nextErrors.newPassword = "New password must be at least 8 characters.";
+      } else if (form.newPassword.length < 10) {
+        nextErrors.newPassword = "New password must be at least 10 characters.";
       }
 
       if (!form.confirmPassword) {
