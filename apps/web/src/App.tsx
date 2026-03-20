@@ -142,6 +142,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 type StatusEntry = {
+  id?: string;
   name: string;
   meta: string;
   tone: "orange" | "ink" | "add" | "blue";
@@ -150,6 +151,7 @@ type StatusEntry = {
   contentBody: string;
   anonymous?: boolean;
   shareSlug?: string;
+  owned?: boolean;
   comments?: Array<{ author: string; text: string }>;
   helpFee?: number;
 };
@@ -181,6 +183,9 @@ type AnonymousFeedSource = {
   comments: Array<{ author: string; text: string }>;
   helpFee: number;
   fromQuickMemory: boolean;
+  sourceType: "status" | "story";
+  targetType: "status" | "storyChapter";
+  owned?: boolean;
 };
 
 type AuthUser = {
@@ -929,7 +934,8 @@ const addStatusEntry: StatusEntry = {
   contentBody: ""
 };
 
-const toStatusEntry = (status: ApiStatus): StatusEntry => ({
+const toStatusEntry = (status: ApiStatus, options?: { owned?: boolean }): StatusEntry => ({
+  id: status.id,
   name: status.anonymous ? "Anonymous" : `@${status.authorUsername}`,
   meta: formatAnonymousMeta(status.createdAt),
   tone: status.anonymous ? "ink" : "blue",
@@ -938,6 +944,7 @@ const toStatusEntry = (status: ApiStatus): StatusEntry => ({
   contentBody: status.body,
   anonymous: status.anonymous,
   shareSlug: status.shareSlug ?? undefined,
+  owned: options?.owned ?? false,
   comments: [],
   helpFee: status.anonymous ? 8 : undefined
 });
@@ -1096,6 +1103,7 @@ function StoryCirclesRow({
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [activeEmojiGroup, setActiveEmojiGroup] = useState("Recent");
   const [isAnonymousComposer, setIsAnonymousComposer] = useState(false);
+  const [isPostingStatus, setIsPostingStatus] = useState(false);
   const [statusItems, setStatusItems] = useState<StatusEntry[]>([addStatusEntry]);
   const [shareFeedback, setShareFeedback] = useState("");
   const [helpRequestTarget, setHelpRequestTarget] = useState<StatusEntry | null>(null);
@@ -1106,10 +1114,17 @@ function StoryCirclesRow({
   useEffect(() => {
     let cancelled = false;
 
-    void apiRequest<ApiStatus[]>("/statuses")
-      .then((statuses) => {
+    void Promise.all([
+      apiRequest<ApiStatus[]>("/statuses"),
+      apiRequest<ApiStatus[]>("/statuses/mine", { accessToken })
+    ])
+      .then(([statuses, myStatuses]) => {
         if (!cancelled) {
-          setStatusItems([addStatusEntry, ...statuses.map(toStatusEntry)]);
+          const ownedStatusIds = new Set(myStatuses.map((status) => status.id));
+          setStatusItems([
+            addStatusEntry,
+            ...statuses.map((status) => toStatusEntry(status, { owned: ownedStatusIds.has(status.id) }))
+          ]);
         }
       })
       .catch(() => undefined);
@@ -1117,7 +1132,7 @@ function StoryCirclesRow({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [accessToken]);
 
   useEffect(() => {
     if (activeIndex === null) {
@@ -1300,6 +1315,11 @@ function StoryCirclesRow({
   };
 
   const postStatus = () => {
+    if (isPostingStatus || !statusDraft.trim()) {
+      return;
+    }
+
+    setIsPostingStatus(true);
     void apiRequest<ApiStatus>("/statuses", {
       method: "POST",
       accessToken,
@@ -1310,7 +1330,7 @@ function StoryCirclesRow({
       }
     })
       .then((createdStatus) => {
-        setStatusItems((current) => [current[0], toStatusEntry(createdStatus), ...current.slice(1)]);
+        setStatusItems((current) => [current[0], toStatusEntry(createdStatus, { owned: true }), ...current.slice(1)]);
         setStatusDraft("Today I finally wrote the chapter I kept postponing.");
         setSelectedImage(null);
         setIsComposerOpen(false);
@@ -1320,6 +1340,28 @@ function StoryCirclesRow({
       })
       .catch((error) => {
         setShareFeedback(getErrorMessage(error, "Could not post status."));
+      })
+      .finally(() => {
+        setIsPostingStatus(false);
+      });
+  };
+
+  const deleteStatusItem = () => {
+    if (!activeStatus?.id || !activeStatus.owned) {
+      return;
+    }
+
+    void apiRequest<{ ok: boolean }>(`/statuses/${activeStatus.id}`, {
+      method: "DELETE",
+      accessToken
+    })
+      .then(() => {
+        setStatusItems((current) => current.filter((entry) => entry.id !== activeStatus.id));
+        setActiveIndex(null);
+        setShareFeedback(activeStatus.anonymous ? "Anonymous status deleted." : "Status deleted.");
+      })
+      .catch((error) => {
+        setShareFeedback(getErrorMessage(error, "Could not delete the status."));
       });
   };
 
@@ -1517,7 +1559,7 @@ function StoryCirclesRow({
                 Add emoji
               </button>
               <button className="primary-action" onClick={postStatus} type="button">
-                {isAnonymousComposer ? "Post anonymous status" : "Post status"}
+                {isPostingStatus ? "Posting..." : isAnonymousComposer ? "Post anonymous status" : "Post status"}
               </button>
             </div>
           </article>
@@ -1569,6 +1611,11 @@ function StoryCirclesRow({
                     type="button"
                   >
                     <Icon className="button-icon" name="download" />
+                  </button>
+                ) : null}
+                {activeStatus.owned ? (
+                  <button aria-label="Delete status" className="icon-chip icon-chip-dark" onClick={deleteStatusItem} type="button">
+                    <Icon className="button-icon" name="trash" />
                   </button>
                 ) : null}
                 <button className="story-chip" onClick={() => setIsPaused((current) => !current)} type="button">
@@ -4457,6 +4504,8 @@ function FeedPage({
 }) {
   const navigate = useNavigate();
   const [feedPosts, setFeedPosts] = useState<FeedStoryRecord[]>([]);
+  const [feedStatuses, setFeedStatuses] = useState<ApiStatus[]>([]);
+  const [myStatusIds, setMyStatusIds] = useState<Set<string>>(new Set());
   const [shareSheet, setShareSheet] = useState<ShareSheetPayload | null>(null);
   const [activeAnonymousIndex, setActiveAnonymousIndex] = useState<number | null>(null);
   const [anonymousReplyDraft, setAnonymousReplyDraft] = useState("");
@@ -4477,10 +4526,16 @@ function FeedPage({
   useEffect(() => {
     let cancelled = false;
 
-    void apiRequest<ApiFeedStory[]>("/stories/feed")
-      .then((stories) => {
+    void Promise.all([
+      apiRequest<ApiFeedStory[]>("/stories/feed"),
+      apiRequest<ApiStatus[]>("/statuses"),
+      apiRequest<ApiStatus[]>("/statuses/mine", { accessToken })
+    ])
+      .then(([stories, statuses, myStatuses]) => {
         if (!cancelled) {
           setFeedPosts(stories.map((story) => toFeedStoryRecord(story)));
+          setFeedStatuses(statuses.filter((status) => status.anonymous && status.shareSlug));
+          setMyStatusIds(new Set(myStatuses.map((status) => status.id)));
         }
       })
       .catch((error) => {
@@ -4492,9 +4547,22 @@ function FeedPage({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [accessToken]);
 
   const anonymousFeedSources: AnonymousFeedSource[] = [
+    ...feedStatuses.map((status) => ({
+      id: status.id,
+      slug: status.shareSlug ?? status.id,
+      title: "Anonymous status",
+      excerpt: status.body,
+      meta: formatAnonymousMeta(status.createdAt),
+      comments: [],
+      helpFee: 8,
+      fromQuickMemory: true,
+      sourceType: "status" as const,
+      targetType: "status" as const,
+      owned: myStatusIds.has(status.id)
+    })),
     ...anonymousFeedPosts.map((post) => ({
       id: post.slug,
       slug: post.slug,
@@ -4503,7 +4571,9 @@ function FeedPage({
       meta: `${post.reads} reads`,
       comments: (post.chapters[0]?.comments ?? []).map((comment) => ({ author: comment.author, text: comment.text })),
       helpFee: post.helpFee ?? 8,
-      fromQuickMemory: false
+      fromQuickMemory: false,
+      sourceType: "story" as const,
+      targetType: "storyChapter" as const
     }))
   ];
   const anonymousFeedMessages = anonymousFeedSources.flatMap((source) => {
@@ -4588,7 +4658,7 @@ function FeedPage({
       method: "POST",
       accessToken,
       body: {
-        targetType: "storyChapter",
+        targetType: activeAnonymousPost.targetType,
         targetId: activeAnonymousPost.id,
         body: anonymousReplyDraft.trim()
       }
@@ -4624,6 +4694,25 @@ function FeedPage({
       })
       .catch((error) => {
         setShareFeedback(getErrorMessage(error, "Could not send the anonymous reply."));
+      });
+  };
+
+  const deleteAnonymousFeedItem = () => {
+    if (!activeAnonymousPost?.owned || activeAnonymousPost.sourceType !== "status") {
+      return;
+    }
+
+    void apiRequest<{ ok: boolean }>(`/statuses/${activeAnonymousPost.id}`, {
+      method: "DELETE",
+      accessToken
+    })
+      .then(() => {
+        setFeedStatuses((current) => current.filter((status) => status.id !== activeAnonymousPost.id));
+        setActiveAnonymousIndex(null);
+        setShareFeedback("Anonymous status deleted.");
+      })
+      .catch((error) => {
+        setShareFeedback(getErrorMessage(error, "Could not delete the anonymous status."));
       });
   };
 
@@ -4824,6 +4913,11 @@ function FeedPage({
                   </div>
                 </div>
                 <div className="story-viewer-top-actions">
+                {activeAnonymousPost.owned && activeAnonymousPost.sourceType === "status" ? (
+                  <button aria-label="Delete anonymous post" className="icon-chip icon-chip-dark" onClick={deleteAnonymousFeedItem} type="button">
+                    <Icon className="button-icon" name="trash" />
+                  </button>
+                ) : null}
                 <button aria-label="Download anonymous post" className="icon-chip" onClick={() => downloadAnonymousMessageImage(activeAnonymousPost)} type="button">
                   <Icon className="button-icon" name="download" />
                 </button>
