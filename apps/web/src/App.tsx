@@ -2,14 +2,12 @@ import { Fragment, useEffect, useRef, useState, type ChangeEvent, type RefObject
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import {
-  chapterDrafts,
   feedPreview,
   pricingPlans,
   profileActivity,
   profileStats,
   profileStories,
-  readingShelves,
-  timelineMoments
+  readingShelves
 } from "./app-data";
 import feedStory from "./assets/feed-story.svg";
 import heroMemory from "./assets/hero-memory.svg";
@@ -3371,8 +3369,24 @@ const createEmptyTimelineEntry = (): StudioTimelineEntry => ({
   body: ""
 });
 
-type StudioChapter = (typeof chapterDrafts)[number] & {
+const createInitialStudioChapter = (index: number): StudioChapter => ({
+  title: `Chapter ${index + 1}`,
+  type: "MEMORY",
+  words: 0,
+  status: "DRAFT",
+  moments: 0,
+  body: "",
+  imageAttachments: [],
+  voiceNotes: [],
+  timelineEntries: [createEmptyTimelineEntry()]
+});
+
+type StudioChapter = {
   title: string;
+  type: string;
+  words: number;
+  status: string;
+  moments: number;
   body: string;
   imageAttachments: StudioMediaAttachment[];
   voiceNotes: StudioMediaAttachment[];
@@ -5682,6 +5696,28 @@ function StudioPage({
     const plainText = getPlainTextFromHtml(html).trim();
     return plainText.length === 0 ? 0 : plainText.split(/\s+/).length;
   };
+  const hasTimelineContent = (entries: StudioTimelineEntry[]) =>
+    entries.some((entry) => entry.title.trim() || entry.body.trim() || entry.year || entry.month || entry.day);
+  const isLegacySeedChapter = (chapter: Pick<StudioChapter, "title" | "body" | "imageAttachments" | "voiceNotes" | "timelineEntries">) => {
+    const normalizedTitle = normalizeChapterTitle(chapter.title);
+    const expectedBody = legacySeedChapterBodies[normalizedTitle as keyof typeof legacySeedChapterBodies];
+
+    if (!expectedBody) {
+      return false;
+    }
+
+    return (
+      getPlainTextFromHtml(chapter.body).trim() === expectedBody.trim() &&
+      chapter.imageAttachments.length === 0 &&
+      chapter.voiceNotes.length === 0 &&
+      !hasTimelineContent(chapter.timelineEntries)
+    );
+  };
+  const isPersistableStudioChapter = (chapter: StudioChapter) =>
+    getChapterWordCount(chapter.body) > 0 ||
+    chapter.imageAttachments.length > 0 ||
+    chapter.voiceNotes.length > 0 ||
+    hasTimelineContent(chapter.timelineEntries);
   const isChapterComplete = (chapter: { title: string; body: string }) =>
     chapter.title.trim().length > 0 && getChapterWordCount(chapter.body) >= chapterCompletionThreshold;
   const transcriptionLanguages = [
@@ -5705,47 +5741,27 @@ function StudioPage({
   const supportedTranscriptionLanguages = transcriptionLanguages.filter((language) =>
     supportedTranscriptionLanguageValues.has(language.value)
   );
-  const initialChapterContent = {
-    "Chapter 1: Before the city":
-      "<p>I learned early that memory is rarely one clean scene. It is a room, then a sound, then a name I did not understand until years later.</p>",
-    "Chapter 2: The year everything changed":
-      "<p>I stopped trying to tell the story in one clean arc and started preserving the truth in fragments: one move, one loss, one new job, one proof that I was still here.</p>",
+  const legacySeedChapterBodies = {
+    "Before the city":
+      "I learned early that memory is rarely one clean scene. It is a room, then a sound, then a name I did not understand until years later.",
+    "The year everything changed":
+      "I stopped trying to tell the story in one clean arc and started preserving the truth in fragments: one move, one loss, one new job, one proof that I was still here.",
     "Advice post: Should I reconnect?":
-      "<p>I do not know if reopening this relationship will heal anything or only restart a wound I barely closed.</p>"
+      "I do not know if reopening this relationship will heal anything or only restart a wound I barely closed."
   } as const;
   const [isEnteringStudio, setIsEnteringStudio] = useState(true);
-  const [activeChapter, setActiveChapter] = useState(normalizeChapterTitle(chapterDrafts[1]?.title ?? "Chapter 2"));
+  const [activeChapter, setActiveChapter] = useState("Chapter 1");
   const [isPremium, setIsPremium] = useState(currentUser.subscriptionTier === "premium");
   const [visibility, setVisibility] = useState<"private" | "selected" | "public">("selected");
-  const [anonymous, setAnonymous] = useState(true);
-  const [storyTitle, setStoryTitle] = useState("From borrowed rooms to my own front door");
-  const [storySummary, setStorySummary] = useState(
-    "A chaptered life story about movement, rebuilding, and finally feeling at home in my own voice."
-  );
-  const [chapterType, setChapterType] = useState("milestone");
+  const [anonymous, setAnonymous] = useState(false);
+  const [storyTitle, setStoryTitle] = useState("");
+  const [storySummary, setStorySummary] = useState("");
+  const [chapterType, setChapterType] = useState("memory");
   const [allowComments, setAllowComments] = useState(true);
   const [chapters, setChapters] = useState<StudioChapter[]>(
-    chapterDrafts.map((chapter) => ({
-      ...chapter,
-      title: normalizeChapterTitle(chapter.title),
-      body: initialChapterContent[chapter.title as keyof typeof initialChapterContent] ?? "",
-      imageAttachments: [],
-      voiceNotes: [],
-      timelineEntries:
-        chapter.title === "Chapter 2: The year everything changed"
-          ? [
-              {
-                year: timelineMoments[0]?.year ?? "",
-                month: "01",
-                day: "01",
-                title: timelineMoments[0]?.title ?? "",
-                body: timelineMoments[0]?.body ?? ""
-              }
-            ]
-          : [createEmptyTimelineEntry()]
-    }))
+    [createInitialStudioChapter(0), createInitialStudioChapter(1)]
   );
-  const [studioMessage, setStudioMessage] = useState("Studio synced locally.");
+  const [studioMessage, setStudioMessage] = useState("Studio ready.");
   const [currentStoryId, setCurrentStoryId] = useState<string | null>(null);
   const [hasReviewedPreview, setHasReviewedPreview] = useState(false);
   const [isEditingChapterTitle, setIsEditingChapterTitle] = useState(false);
@@ -5798,6 +5814,7 @@ function StudioPage({
   const transcriptionFallbackTriggeredRef = useRef(false);
   const noticeAudioContextRef = useRef<AudioContext | null>(null);
   const hasLoadedStudioDraftRef = useRef(false);
+  const [isStudioDraftHydrated, setIsStudioDraftHydrated] = useState(false);
   const lastAutoSavedSignatureRef = useRef("");
   const restoredLocalDraftRef = useRef(false);
 
@@ -5915,41 +5932,43 @@ function StudioPage({
         setVisibility(draft.visibility as "private" | "selected" | "public");
         setAnonymous(draft.anonymous);
         setChapters(
-          draft.chapters.map((chapter) => ({
-            title: chapter.title,
-            type: chapter.type.toUpperCase(),
-            words: getChapterWordCount(chapter.body),
-            status: draft.status === "published" ? "Published" : "Draft saved",
-            moments: chapter.moments.length,
-            body: chapter.body,
-            imageAttachments: (chapter.imageUrls ?? []).map((imageUrl, index) => ({
-              name: `${chapter.title} image ${index + 1}`,
-              url: imageUrl,
-              source: "Saved story",
-              objectKey: chapter.imageKeys?.[index]
-            })),
-            voiceNotes: chapter.voiceNoteUrl
-              ? [{
-                  name: `Voice note ${chapter.order}`,
-                  url: chapter.voiceNoteUrl,
-                  source: "Saved story",
-                  objectKey: chapter.voiceNoteKey ?? undefined
-                }]
-              : [],
-            timelineEntries:
-              chapter.moments.length > 0
-                ? chapter.moments.map((moment) => {
-                    const momentDate = new Date(moment.happenedAt);
-                    return {
-                      year: String(momentDate.getFullYear()),
-                      month: String(momentDate.getMonth() + 1).padStart(2, "0"),
-                      day: String(momentDate.getDate()).padStart(2, "0"),
-                      title: moment.title,
-                      body: moment.description
-                    };
-                  })
-                : [createEmptyTimelineEntry()]
-          }))
+          draft.chapters
+            .map((chapter) => ({
+              title: chapter.title,
+              type: chapter.type.toUpperCase(),
+              words: getChapterWordCount(chapter.body),
+              status: draft.status === "published" ? "Published" : "Draft saved",
+              moments: chapter.moments.length,
+              body: chapter.body,
+              imageAttachments: (chapter.imageUrls ?? []).map((imageUrl, index) => ({
+                name: `${chapter.title} image ${index + 1}`,
+                url: imageUrl,
+                source: "Saved story",
+                objectKey: chapter.imageKeys?.[index]
+              })),
+              voiceNotes: chapter.voiceNoteUrl
+                ? [{
+                    name: `Voice note ${chapter.order}`,
+                    url: chapter.voiceNoteUrl,
+                    source: "Saved story",
+                    objectKey: chapter.voiceNoteKey ?? undefined
+                  }]
+                : [],
+              timelineEntries:
+                chapter.moments.length > 0
+                  ? chapter.moments.map((moment) => {
+                      const momentDate = new Date(moment.happenedAt);
+                      return {
+                        year: String(momentDate.getFullYear()),
+                        month: String(momentDate.getMonth() + 1).padStart(2, "0"),
+                        day: String(momentDate.getDate()).padStart(2, "0"),
+                        title: moment.title,
+                        body: moment.description
+                      };
+                    })
+                  : [createEmptyTimelineEntry()]
+            }))
+            .filter((chapter) => !isLegacySeedChapter(chapter))
         );
       })
       .catch(() => undefined);
@@ -5969,6 +5988,8 @@ function StudioPage({
     if (typeof window === "undefined") {
       return;
     }
+
+    let hydrationTimer: number | null = null;
 
     try {
       const rawDraft = window.localStorage.getItem(studioStorageKey);
@@ -6031,7 +6052,7 @@ function StudioPage({
               (voice) => Boolean(voice.objectKey || (voice.url && !isBlobUrl(voice.url)))
             ),
             timelineEntries: chapter.timelineEntries?.length ? chapter.timelineEntries : [createEmptyTimelineEntry()]
-          }))
+          })).filter((chapter) => !isLegacySeedChapter(chapter))
         );
       }
       if (Array.isArray(savedDraft.timelineEntries) && (!savedDraft.chapters || savedDraft.chapters.length === 0)) {
@@ -6049,12 +6070,21 @@ function StudioPage({
     } catch {
       setStudioMessage("Could not restore the last local studio draft.");
     } finally {
-      hasLoadedStudioDraftRef.current = true;
+      hydrationTimer = window.setTimeout(() => {
+        hasLoadedStudioDraftRef.current = true;
+        setIsStudioDraftHydrated(true);
+      }, 0);
     }
+
+    return () => {
+      if (hydrationTimer) {
+        window.clearTimeout(hydrationTimer);
+      }
+    };
   }, [studioStorageKey]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !hasLoadedStudioDraftRef.current) {
+    if (typeof window === "undefined" || !hasLoadedStudioDraftRef.current || !isStudioDraftHydrated) {
       return;
     }
 
@@ -6111,6 +6141,7 @@ function StudioPage({
     timelineEntries,
     transcriptionLanguage,
     visibility,
+    isStudioDraftHydrated,
     studioStorageKey
   ]);
 
@@ -7272,16 +7303,19 @@ function StudioPage({
   const buildStoryPayload = (
     status: "draft" | "published",
     sourceChapters: StudioChapter[]
-  ): StudioPublishPayload["payload"] => ({
+  ): StudioPublishPayload["payload"] => {
+    const persistedChapters = sourceChapters.filter((chapter) => isPersistableStudioChapter(chapter));
+
+    return ({
     title: storyTitle,
     summary: storySummary,
-    coverImageUrl: sourceChapters.flatMap((chapter) => chapter.imageAttachments)[0]?.objectKey,
+    coverImageUrl: persistedChapters.flatMap((chapter) => chapter.imageAttachments)[0]?.objectKey,
     visibility: anonymous ? "public" : visibility,
     anonymous,
     allowedViewerIds: [],
     tags: [],
     status,
-    chapters: sourceChapters.map((chapter, index) => ({
+    chapters: persistedChapters.map((chapter, index) => ({
       title: chapter.title,
       body: chapter.body,
       type:
@@ -7303,7 +7337,8 @@ function StudioPage({
           voiceNoteUrl: undefined
         }))
     }))
-  });
+    });
+  };
 
   const validateStoryBeforePersist = () => {
     const summaryWords = storySummary.trim().split(/\s+/).filter(Boolean).length;
@@ -7328,6 +7363,16 @@ function StudioPage({
   };
 
   const persistStory = async (payload: ReturnType<typeof buildStoryPayload>, successMessage: string) => {
+    console.info("[studio] persist story payload", {
+      currentStoryId,
+      title: payload.title,
+      status: payload.status,
+      chapterCount: payload.chapters.length,
+      imageCount: payload.chapters.reduce((sum, chapter) => sum + chapter.imageUrls.length, 0),
+      voiceCount: payload.chapters.reduce((sum, chapter) => sum + (chapter.voiceNoteUrl ? 1 : 0), 0),
+      chapterTitles: payload.chapters.map((chapter) => chapter.title)
+    });
+
     const story = currentStoryId
       ? await apiRequest<ApiStory>(`/stories/${currentStoryId}`, {
           method: "PATCH",
