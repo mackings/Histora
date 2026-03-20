@@ -550,6 +550,9 @@ async function uploadMediaAsset(
 
 const isBlobUrl = (value: string) => value.startsWith("blob:");
 
+const getStudioAttachmentStorageUrl = (attachment: { url: string; objectKey?: string }) =>
+  attachment.objectKey || (attachment.url && !isBlobUrl(attachment.url) ? attachment.url : "");
+
 const getErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error && error.message.trim() ? error.message : fallback;
 
@@ -5776,8 +5779,8 @@ function StudioPage({
   const publishSectionRef = useRef<HTMLElement | null>(null);
   const timelineSectionRef = useRef<HTMLElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
-  const imageAttachmentsRef = useRef<Array<{ name: string; url: string; source: string }>>([]);
-  const voiceNotesRef = useRef<Array<{ name: string; url: string; source: string }>>([]);
+  const imageAttachmentsRef = useRef<StudioMediaAttachment[]>([]);
+  const voiceNotesRef = useRef<StudioMediaAttachment[]>([]);
   const audioChunksRef = useRef<Blob[]>([]);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -5807,6 +5810,14 @@ function StudioPage({
   const activeChapterEntry = chapters[activeChapterIndex] ?? chapters[0];
   const activeChapterLabel = activeChapterEntry?.title ?? activeChapter;
   const chapterBody = activeChapterEntry?.body ?? "";
+  const getLatestChapterBody = () => {
+    const editorHtml = chapterBodyRef.current?.innerHTML;
+    if ((editorHtml ?? "") === "" && chapterBody) {
+      return chapterBody;
+    }
+
+    return editorHtml ?? chapterBody;
+  };
   const plainChapterText = getPlainTextFromHtml(chapterBody);
   const wordCount = getChapterWordCount(chapterBody);
   const chapterMetrics = chapters.map((chapter) => ({
@@ -5819,7 +5830,7 @@ function StudioPage({
   const activeChapterReady = chapterMetrics[activeChapterIndex >= 0 ? activeChapterIndex : 0];
   const activeChapterNumber = Math.max(activeChapterIndex + 1, 1);
   const activeChapterNumberLabel = `Chapter ${activeChapterNumber}`;
-  const liveEditorBody = chapterBodyRef.current?.innerHTML ?? chapterBody;
+  const liveEditorBody = getLatestChapterBody();
   const autoSaveSignature = JSON.stringify({
     activeChapter,
     anonymous,
@@ -6013,8 +6024,12 @@ function StudioPage({
         setChapters(
           savedDraft.chapters.map((chapter) => ({
             ...chapter,
-            imageAttachments: chapter.imageAttachments ?? [],
-            voiceNotes: chapter.voiceNotes ?? [],
+            imageAttachments: (chapter.imageAttachments ?? []).filter(
+              (attachment) => Boolean(attachment.objectKey || (attachment.url && !isBlobUrl(attachment.url)))
+            ),
+            voiceNotes: (chapter.voiceNotes ?? []).filter(
+              (voice) => Boolean(voice.objectKey || (voice.url && !isBlobUrl(voice.url)))
+            ),
             timelineEntries: chapter.timelineEntries?.length ? chapter.timelineEntries : [createEmptyTimelineEntry()]
           }))
         );
@@ -6044,6 +6059,25 @@ function StudioPage({
     }
 
     const snapshotChapters = getLiveChaptersSnapshot();
+    const serializableChapters = snapshotChapters.map((chapter) => ({
+      ...chapter,
+      imageAttachments: chapter.imageAttachments
+        .map((attachment) => ({
+          name: attachment.name,
+          url: getStudioAttachmentStorageUrl(attachment),
+          source: attachment.source,
+          objectKey: attachment.objectKey
+        }))
+        .filter((attachment) => attachment.url),
+      voiceNotes: chapter.voiceNotes
+        .map((voice) => ({
+          name: voice.name,
+          url: getStudioAttachmentStorageUrl(voice),
+          source: voice.source,
+          objectKey: voice.objectKey
+        }))
+        .filter((voice) => voice.url)
+    }));
 
     const draftPayload = {
       currentStoryId,
@@ -6055,7 +6089,7 @@ function StudioPage({
       storySummary,
       chapterType,
       allowComments,
-      chapters: snapshotChapters,
+      chapters: serializableChapters,
       timelineEntries,
       draftHistory,
       transcriptionLanguage
@@ -6124,7 +6158,7 @@ function StudioPage({
     };
   }, []);
 
-  const appendImages = (files: FileList | null, source: string) => {
+  const appendImages = async (files: FileList | null, source: string) => {
     if (!files?.length) {
       return;
     }
@@ -6138,20 +6172,36 @@ function StudioPage({
       return;
     }
 
-    const nextImages = Array.from(files)
-      .slice(0, remainingSlots)
-      .map((file) => ({
-        name: file.name || `${source} image`,
-        url: URL.createObjectURL(file),
-        source,
-        blob: file
-      }));
+    const nextFiles = Array.from(files).slice(0, remainingSlots);
+    setVoiceRecordingStatus("Uploading image attachments...");
+
+    const uploadedImages = await Promise.all(
+      nextFiles.map(async (file) => {
+        const uploaded = await uploadMediaAsset(accessToken, {
+          blob: file,
+          fileName: file.name || `${source} image.jpg`,
+          contentType: file.type || "image/jpeg"
+        });
+
+        return {
+          name: file.name || `${source} image`,
+          url: uploaded.readUrl,
+          source,
+          objectKey: uploaded.objectKey,
+          blob: file
+        };
+      })
+    );
 
     setImageAttachments((current) => {
-      const updated = [...current, ...nextImages];
+      const dedupedCurrent = current.filter(
+        (attachment) => !uploadedImages.some((uploaded) => uploaded.objectKey && uploaded.objectKey === attachment.objectKey)
+      );
+      const updated = [...dedupedCurrent, ...uploadedImages];
       updateActiveChapterMedia("imageAttachments", updated);
       return updated;
     });
+    setVoiceRecordingStatus("Image attachments saved.");
 
     if (files.length > remainingSlots) {
       setMediaError("Some images were skipped because the current plan limit was reached.");
@@ -6159,7 +6209,9 @@ function StudioPage({
   };
 
   const handleImageUpload = (event: ChangeEvent<HTMLInputElement>) => {
-    appendImages(event.target.files, "Upload");
+    void appendImages(event.target.files, "Upload").catch((error) => {
+      setMediaError(getErrorMessage(error, "Could not save the selected images."));
+    });
     event.target.value = "";
   };
 
@@ -6223,21 +6275,13 @@ function StudioPage({
             setVoiceRecordingStatus("Recording stopped. Voice note saved.");
           })
           .catch((error) => {
-            setMediaError(getErrorMessage(error, "Could not save the voice note."));
-            setVoiceNotes((current) => {
-              const updated = [
-                ...current,
-                {
-                  name: nextVoiceName,
-                  url,
-                  source: "Recorded in studio",
-                  blob
-                }
-              ];
-              updateActiveChapterMedia("voiceNotes", updated);
-              return updated;
-            });
-            setVoiceRecordingStatus("Recording stopped. Voice note saved locally.");
+            if (isBlobUrl(url)) {
+              URL.revokeObjectURL(url);
+            }
+            const message = getErrorMessage(error, "Could not upload the voice note.");
+            setMediaError(`${message} Voice notes only appear after a successful upload.`);
+            openStudioNotice("Voice note upload failed", `${message} Record again when your connection is stable.`);
+            setVoiceRecordingStatus("Voice note upload failed.");
           });
 
         stream.getTracks().forEach((track) => track.stop());
@@ -6356,7 +6400,7 @@ function StudioPage({
   };
 
   const buildChaptersSnapshot = () => {
-    const latestBody = chapterBodyRef.current?.innerHTML ?? activeChapterEntry?.body ?? "";
+    const latestBody = getLatestChapterBody();
     const latestWords = getChapterWordCount(latestBody);
     const targetIndex = activeChapterIndex >= 0 ? activeChapterIndex : 0;
     const snapshot = chapters.map((chapter, index) =>
@@ -6383,7 +6427,7 @@ function StudioPage({
     }));
 
   const getLiveChaptersSnapshot = () => {
-    const latestBody = chapterBodyRef.current?.innerHTML ?? activeChapterEntry?.body ?? "";
+    const latestBody = getLatestChapterBody();
     const latestWords = getChapterWordCount(latestBody);
     const targetIndex = activeChapterIndex >= 0 ? activeChapterIndex : 0;
 
@@ -6452,6 +6496,25 @@ function StudioPage({
       words: nextText.trim().length === 0 ? 0 : nextText.trim().split(/\s+/).length
     }));
     if (typeof window !== "undefined" && hasLoadedStudioDraftRef.current) {
+      const serializableChapters = nextSnapshot.map((chapter) => ({
+        ...chapter,
+        imageAttachments: chapter.imageAttachments
+          .map((attachment) => ({
+            name: attachment.name,
+            url: getStudioAttachmentStorageUrl(attachment),
+            source: attachment.source,
+            objectKey: attachment.objectKey
+          }))
+          .filter((attachment) => attachment.url),
+        voiceNotes: chapter.voiceNotes
+          .map((voice) => ({
+            name: voice.name,
+            url: getStudioAttachmentStorageUrl(voice),
+            source: voice.source,
+            objectKey: voice.objectKey
+          }))
+          .filter((voice) => voice.url)
+      }));
       const draftPayload = {
         currentStoryId,
         activeChapter,
@@ -6462,7 +6525,7 @@ function StudioPage({
         storySummary,
         chapterType,
         allowComments,
-        chapters: nextSnapshot,
+        chapters: serializableChapters,
         timelineEntries,
         draftHistory,
         transcriptionLanguage
