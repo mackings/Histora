@@ -9,6 +9,7 @@ import { AppError } from "../utils/app-error.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
 
 const buildStatusShareSlug = () => `status-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const statusLifetimeMs = 24 * 60 * 60 * 1000;
 
 export async function createStatus(userId: string, payload: StatusCreateInput) {
   const user = await UserModel.findById(userId).select("fullName username");
@@ -25,7 +26,8 @@ export async function createStatus(userId: string, payload: StatusCreateInput) {
     anonymous: payload.anonymous,
     visibility: payload.visibility,
     imageUrl: payload.imageUrl,
-    shareSlug: payload.anonymous ? buildStatusShareSlug() : undefined
+    shareSlug: payload.anonymous ? buildStatusShareSlug() : undefined,
+    expiresAt: new Date(Date.now() + statusLifetimeMs)
   });
 
   await deleteCache("statuses:feed");
@@ -62,10 +64,16 @@ export async function getStatusFeed() {
   }
 
   // Keep the feed query intentionally small so status loading stays cheap and cache-friendly.
-  const feed = await StatusModel.find({ visibility: "public" })
+  const feed = await StatusModel.find({
+    visibility: "public",
+    $or: [
+      { expiresAt: { $gt: new Date() } },
+      { createdAt: { $gt: new Date(Date.now() - statusLifetimeMs) } }
+    ]
+  })
     .sort({ createdAt: -1 })
     .limit(30)
-    .select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt");
+    .select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
   await writeJsonCache("statuses:feed", feed, 30);
   return feed;

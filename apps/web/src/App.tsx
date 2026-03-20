@@ -6,12 +6,9 @@ import {
   feedPreview,
   pricingPlans,
   profileActivity,
-  profileSavedShelf,
-  profileSettings,
   profileStats,
   profileStories,
   readingShelves,
-  storyCircles,
   timelineMoments
 } from "./app-data";
 import feedStory from "./assets/feed-story.svg";
@@ -185,6 +182,7 @@ type AuthUser = {
   fullName: string;
   username: string;
   email: string;
+  avatarUrl?: string | null;
   subscriptionTier: "free" | "premium";
   emailVerified?: boolean;
 };
@@ -227,6 +225,21 @@ type ApiAnonymousMessage = {
   createdAt: string;
 };
 
+type ApiStatus = {
+  id: string;
+  authorName: string;
+  authorUsername: string;
+  body: string;
+  anonymous: boolean;
+  visibility: "public" | "followers" | "private";
+  imageUrl?: string | null;
+  shareSlug?: string | null;
+  commentsCount: number;
+  likesCount: number;
+  bookmarksCount: number;
+  createdAt: string;
+};
+
 type ApiStory = {
   id: string;
   slug: string;
@@ -234,6 +247,7 @@ type ApiStory = {
   title: string;
   summary: string;
   coverImageUrl?: string | null;
+  coverImageKey?: string | null;
   visibility: "private" | "public" | "selected";
   anonymous: boolean;
   authorName: string;
@@ -247,13 +261,17 @@ type ApiStory = {
     type: "memory" | "reflection" | "milestone" | "anonymous";
     order: number;
     imageUrls: string[];
+    imageKeys?: string[];
     voiceNoteUrl?: string | null;
+    voiceNoteKey?: string | null;
     moments: Array<{
       title: string;
       description: string;
       happenedAt: string;
       imageUrls: string[];
+      imageKeys?: string[];
       voiceNoteUrl?: string | null;
+      voiceNoteKey?: string | null;
     }>;
   }>;
   createdAt: string;
@@ -426,6 +444,50 @@ async function apiRequest<T>(
 
   return (await response.json()) as T;
 }
+
+async function uploadMediaAsset(
+  accessToken: string,
+  asset: { blob: Blob; fileName: string; contentType: string }
+) {
+  const signedUpload = await apiRequest<SignedUploadResponse>("/media/signed-upload", {
+    method: "POST",
+    accessToken,
+    body: {
+      fileName: asset.fileName,
+      contentType: asset.contentType
+    }
+  });
+
+  const uploadResponse = await fetch(signedUpload.uploadUrl, {
+    method: "PUT",
+    headers: {
+      "Content-Type": asset.contentType
+    },
+    body: asset.blob
+  });
+
+  if (!uploadResponse.ok) {
+    throw new Error("Could not upload media asset.");
+  }
+
+  if (signedUpload.publicUrl) {
+    return {
+      objectKey: signedUpload.objectKey,
+      readUrl: signedUpload.publicUrl
+    };
+  }
+
+  const signedRead = await apiRequest<SignedReadResponse>(`/media/signed-read?objectKey=${encodeURIComponent(signedUpload.objectKey)}`, {
+    accessToken
+  });
+
+  return {
+    objectKey: signedUpload.objectKey,
+    readUrl: signedRead.readUrl
+  };
+}
+
+const isBlobUrl = (value: string) => value.startsWith("blob:");
 
 const getErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error && error.message.trim() ? error.message : fallback;
@@ -777,6 +839,28 @@ const storedAnonymousStatusToEntry = (entry: StoredAnonymousStatus): StatusEntry
   helpFee: entry.helpFee
 });
 
+const addStatusEntry: StatusEntry = {
+  name: "Add",
+  meta: "New",
+  tone: "add",
+  label: "Create status",
+  contentTitle: "",
+  contentBody: ""
+};
+
+const toStatusEntry = (status: ApiStatus): StatusEntry => ({
+  name: status.anonymous ? "Anonymous" : status.authorName,
+  meta: formatAnonymousMeta(status.createdAt),
+  tone: status.anonymous ? "ink" : "blue",
+  label: status.anonymous ? "Advice status" : "Memory status",
+  contentTitle: status.anonymous ? "Anonymous advice status" : "Memory status",
+  contentBody: status.body,
+  anonymous: status.anonymous,
+  shareSlug: status.shareSlug ?? undefined,
+  comments: [],
+  helpFee: status.anonymous ? 8 : undefined
+});
+
 function AppShell({ children, isLoggedIn }: { children: React.ReactNode; isLoggedIn: boolean }) {
   useHomeIntroVoice();
   const location = useLocation();
@@ -898,7 +982,11 @@ function AppShell({ children, isLoggedIn }: { children: React.ReactNode; isLogge
   );
 }
 
-function StoryCirclesRow() {
+function StoryCirclesRow({
+  accessToken
+}: {
+  accessToken: string;
+}) {
   const navigate = useNavigate();
   const emojiGroups = [
     { label: "Recent", icon: "🕘", emojis: ["😂", "❤️", "😭", "🔥", "🙏", "✨"] },
@@ -927,12 +1015,28 @@ function StoryCirclesRow() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [activeEmojiGroup, setActiveEmojiGroup] = useState("Recent");
   const [isAnonymousComposer, setIsAnonymousComposer] = useState(false);
-  const [statusItems, setStatusItems] = useState<StatusEntry[]>(storyCircles as StatusEntry[]);
+  const [statusItems, setStatusItems] = useState<StatusEntry[]>([addStatusEntry]);
   const [shareFeedback, setShareFeedback] = useState("");
   const [helpRequestTarget, setHelpRequestTarget] = useState<StatusEntry | null>(null);
   const [consentAccepted, setConsentAccepted] = useState(false);
 
   const activeStatus = activeIndex === null ? null : statusItems[activeIndex];
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void apiRequest<ApiStatus[]>("/statuses")
+      .then((statuses) => {
+        if (!cancelled) {
+          setStatusItems([addStatusEntry, ...statuses.map(toStatusEntry)]);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (activeIndex === null) {
@@ -1160,13 +1264,27 @@ function StoryCirclesRow() {
       return;
     }
 
-    setStatusItems((current) => [current[0], nextEntry, ...current.slice(1)]);
-    setStatusDraft("Today I finally wrote the chapter I kept postponing.");
-    setSelectedImage(null);
-    setIsComposerOpen(false);
-    setIsAnonymousComposer(false);
-    setShareFeedback("Status posted.");
-    setActiveIndex(1);
+    void apiRequest<ApiStatus>("/statuses", {
+      method: "POST",
+      accessToken,
+      body: {
+        body: statusDraft.trim(),
+        anonymous: false,
+        visibility: "public"
+      }
+    })
+      .then((createdStatus) => {
+        setStatusItems((current) => [current[0], toStatusEntry(createdStatus), ...current.slice(1)]);
+        setStatusDraft("Today I finally wrote the chapter I kept postponing.");
+        setSelectedImage(null);
+        setIsComposerOpen(false);
+        setIsAnonymousComposer(false);
+        setShareFeedback("Status posted.");
+        setActiveIndex(1);
+      })
+      .catch((error) => {
+        setShareFeedback(getErrorMessage(error, "Could not post status."));
+      });
   };
 
   const confirmHelpRequest = () => {
@@ -2156,12 +2274,14 @@ function AnonymousHubPage({
   const navigate = useNavigate();
   const [statuses, setStatuses] = useState<StoredAnonymousStatus[]>([]);
   const [shareFeedback, setShareFeedback] = useState("");
+  const [showAllMessages, setShowAllMessages] = useState(false);
   const inboxLink =
     typeof window === "undefined"
       ? `/anonymous/write/${currentUser.username}`
       : `${window.location.origin}/anonymous/write/${currentUser.username}`;
   const receivedMessages = statuses.filter((status) => status.source === "received");
   const postedMessages = statuses.filter((status) => status.source === "posted");
+  const visibleReceivedMessages = showAllMessages ? receivedMessages : receivedMessages.slice(0, 5);
 
   useEffect(() => {
     let cancelled = false;
@@ -2333,7 +2453,7 @@ function AnonymousHubPage({
       <section className="story-reader-stage card anonymous-hero">
         <div className="anonymous-hero-copy">
           <SectionLabel>ANONYMOUS_ARCHIVE</SectionLabel>
-          <p>Share your inbox link so others can write to you anonymously. Keep messages private, publish them inside Histora, or export them elsewhere.</p>
+          <p>Share your inbox link so people can send you anonymous messages.</p>
         </div>
         <div className="anonymous-inbox-card">
           <span className="story-tag">YOUR INBOX LINK</span>
@@ -2343,8 +2463,8 @@ function AnonymousHubPage({
             <button className="ghost-action" onClick={copyInboxLink} type="button">
               COPY LINK
             </button>
-            <button className="primary-action" onClick={() => navigate(`/anonymous/write/${currentUser.username}`)} type="button">
-              OPEN LINK PAGE
+            <button className="primary-action" onClick={() => setShowAllMessages((current) => !current)} type="button">
+              {showAllMessages ? "SHOW RECENT" : "SEE ALL MESSAGES"}
               <Icon className="button-icon" name="arrow" />
             </button>
           </div>
@@ -2353,172 +2473,55 @@ function AnonymousHubPage({
 
       {shareFeedback ? <p className="status-feedback">{shareFeedback}</p> : null}
 
-      <section className="anonymous-summary-strip">
-        <article className="profile-stat-card">
-          <span>Inbox messages</span>
-          <strong>{receivedMessages.length}</strong>
-        </article>
-        <article className="profile-stat-card">
-          <span>Published on app</span>
-          <strong>{statuses.filter((status) => status.distribution === "app").length}</strong>
-        </article>
-        <article className="profile-stat-card">
-          <span>External only</span>
-          <strong>{statuses.filter((status) => status.distribution === "external").length}</strong>
-        </article>
-      </section>
-
       <section className="anonymous-hub-stack">
         <article className="chapter-reader-card card anonymous-hub-panel">
           <div className="anonymous-panel-body">
-          <div className="profile-section-copy anonymous-section-copy">
-            <SectionLabel>INBOX</SectionLabel>
-            <h2>Anonymous messages people sent to you</h2>
-            <span>Review the message, then decide whether it stays in Histora or remains only for external sharing.</span>
-          </div>
-          <div className="anonymous-hub-list">
-            {receivedMessages.length ? (
-              receivedMessages.map((status) => (
-                <article className="anonymous-hub-card" key={status.shareSlug}>
-                  <div className="anonymous-hub-card-top">
-                    <div className="anonymous-hub-card-copy">
-                      <strong>Anonymous message</strong>
-                      <span>{status.meta}</span>
+            <div className="profile-section-copy anonymous-section-copy">
+              <SectionLabel>MESSAGES</SectionLabel>
+              <h2>Anonymous messages</h2>
+              <span>{receivedMessages.length} total message{receivedMessages.length === 1 ? "" : "s"} in your inbox.</span>
+            </div>
+            <div className="anonymous-hub-list">
+              {visibleReceivedMessages.length ? (
+                visibleReceivedMessages.map((status) => (
+                  <article className="anonymous-hub-card" key={status.shareSlug}>
+                    <div className="anonymous-hub-card-top">
+                      <div className="anonymous-hub-card-copy">
+                        <strong>Anonymous message</strong>
+                        <span>{status.meta}</span>
+                      </div>
                     </div>
-                    <span className="story-tag">{status.distribution === "app" ? "ON APP" : "EXTERNAL"}</span>
-                  </div>
-                  <p>{status.body}</p>
-                  <div className="anonymous-hub-meta">
-                    <span>{status.comments.length} replies</span>
-                    <span>Consent fee ${status.helpFee}</span>
-                  </div>
-                  {status.helperContact ? (
-                    <div className="anonymous-helper-card">
-                      <strong>Helper unlocked</strong>
-                      <span>{status.helperContact.name}</span>
-                      <small>{status.helperContact.phone}</small>
+                    <p>{status.body}</p>
+                    <div className="anonymous-hub-actions">
+                      <button className="ghost-action" onClick={() => copyAnonymousLink(status)} type="button">
+                        COPY MESSAGE LINK
+                      </button>
+                      <button className="primary-action" onClick={() => navigate(`/anonymous/${status.shareSlug}`)} type="button">
+                        OPEN MESSAGE
+                        <Icon className="button-icon" name="arrow" />
+                      </button>
                     </div>
-                  ) : null}
-                  <div className="anonymous-distribution-row">
-                    <button
-                      className={status.distribution === "app" ? "composer-chip active-composer-chip" : "composer-chip"}
-                      onClick={() => void toggleDistribution(status, "app")}
-                      type="button"
-                    >
-                      Show on app
-                    </button>
-                    <button
-                      className={status.distribution === "external" ? "composer-chip active-composer-chip" : "composer-chip"}
-                      onClick={() => void toggleDistribution(status, "external")}
-                      type="button"
-                    >
-                      Keep external
-                    </button>
-                  </div>
+                  </article>
+                ))
+              ) : (
+                <article className="anonymous-empty">
+                  <strong>No anonymous messages yet</strong>
+                  <p>Copy your inbox link and share it to start receiving anonymous messages.</p>
                   <div className="anonymous-hub-actions">
-                    <button className="ghost-action" onClick={() => copyAnonymousLink(status)} type="button">
-                      COPY MESSAGE LINK
-                    </button>
-                    <button className="ghost-action" onClick={() => downloadAnonymousCard(status)} type="button">
-                      DOWNLOAD CARD
-                    </button>
-                    <button className="primary-action" onClick={() => navigate(`/anonymous/${status.shareSlug}`)} type="button">
-                      OPEN MESSAGE
-                      <Icon className="button-icon" name="arrow" />
+                    <button className="ghost-action" onClick={copyInboxLink} type="button">
+                      COPY INBOX LINK
                     </button>
                   </div>
                 </article>
-              ))
-            ) : (
-              <article className="anonymous-empty">
-                <strong>No anonymous messages yet</strong>
-                <p>Share your inbox link and people will be able to write you anonymous messages after signing in.</p>
-                <div className="anonymous-hub-actions">
-                  <button className="ghost-action" onClick={copyInboxLink} type="button">
-                    COPY INBOX LINK
-                  </button>
-                  <button className="primary-action" onClick={() => navigate(`/anonymous/write/${currentUser.username}`)} type="button">
-                    PREVIEW INBOX PAGE
-                    <Icon className="button-icon" name="arrow" />
-                  </button>
-                </div>
-              </article>
-            )}
-          </div>
-          </div>
-        </article>
-
-        <article className="chapter-reader-card card anonymous-hub-panel">
-          <div className="anonymous-panel-body">
-          <div className="profile-section-copy anonymous-section-copy">
-            <SectionLabel>POSTED_BY_YOU</SectionLabel>
-            <h2>Anonymous posts you already shared</h2>
-            <span>These came from your quick-memory anonymous posts and can still be shared, downloaded, or opened as pages.</span>
-          </div>
-          <div className="anonymous-hub-list">
-            {postedMessages.length ? (
-              postedMessages.map((status) => (
-                <article className="anonymous-hub-card" key={status.shareSlug}>
-                  <div className="anonymous-hub-card-top">
-                    <div className="anonymous-hub-card-copy">
-                      <strong>Anonymous message</strong>
-                      <span>{status.meta}</span>
-                    </div>
-                    <span className="story-tag">{status.distribution === "app" ? "ON APP" : "EXTERNAL"}</span>
-                  </div>
-                  <p>{status.body}</p>
-                  <div className="anonymous-hub-meta">
-                    <span>{status.comments.length} replies</span>
-                    <span>Consent fee ${status.helpFee}</span>
-                  </div>
-                  {status.helperContact ? (
-                    <div className="anonymous-helper-card">
-                      <strong>Helper unlocked</strong>
-                      <span>{status.helperContact.name}</span>
-                      <small>{status.helperContact.phone}</small>
-                    </div>
-                  ) : null}
-                  <div className="anonymous-distribution-row">
-                    <button
-                      className={status.distribution === "app" ? "composer-chip active-composer-chip" : "composer-chip"}
-                      onClick={() => void toggleDistribution(status, "app")}
-                      type="button"
-                    >
-                      Keep on Histora
-                    </button>
-                    <button
-                      className={status.distribution === "external" ? "composer-chip active-composer-chip" : "composer-chip"}
-                      onClick={() => void toggleDistribution(status, "external")}
-                      type="button"
-                    >
-                      Share elsewhere
-                    </button>
-                  </div>
-                  <div className="anonymous-hub-actions">
-                    <button className="ghost-action" onClick={() => copyAnonymousLink(status)} type="button">
-                      COPY LINK
-                    </button>
-                    <button className="ghost-action" onClick={() => downloadAnonymousCard(status)} type="button">
-                      DOWNLOAD
-                    </button>
-                    <button className="primary-action" onClick={() => navigate(`/anonymous/${status.shareSlug}`)} type="button">
-                      OPEN PAGE
-                      <Icon className="button-icon" name="arrow" />
-                    </button>
-                  </div>
-                </article>
-              ))
-            ) : (
-              <article className="anonymous-empty">
-                <strong>No anonymous posts yet</strong>
-                <p>Post an anonymous quick memory from the home status row and it will appear here.</p>
-                <NavLink className="primary-action" to="/">
-                  GO TO QUICK MEMORY
-                  <Icon className="button-icon" name="arrow" />
-                </NavLink>
-              </article>
-            )}
-          </div>
+              )}
+            </div>
+            {receivedMessages.length > 5 ? (
+              <div className="anonymous-hub-actions">
+                <button className="ghost-action" onClick={() => setShowAllMessages((current) => !current)} type="button">
+                  {showAllMessages ? "SHOW LESS" : "SEE ALL ANONYMOUS"}
+                </button>
+              </div>
+            ) : null}
           </div>
         </article>
       </section>
@@ -2896,9 +2899,59 @@ type FeedStoryRecord = (typeof feedPreview)[number] & {
   chapters: FeedStoryChapter[];
 };
 
+type StudioMediaAttachment = {
+  name: string;
+  url: string;
+  source: string;
+  objectKey?: string;
+  blob?: Blob;
+};
+
+type StudioTimelineEntry = {
+  year: string;
+  month: string;
+  day: string;
+  title: string;
+  body: string;
+};
+
 type StudioChapter = (typeof chapterDrafts)[number] & {
   title: string;
   body: string;
+  imageAttachments: StudioMediaAttachment[];
+  voiceNotes: StudioMediaAttachment[];
+  timelineEntries: StudioTimelineEntry[];
+};
+
+type StudioPreviewPayload = {
+  storyTitle: string;
+  storySummary: string;
+  activeChapterNumberLabel: string;
+  activeChapter: string;
+  chapterType: string;
+  visibility: string;
+  chapterBody: string;
+  wordCount: number;
+  imageAttachments: StudioMediaAttachment[];
+  voiceNotes: StudioMediaAttachment[];
+  timelineEntries: StudioTimelineEntry[];
+  allowComments: boolean;
+  chapterStatus: string;
+  chapterChecklist: {
+    required: string[];
+    optional: string[];
+  };
+};
+
+type SignedUploadResponse = {
+  uploadUrl: string;
+  objectKey: string;
+  publicUrl?: string | null;
+};
+
+type SignedReadResponse = {
+  objectKey: string;
+  readUrl: string;
 };
 
 type ShareSheetPayload = {
@@ -3213,6 +3266,41 @@ function ProfilePage({
   const profileActivityData = dashboard?.activity ?? [];
   const profileMetrics = dashboard?.metrics;
   const profileUser = dashboard?.user;
+  const accountControls = [
+    {
+      title: "Profile visibility",
+      detail:
+        profileUser?.profileVisibility === "selected"
+          ? "Only selected readers can view your profile."
+          : profileUser?.profileVisibility === "private"
+            ? "Your profile is private."
+            : "Your profile is visible publicly."
+    },
+    {
+      title: "Default chapter access",
+      detail:
+        profileUser?.defaultStoryVisibility === "anonymous"
+          ? "New chapters default to anonymous advice visibility."
+          : profileUser?.defaultStoryVisibility === "selected"
+            ? "New chapters default to selected readers."
+            : profileUser?.defaultStoryVisibility === "private"
+              ? "New chapters default to private."
+              : "New chapters default to public."
+    },
+    {
+      title: "Comments",
+      detail: profileUser?.allowCommentsByDefault ? "Comments are on by default." : "Comments are off by default."
+    },
+    {
+      title: "Help requests",
+      detail: profileUser?.allowHelpRequests ? "Readers can request to help." : "Reader help requests are disabled."
+    }
+  ];
+  const planSummary = profileUser?.subscriptionTier === "premium" ? "Premium" : "Free";
+  const planDescription =
+    profileUser?.subscriptionTier === "premium"
+      ? "Expanded media slots, more chapters, and wider archive controls are active on your account."
+      : "You are on the free plan. Upgrade when you need more chapters, media slots, and archive controls.";
 
   return (
     <main className="page-shell">
@@ -3240,7 +3328,11 @@ function ProfilePage({
         </div>
 
         <div className="profile-header">
-          <span className="profile-avatar-xl">{(profileUser?.fullName ?? "H").slice(0, 1).toUpperCase()}</span>
+          {profileUser?.avatarUrl ? (
+            <img alt={profileUser.fullName} className="profile-avatar-xl profile-avatar-image" src={profileUser.avatarUrl} />
+          ) : (
+            <span className="profile-avatar-xl">{(profileUser?.fullName ?? "H").slice(0, 1).toUpperCase()}</span>
+          )}
           <div className="profile-header-copy">
             <div className="profile-header-meta">
               <span className="story-tag">{(profileUser?.profileVisibility ?? "public").toUpperCase()} PROFILE</span>
@@ -3293,18 +3385,27 @@ function ProfilePage({
                 <h2>Stories and chapter packs</h2>
               </div>
               <div className="profile-story-list">
-                {profileStoriesData.map((story) => (
-                  <div className="profile-story-card" key={story.title}>
-                    <div className="profile-story-head">
-                      <div className="profile-story-copy">
-                        <strong>{story.title}</strong>
-                        <span>{story.chapters}</span>
+                {profileStoriesData.length ? (
+                  profileStoriesData.map((story) => (
+                    <div className="profile-story-card" key={story.title}>
+                      <div className="profile-story-head">
+                        <div className="profile-story-copy">
+                          <strong>{story.title}</strong>
+                          <span>{story.chapters}</span>
+                        </div>
+                        <span className="story-tag">{story.visibility}</span>
                       </div>
-                      <span className="story-tag">{story.visibility}</span>
+                      <small>{story.reads} // {story.status}</small>
                     </div>
-                    <small>{story.reads} // {story.status}</small>
+                  ))
+                ) : (
+                  <div className="profile-story-card">
+                    <div className="profile-story-copy">
+                      <strong>No published stories yet</strong>
+                      <span>Your published stories will appear here once they are live.</span>
+                    </div>
                   </div>
-                ))}
+                )}
               </div>
             </div>
           </article>
@@ -3316,13 +3417,21 @@ function ProfilePage({
                 <h2>Archive notifications</h2>
               </div>
               <div className="profile-activity-list">
-                {profileActivityData.map((item) => (
-                  <div className="profile-activity-row" key={item.title}>
-                    <strong>{item.title}</strong>
-                    <span>{item.detail}</span>
-                    <small>{item.time}</small>
+                {profileActivityData.length ? (
+                  profileActivityData.map((item) => (
+                    <div className="profile-activity-row" key={item.title}>
+                      <strong>{item.title}</strong>
+                      <span>{item.detail}</span>
+                      <small>{item.time}</small>
+                    </div>
+                  ))
+                ) : (
+                  <div className="profile-activity-row">
+                    <strong>No recent activity</strong>
+                    <span>Comments, reactions, and new archive updates will appear here.</span>
+                    <small>Live</small>
                   </div>
-                ))}
+                )}
               </div>
             </div>
           </article>
@@ -3336,7 +3445,7 @@ function ProfilePage({
                 <h2>What you can manage</h2>
               </div>
               <div className="profile-settings-list">
-                {profileSettings.map((item) => (
+                {accountControls.map((item) => (
                   <div className="profile-setting-row" key={item.title}>
                     <strong>{item.title}</strong>
                     <span>{item.detail}</span>
@@ -3376,22 +3485,28 @@ function ProfilePage({
                 <h2>Saved reading and plan status</h2>
               </div>
               <div className="profile-story-list">
-                {(savedStories.length
-                  ? savedStories.map((story) => ({ title: story.title, meta: `${story.readCount} reads` }))
-                  : profileSavedShelf
-                ).map((item) => (
-                  <div className="profile-story-card" key={item.title}>
+                {savedStories.length ? (
+                  savedStories.map((story) => (
+                    <div className="profile-story-card" key={story.id}>
+                      <div className="profile-story-copy">
+                        <strong>{story.title}</strong>
+                        <span>{story.readCount} reads</span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="profile-story-card">
                     <div className="profile-story-copy">
-                      <strong>{item.title}</strong>
-                      <span>{item.meta}</span>
+                      <strong>No saved stories yet</strong>
+                      <span>Stories you bookmark will appear here.</span>
                     </div>
                   </div>
-                ))}
+                )}
               </div>
               <div className="profile-premium-card">
-                <span className="story-tag">PRO PLAN</span>
-                <strong>$12 / month</strong>
-                <p>Unlimited chapters, more media slots, selected-reader controls, and extended archive privacy.</p>
+                <span className="story-tag">{planSummary.toUpperCase()} PLAN</span>
+                <strong>{planSummary} account</strong>
+                <p>{planDescription}</p>
               </div>
             </div>
           </article>
@@ -3406,6 +3521,7 @@ function EditProfilePage({
 }: {
   accessToken: string;
 }) {
+  const navigate = useNavigate();
   const [dashboard, setDashboard] = useState<ProfileDashboard | null>(null);
   const [sessions, setSessions] = useState<ProfileSession[]>([]);
   const [devices, setDevices] = useState<ProfileTrustedDevice[]>([]);
@@ -3421,11 +3537,13 @@ function EditProfilePage({
     message: "Checking browser alert support..."
   });
   const [isPushBusy, setIsPushBusy] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const [profileForm, setProfileForm] = useState({
     fullName: "",
     username: "",
     bio: "",
     location: "",
+    avatarUrl: "",
     profileVisibility: "public",
     defaultStoryVisibility: "selected",
     allowCommentsByDefault: true,
@@ -3449,6 +3567,7 @@ function EditProfilePage({
           username: payload.user.username,
           bio: payload.user.bio,
           location: payload.user.location,
+          avatarUrl: payload.user.avatarUrl ?? "",
           profileVisibility: payload.user.profileVisibility,
           defaultStoryVisibility: payload.user.defaultStoryVisibility,
           allowCommentsByDefault: payload.user.allowCommentsByDefault,
@@ -3559,6 +3678,40 @@ function EditProfilePage({
     setProfileForm((current) => ({ ...current, [field]: value }));
   };
 
+  const handleProfileAvatarUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+
+    if (!file) {
+      return;
+    }
+
+    try {
+      setFormFeedback("Uploading profile photo...");
+      const uploaded = await uploadMediaAsset(accessToken, {
+        blob: file,
+        fileName: file.name || "profile-photo",
+        contentType: file.type || "image/jpeg"
+      });
+
+      setProfileForm((current) => ({ ...current, avatarUrl: uploaded.objectKey }));
+      setDashboard((current) =>
+        current
+          ? {
+              ...current,
+              user: {
+                ...current.user,
+                avatarUrl: uploaded.readUrl
+              }
+            }
+          : current
+      );
+      setFormFeedback("Profile photo uploaded. Save profile to keep it.");
+    } catch (error) {
+      setFormFeedback(getErrorMessage(error, "Could not upload profile photo."));
+    }
+  };
+
   const saveProfile = async () => {
     try {
       const result = await apiRequest<{ user: ProfileDashboard["user"] }>("/profile/me", {
@@ -3569,8 +3722,10 @@ function EditProfilePage({
       setProfileForm((current) => ({
         ...current,
         fullName: result.user.fullName,
-        username: result.user.username
+        username: result.user.username,
+        avatarUrl: result.user.avatarUrl ?? current.avatarUrl
       }));
+      setDashboard((current) => (current ? { ...current, user: result.user } : current));
       setFormFeedback("Profile saved.");
     } catch (error) {
       setFormFeedback(getErrorMessage(error, "Could not save profile."));
@@ -3699,6 +3854,27 @@ function EditProfilePage({
               <h2>Identity and visibility</h2>
               <span>Update the public details, location, bio, and default archive visibility for new chapters.</span>
             </div>
+            <div className="profile-editor-avatar-row">
+              {dashboard?.user.avatarUrl ? (
+                <img alt={dashboard.user.fullName} className="profile-avatar-xl profile-avatar-image" src={dashboard.user.avatarUrl} />
+              ) : (
+                <span className="profile-avatar-xl">{(profileForm.fullName || "H").slice(0, 1).toUpperCase()}</span>
+              )}
+              <div className="profile-editor-avatar-copy">
+                <strong>Profile photo</strong>
+                <span>Upload a clear image for your profile identity.</span>
+              </div>
+              <button className="ghost-action" onClick={() => avatarInputRef.current?.click()} type="button">
+                UPLOAD PHOTO
+              </button>
+              <input
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                className="hidden-media-input"
+                onChange={(event) => void handleProfileAvatarUpload(event)}
+                ref={avatarInputRef}
+                type="file"
+              />
+            </div>
             <div className="profile-form-grid">
               <label>
                 Display name
@@ -3775,18 +3951,25 @@ function EditProfilePage({
                 </button>
               </div>
               <div className="profile-settings-list">
-                {contributorInvites.map((invite) => (
-                  <div className="profile-setting-row" key={invite.id}>
-                    <strong>{invite.email}</strong>
-                    <span>
-                      {invite.circle === "family" ? "Family" : "Friend"} // {invite.story}
-                    </span>
-                    <small>{invite.status}</small>
-                    <button className="ghost-action slim-action" onClick={() => handleRemoveInvite(invite.id)} type="button">
-                      REVOKE
-                    </button>
+                {contributorInvites.length ? (
+                  contributorInvites.map((invite) => (
+                    <div className="profile-setting-row" key={invite.id}>
+                      <strong>{invite.email}</strong>
+                      <span>
+                        {invite.circle === "family" ? "Family" : "Friend"} // {invite.story}
+                      </span>
+                      <small>{invite.status}</small>
+                      <button className="ghost-action slim-action" onClick={() => handleRemoveInvite(invite.id)} type="button">
+                        REVOKE
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="profile-setting-row">
+                    <strong>No contributor invites</strong>
+                    <span>Send an invite to let family or friends contribute to a story.</span>
                   </div>
-                ))}
+                )}
               </div>
             </div>
           </article>
@@ -3817,7 +4000,7 @@ function EditProfilePage({
               </div>
               {formFeedback ? <p className="status-feedback">{formFeedback}</p> : null}
               <div className="chapter-controls">
-                <button className="ghost-action" type="button">CANCEL</button>
+                <button className="ghost-action" onClick={() => navigate("/profile")} type="button">CANCEL</button>
                 <button className="primary-action" onClick={() => void saveProfile()} type="button">
                   SAVE PROFILE
                   <Icon className="button-icon" name="arrow" />
@@ -3863,34 +4046,48 @@ function EditProfilePage({
                     </button>
                   </div>
                 </div>
-                {devices.map((device) => (
-                  <div className="profile-setting-row" key={device.id}>
-                    <strong>{device.label}</strong>
-                    <span>
-                      {device.active ? "Trusted device" : "Revoked"}
-                      {device.pushEnabled ? " // Push alerts on" : ""}
-                      {device.ipAddress ? ` // ${device.ipAddress}` : ""}
-                    </span>
-                    <small>{device.userAgent}</small>
-                    <div className="profile-row-actions">
-                      <button className="ghost-action slim-action" onClick={() => void renameDevice(device.id, device.label)} type="button">
-                        RENAME
-                      </button>
-                      <button className="ghost-action slim-action" onClick={() => void revokeDevice(device.id)} type="button">
-                        {device.active ? "REMOVE" : "REMOVED"}
+                {devices.length ? (
+                  devices.map((device) => (
+                    <div className="profile-setting-row" key={device.id}>
+                      <strong>{device.label}</strong>
+                      <span>
+                        {device.active ? "Trusted device" : "Revoked"}
+                        {device.pushEnabled ? " // Push alerts on" : ""}
+                        {device.ipAddress ? ` // ${device.ipAddress}` : ""}
+                      </span>
+                      <small>{device.userAgent}</small>
+                      <div className="profile-row-actions">
+                        <button className="ghost-action slim-action" onClick={() => void renameDevice(device.id, device.label)} type="button">
+                          RENAME
+                        </button>
+                        <button className="ghost-action slim-action" onClick={() => void revokeDevice(device.id)} type="button">
+                          {device.active ? "REMOVE" : "REMOVED"}
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="profile-setting-row">
+                    <strong>No trusted devices yet</strong>
+                    <span>Your approved browsers and phones will appear here.</span>
+                  </div>
+                )}
+                {sessions.length ? (
+                  sessions.map((session) => (
+                    <div className="profile-setting-row" key={session.id}>
+                      <strong>{session.userAgent}</strong>
+                      <span>{session.active ? "Active session" : "Revoked"}{session.ipAddress ? ` // ${session.ipAddress}` : ""}</span>
+                      <button className="ghost-action slim-action" onClick={() => void revokeSession(session.id)} type="button">
+                        {session.active ? "REVOKE" : "REVOKED"}
                       </button>
                     </div>
+                  ))
+                ) : (
+                  <div className="profile-setting-row">
+                    <strong>No active sessions returned</strong>
+                    <span>Signed-in browsers and app sessions will appear here.</span>
                   </div>
-                ))}
-                {sessions.map((session) => (
-                  <div className="profile-setting-row" key={session.id}>
-                    <strong>{session.userAgent}</strong>
-                    <span>{session.active ? "Active session" : "Revoked"}{session.ipAddress ? ` // ${session.ipAddress}` : ""}</span>
-                    <button className="ghost-action slim-action" onClick={() => void revokeSession(session.id)} type="button">
-                      {session.active ? "REVOKE" : "REVOKED"}
-                    </button>
-                  </div>
-                ))}
+                )}
               </div>
             </div>
           </article>
@@ -4161,7 +4358,7 @@ function FeedPage({
 
   return (
     <main className="page-shell">
-      <StoryCirclesRow />
+      <StoryCirclesRow accessToken={accessToken} />
 
       <section className="feed-layout feed-layout-expanded">
         <div className="feed-column">
@@ -4179,7 +4376,7 @@ function FeedPage({
                   <span className="story-tag">{post.visibility}</span>
                 </div>
                 <div className="image-frame">
-                  <img alt={post.title} className="post-image" src={feedStory} />
+                  <img alt={post.title} className="post-image" src={post.chapters[0]?.images[0]?.src || feedStory} />
                 </div>
                 <div className="post-body">
                   <div className="post-meta-row">
@@ -4960,7 +5157,19 @@ function StudioPage({
     chapterDrafts.map((chapter) => ({
       ...chapter,
       title: normalizeChapterTitle(chapter.title),
-      body: initialChapterContent[chapter.title as keyof typeof initialChapterContent] ?? ""
+      body: initialChapterContent[chapter.title as keyof typeof initialChapterContent] ?? "",
+      imageAttachments: [],
+      voiceNotes: [],
+      timelineEntries:
+        chapter.title === "Chapter 2: The year everything changed"
+          ? timelineMoments.map((moment) => ({
+              year: moment.year,
+              month: "01",
+              day: "01",
+              title: moment.title,
+              body: moment.body
+            }))
+          : []
     }))
   );
   const [studioMessage, setStudioMessage] = useState("Studio synced locally.");
@@ -4970,15 +5179,7 @@ function StudioPage({
   const [isEditingChapterTitle, setIsEditingChapterTitle] = useState(false);
   const [draftHistory, setDraftHistory] = useState<string[]>(["Studio opened."]);
   const [studioNotice, setStudioNotice] = useState<null | { title: string; body: string }>(null);
-  const [timelineEntries, setTimelineEntries] = useState(
-    timelineMoments.map((moment) => ({
-      year: moment.year,
-      month: "01",
-      day: "01",
-      title: moment.title,
-      body: moment.body
-    }))
-  );
+  const [timelineEntries, setTimelineEntries] = useState<StudioTimelineEntry[]>([]);
   const [activeFormats, setActiveFormats] = useState({
     bold: false,
     italic: false,
@@ -4987,8 +5188,8 @@ function StudioPage({
     timeline: false,
     comment: false
   });
-  const [imageAttachments, setImageAttachments] = useState<Array<{ name: string; url: string; source: string }>>([]);
-  const [voiceNotes, setVoiceNotes] = useState<Array<{ name: string; url: string; source: string }>>([]);
+  const [imageAttachments, setImageAttachments] = useState<StudioMediaAttachment[]>([]);
+  const [voiceNotes, setVoiceNotes] = useState<StudioMediaAttachment[]>([]);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [isVoiceRecordingPaused, setIsVoiceRecordingPaused] = useState(false);
   const [voiceRecordingStatus, setVoiceRecordingStatus] = useState("Voice note idle");
@@ -5044,6 +5245,17 @@ function StudioPage({
   const activeChapterReady = chapterMetrics[activeChapterIndex >= 0 ? activeChapterIndex : 0];
   const activeChapterNumber = Math.max(activeChapterIndex + 1, 1);
   const activeChapterNumberLabel = `Chapter ${activeChapterNumber}`;
+
+  const updateActiveChapterMedia = (
+    field: "imageAttachments" | "voiceNotes" | "timelineEntries",
+    value: StudioMediaAttachment[] | StudioTimelineEntry[]
+  ) => {
+    setChapters((current) =>
+      current.map((chapter, index) =>
+        index === (activeChapterIndex >= 0 ? activeChapterIndex : 0) ? { ...chapter, [field]: value } : chapter
+      )
+    );
+  };
   const currentChapterRequiredItems = [
     activeChapterLabel.trim().length > 0 ? null : "add a chapter title",
     plainChapterText.trim().length > 0 ? null : "write the chapter body",
@@ -5083,6 +5295,12 @@ function StudioPage({
   }, []);
 
   useEffect(() => {
+    setImageAttachments(activeChapterEntry?.imageAttachments ?? []);
+    setVoiceNotes(activeChapterEntry?.voiceNotes ?? []);
+    setTimelineEntries(activeChapterEntry?.timelineEntries ?? []);
+  }, [activeChapterEntry]);
+
+  useEffect(() => {
     let cancelled = false;
 
     void apiRequest<ApiStory[]>("/stories/mine", { accessToken })
@@ -5104,12 +5322,22 @@ function StudioPage({
             words: getChapterWordCount(chapter.body),
             status: draft.status === "published" ? "Published" : "Draft saved",
             moments: chapter.moments.length,
-            body: chapter.body
-          }))
-        );
-        setTimelineEntries(
-          draft.chapters.flatMap((chapter) =>
-            chapter.moments.map((moment) => {
+            body: chapter.body,
+            imageAttachments: (chapter.imageUrls ?? []).map((imageUrl, index) => ({
+              name: `${chapter.title} image ${index + 1}`,
+              url: imageUrl,
+              source: "Saved story",
+              objectKey: chapter.imageKeys?.[index]
+            })),
+            voiceNotes: chapter.voiceNoteUrl
+              ? [{
+                  name: `Voice note ${chapter.order}`,
+                  url: chapter.voiceNoteUrl,
+                  source: "Saved story",
+                  objectKey: chapter.voiceNoteKey ?? undefined
+                }]
+              : [],
+            timelineEntries: chapter.moments.map((moment) => {
               const momentDate = new Date(moment.happenedAt);
               return {
                 year: String(momentDate.getFullYear()),
@@ -5119,7 +5347,7 @@ function StudioPage({
                 body: moment.description
               };
             })
-          )
+          }))
         );
       })
       .catch(() => undefined);
@@ -5186,9 +5414,16 @@ function StudioPage({
         setAllowComments(savedDraft.allowComments);
       }
       if (Array.isArray(savedDraft.chapters) && savedDraft.chapters.length > 0) {
-        setChapters(savedDraft.chapters);
+        setChapters(
+          savedDraft.chapters.map((chapter) => ({
+            ...chapter,
+            imageAttachments: chapter.imageAttachments ?? [],
+            voiceNotes: chapter.voiceNotes ?? [],
+            timelineEntries: chapter.timelineEntries ?? []
+          }))
+        );
       }
-      if (Array.isArray(savedDraft.timelineEntries)) {
+      if (Array.isArray(savedDraft.timelineEntries) && (!savedDraft.chapters || savedDraft.chapters.length === 0)) {
         setTimelineEntries(savedDraft.timelineEntries);
       }
       if (Array.isArray(savedDraft.draftHistory) && savedDraft.draftHistory.length > 0) {
@@ -5205,6 +5440,19 @@ function StudioPage({
       hasLoadedStudioDraftRef.current = true;
     }
   }, [studioStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !hasLoadedStudioDraftRef.current) {
+      return;
+    }
+
+    if (window.sessionStorage.getItem("histora-studio-publish-on-return") !== "true") {
+      return;
+    }
+
+    window.sessionStorage.removeItem("histora-studio-publish-on-return");
+    window.setTimeout(() => publishWholeStory(), 120);
+  }, [activeChapter, chapters]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !hasLoadedStudioDraftRef.current) {
@@ -5260,8 +5508,16 @@ function StudioPage({
 
   useEffect(() => {
     return () => {
-      imageAttachmentsRef.current.forEach((attachment) => URL.revokeObjectURL(attachment.url));
-      voiceNotesRef.current.forEach((voice) => URL.revokeObjectURL(voice.url));
+      imageAttachmentsRef.current.forEach((attachment) => {
+        if (isBlobUrl(attachment.url)) {
+          URL.revokeObjectURL(attachment.url);
+        }
+      });
+      voiceNotesRef.current.forEach((voice) => {
+        if (isBlobUrl(voice.url)) {
+          URL.revokeObjectURL(voice.url);
+        }
+      });
       streamRef.current?.getTracks().forEach((track) => track.stop());
       transcriptionRecorderRef.current?.stop();
       transcriptionStreamRef.current?.getTracks().forEach((track) => track.stop());
@@ -5345,10 +5601,15 @@ function StudioPage({
       .map((file) => ({
         name: file.name || `${source} image`,
         url: URL.createObjectURL(file),
-        source
+        source,
+        blob: file
       }));
 
-    setImageAttachments((current) => [...current, ...nextImages]);
+    setImageAttachments((current) => {
+      const updated = [...current, ...nextImages];
+      updateActiveChapterMedia("imageAttachments", updated);
+      return updated;
+    });
 
     if (files.length > remainingSlots) {
       setMediaError("Some images were skipped because the current plan limit was reached.");
@@ -5391,14 +5652,19 @@ function StudioPage({
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
         const url = URL.createObjectURL(blob);
 
-        setVoiceNotes((current) => [
-          ...current,
-          {
-            name: `Voice note ${current.length + 1}`,
-            url,
-            source: "Recorded in studio"
-          }
-        ]);
+        setVoiceNotes((current) => {
+          const updated = [
+            ...current,
+            {
+              name: `Voice note ${current.length + 1}`,
+              url,
+              source: "Recorded in studio",
+              blob
+            }
+          ];
+          updateActiveChapterMedia("voiceNotes", updated);
+          return updated;
+        });
 
         stream.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
@@ -5446,10 +5712,12 @@ function StudioPage({
   const removeImageAttachment = (url: string) => {
     setImageAttachments((current) => {
       const target = current.find((attachment) => attachment.url === url);
-      if (target) {
+      if (target && isBlobUrl(target.url)) {
         URL.revokeObjectURL(target.url);
       }
-      return current.filter((attachment) => attachment.url !== url);
+      const updated = current.filter((attachment) => attachment.url !== url);
+      updateActiveChapterMedia("imageAttachments", updated);
+      return updated;
     });
   };
 
@@ -5469,10 +5737,12 @@ function StudioPage({
   const removeVoiceNote = (url: string) => {
     setVoiceNotes((current) => {
       const target = current.find((voice) => voice.url === url);
-      if (target) {
+      if (target && isBlobUrl(target.url)) {
         URL.revokeObjectURL(target.url);
       }
-      return current.filter((voice) => voice.url !== url);
+      const updated = current.filter((voice) => voice.url !== url);
+      updateActiveChapterMedia("voiceNotes", updated);
+      return updated;
     });
   };
 
@@ -6101,14 +6371,16 @@ function StudioPage({
   };
 
   const saveCurrentDraft = () => {
-    const storyPayload = buildStoryPayload("draft");
-
     setChapters((current) =>
       current.map((chapter) =>
         chapter.title === activeChapter ? { ...chapter, status: "Draft saved", words: wordCount } : chapter
       )
     );
-    void persistStory(storyPayload, "Draft saved to API.");
+    void ensureStoryMediaUploaded()
+      .then((uploadedChapters) => persistStory(buildStoryPayload("draft", uploadedChapters), "Draft saved to API."))
+      .catch((error) => {
+        setStudioMessage(getErrorMessage(error, "Could not upload chapter media."));
+      });
     if (currentChapterRequiredItems.length > 0 || currentChapterOptionalItems.length > 0) {
       const missingRequiredText = currentChapterRequiredItems.length
         ? `Still required: ${currentChapterRequiredItems.join(", ")}.`
@@ -6156,7 +6428,11 @@ function StudioPage({
           : chapter
       )
     );
-    void persistStory(buildStoryPayload("published"), "Story published to API.");
+    void ensureStoryMediaUploaded()
+      .then((uploadedChapters) => persistStory(buildStoryPayload("published", uploadedChapters), "Story published to API."))
+      .catch((error) => {
+        setStudioMessage(getErrorMessage(error, "Could not publish story media."));
+      });
     setStudioMessage(
       startedIncompleteChapters.length > 0
         ? `Publishing ${readyChapters.map((chapter) => chapter.title).join(", ")}. Unfinished chapters stay in draft.`
@@ -6170,16 +6446,66 @@ function StudioPage({
     ].slice(0, 6));
   };
 
-  const buildStoryPayload = (status: "draft" | "published") => ({
+  const ensureStudioAttachmentUploaded = async (attachment: StudioMediaAttachment, fallbackExtension: string, fallbackType: string) => {
+    if (attachment.objectKey) {
+      return attachment;
+    }
+
+    if (!attachment.blob) {
+      return attachment;
+    }
+
+    const contentType = attachment.blob.type || fallbackType;
+    const fileName = attachment.name.includes(".") ? attachment.name : `${attachment.name}${fallbackExtension}`;
+    const uploaded = await uploadMediaAsset(accessToken, {
+      blob: attachment.blob,
+      fileName,
+      contentType
+    });
+
+    return {
+      ...attachment,
+      objectKey: uploaded.objectKey,
+      url: uploaded.readUrl
+    };
+  };
+
+  const ensureStoryMediaUploaded = async () => {
+    const uploadedChapters = await Promise.all(
+      chapters.map(async (chapter) => {
+        const uploadedImages = await Promise.all(
+          chapter.imageAttachments.map((attachment) =>
+            ensureStudioAttachmentUploaded(attachment, ".jpg", attachment.blob?.type || "image/jpeg")
+          )
+        );
+        const uploadedVoiceNotes = await Promise.all(
+          chapter.voiceNotes.map((voice) =>
+            ensureStudioAttachmentUploaded(voice, ".webm", voice.blob?.type || "audio/webm")
+          )
+        );
+
+        return {
+          ...chapter,
+          imageAttachments: uploadedImages,
+          voiceNotes: uploadedVoiceNotes
+        };
+      })
+    );
+
+    setChapters(uploadedChapters);
+    return uploadedChapters;
+  };
+
+  const buildStoryPayload = (status: "draft" | "published", sourceChapters: StudioChapter[]) => ({
     title: storyTitle,
     summary: storySummary,
-    coverImageUrl: imageAttachments[0]?.url,
+    coverImageUrl: sourceChapters.flatMap((chapter) => chapter.imageAttachments)[0]?.objectKey,
     visibility: anonymous ? "public" : visibility,
     anonymous,
     allowedViewerIds: [],
     tags: [],
     status,
-    chapters: chapters.map((chapter, index) => ({
+    chapters: sourceChapters.map((chapter, index) => ({
       title: chapter.title,
       body: chapter.body,
       type:
@@ -6187,9 +6513,9 @@ function StudioPage({
           ? "anonymous"
           : (chapter.type.toLowerCase() as "memory" | "reflection" | "milestone"),
       order: index + 1,
-      imageUrls: imageAttachments.map((attachment) => attachment.url),
-      voiceNoteUrl: voiceNotes[0]?.url,
-      moments: timelineEntries
+      imageUrls: chapter.imageAttachments.map((attachment) => attachment.objectKey ?? attachment.url),
+      voiceNoteUrl: chapter.voiceNotes[0]?.objectKey ?? chapter.voiceNotes[0]?.url,
+      moments: chapter.timelineEntries
         .filter((entry) => entry.title.trim() || entry.body.trim())
         .map((entry) => ({
           title: entry.title,
@@ -6226,37 +6552,47 @@ function StudioPage({
   };
 
   const updateTimelineEntry = (index: number, field: "title" | "body", value: string) => {
-    setTimelineEntries((current) =>
-      current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, [field]: value } : entry))
-    );
+    setTimelineEntries((current) => {
+      const updated = current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, [field]: value } : entry));
+      updateActiveChapterMedia("timelineEntries", updated);
+      return updated;
+    });
     invalidatePreviewReview();
   };
 
   const addTimelineEntry = () => {
-    setTimelineEntries((current) => [
-      ...current,
-      {
-        year: "",
-        month: "",
-        day: "",
-        title: "",
-        body: ""
-      }
-    ]);
+    setTimelineEntries((current) => {
+      const updated = [
+        ...current,
+        {
+          year: "",
+          month: "",
+          day: "",
+          title: "",
+          body: ""
+        }
+      ];
+      updateActiveChapterMedia("timelineEntries", updated);
+      return updated;
+    });
     setStudioMessage("New timeline moment added.");
     setDraftHistory((current) => ["Timeline moment added.", ...current].slice(0, 6));
   };
 
   const removeTimelineEntry = (index: number) => {
-    setTimelineEntries((current) => current.filter((_, entryIndex) => entryIndex !== index));
+    setTimelineEntries((current) => {
+      const updated = current.filter((_, entryIndex) => entryIndex !== index);
+      updateActiveChapterMedia("timelineEntries", updated);
+      return updated;
+    });
     setStudioMessage("Timeline moment removed.");
     setDraftHistory((current) => ["Timeline moment removed.", ...current].slice(0, 6));
     invalidatePreviewReview();
   };
 
   const updateTimelineDatePart = (index: number, field: "year" | "month" | "day", value: string) => {
-    setTimelineEntries((current) =>
-      current.map((entry, entryIndex) => {
+    setTimelineEntries((current) => {
+      const updated = current.map((entry, entryIndex) => {
         if (entryIndex !== index) {
           return entry;
         }
@@ -6273,15 +6609,14 @@ function StudioPage({
 
         return nextEntry;
       })
-    );
+      updateActiveChapterMedia("timelineEntries", updated);
+      return updated;
+    });
     invalidatePreviewReview();
   };
 
   const handlePreviewToggle = () => {
-    const previewTimeline = timelineEntries.filter(
-      (entry) => entry.title.trim().length > 0 || entry.body.trim().length > 0 || entry.year || entry.month || entry.day
-    );
-    const previewPayload = {
+    const previewPayload: StudioPreviewPayload = {
       storyTitle,
       storySummary,
       activeChapterNumberLabel,
@@ -6292,7 +6627,9 @@ function StudioPage({
       wordCount,
       imageAttachments,
       voiceNotes,
-      timelineEntries: previewTimeline,
+      timelineEntries: timelineEntries.filter(
+        (entry) => entry.title.trim().length > 0 || entry.body.trim().length > 0 || entry.year || entry.month || entry.day
+      ),
       allowComments,
       chapterStatus: activeChapterEntry?.status ?? "Draft",
       chapterChecklist: {
@@ -6344,6 +6681,52 @@ function StudioPage({
     setStudioMessage("Draft saved. Exiting studio mode...");
     window.setTimeout(() => navigate("/feed"), 180);
   };
+
+  const publishPanel = (
+    <article className="studio-panel card">
+      <SectionLabel>PUBLISH_CONTROL</SectionLabel>
+      <div className="publish-stack">
+        <div className="publish-row">
+          <strong>Current mode</strong>
+          <span>{anonymous ? "Anonymous advice" : visibility}</span>
+        </div>
+        <div className="publish-row">
+          <strong>Active chapter</strong>
+          <span>{activeChapterReady?.isComplete ? "Ready to publish" : `Needs ${chapterCompletionThreshold} words`}</span>
+        </div>
+        <div className="publish-row">
+          <strong>Story readiness</strong>
+          <span>{readyChapters.length > 0 ? "Ready chapters can go live" : "No finished chapters yet"}</span>
+        </div>
+      </div>
+      <div className="publish-summary-block">
+        <strong>Chapters going live</strong>
+        {readyChapters.length ? (
+          <div className="publish-chip-list">
+            {readyChapters.map((chapter) => (
+              <span className="publish-chip" key={chapter.title}>{chapter.title}</span>
+            ))}
+          </div>
+        ) : (
+          <p>No finished chapters yet.</p>
+        )}
+      </div>
+      {startedIncompleteChapters.length ? (
+        <div className="publish-summary-block publish-warning-block">
+          <strong>Stays in draft for now</strong>
+          <div className="publish-chip-list">
+            {startedIncompleteChapters.map((chapter) => (
+              <span className="publish-chip publish-chip-warning" key={chapter.title}>{chapter.title}</span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className="chapter-controls">
+        <button className="ghost-action" onClick={saveCurrentDraft} type="button">SAVE AS DRAFT</button>
+        <button className="primary-action" onClick={publishWholeStory} type="button">PUBLISH STORY</button>
+      </div>
+    </article>
+  );
 
   if (isEnteringStudio) {
     return (
@@ -6764,49 +7147,6 @@ function StudioPage({
               <span>Allow comments on published chapters</span>
             </label>
           </article>
-          <article className="rail-panel card">
-            <SectionLabel>PUBLISH_CONTROL</SectionLabel>
-            <div className="publish-stack">
-              <div className="publish-row">
-                <strong>Current mode</strong>
-                <span>{anonymous ? "Anonymous advice" : visibility}</span>
-              </div>
-              <div className="publish-row">
-                <strong>Active chapter</strong>
-                <span>{activeChapterReady?.isComplete ? "Ready to publish" : `Needs ${chapterCompletionThreshold} words`}</span>
-              </div>
-              <div className="publish-row">
-                <strong>Story readiness</strong>
-                <span>{readyChapters.length > 0 ? "Ready chapters can go live" : "No finished chapters yet"}</span>
-              </div>
-            </div>
-            <div className="publish-summary-block">
-              <strong>Chapters going live</strong>
-              {readyChapters.length ? (
-                <div className="publish-chip-list">
-                  {readyChapters.map((chapter) => (
-                    <span className="publish-chip" key={chapter.title}>{chapter.title}</span>
-                  ))}
-                </div>
-              ) : (
-                <p>No finished chapters yet.</p>
-              )}
-            </div>
-            {startedIncompleteChapters.length ? (
-              <div className="publish-summary-block publish-warning-block">
-                <strong>Stays in draft for now</strong>
-                <div className="publish-chip-list">
-                  {startedIncompleteChapters.map((chapter) => (
-                    <span className="publish-chip publish-chip-warning" key={chapter.title}>{chapter.title}</span>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            <div className="chapter-controls">
-              <button className="ghost-action" onClick={saveCurrentDraft} type="button">SAVE AS DRAFT</button>
-              <button className="primary-action" onClick={publishWholeStory} type="button">PUBLISH STORY</button>
-            </div>
-          </article>
         </aside>
       </section>
 
@@ -6913,31 +7253,17 @@ function StudioPage({
           </div>
         </article>
       </section>
+
+      <section className="timeline-stage">
+        {publishPanel}
+      </section>
     </main>
   );
 }
 
 function StudioPreviewPage() {
   const navigate = useNavigate();
-  const [preview, setPreview] = useState<null | {
-    storyTitle: string;
-    storySummary: string;
-    activeChapterNumberLabel: string;
-    activeChapter: string;
-    chapterType: string;
-    visibility: string;
-    chapterBody: string;
-    wordCount: number;
-    imageAttachments: Array<{ name: string; url: string; source: string }>;
-    voiceNotes: Array<{ name: string; url: string; source: string }>;
-    timelineEntries: Array<{ year: string; month: string; day: string; title: string; body: string }>;
-    allowComments: boolean;
-    chapterStatus: string;
-    chapterChecklist: {
-      required: string[];
-      optional: string[];
-    };
-  }>(null);
+  const [preview, setPreview] = useState<StudioPreviewPayload | null>(null);
 
   useEffect(() => {
     const rawPreview = window.sessionStorage.getItem("histora-studio-preview");
@@ -6956,7 +7282,16 @@ function StudioPreviewPage() {
     <main className="studio-preview-page">
       <section className="studio-preview-topbar">
         <button className="ghost-action" onClick={() => navigate("/studio")} type="button">Back To Edit</button>
-        <button className="primary-action" onClick={() => navigate("/studio")} type="button">Looks Good</button>
+        <button
+          className="primary-action"
+          onClick={() => {
+            window.sessionStorage.setItem("histora-studio-publish-on-return", "true");
+            navigate("/studio");
+          }}
+          type="button"
+        >
+          Looks Good
+        </button>
       </section>
 
       <article className="studio-preview-reader card">

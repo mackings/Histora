@@ -7,6 +7,7 @@ import { CommentModel } from "../models/comment.model.js";
 import { StoryInteractionModel } from "../models/story-interaction.model.js";
 import { readJsonCache, writeJsonCache, deleteCache, deleteCacheByPrefix } from "./cache.service.js";
 import { enqueueCounterSync } from "./queue.service.js";
+import { resolveStoredObjectUrl } from "./storage.service.js";
 
 function enforcePremiumLimits(input: StorySaveInput, tier: "free" | "premium") {
   const totalWords = input.chapters.reduce<number>(
@@ -45,10 +46,35 @@ async function buildUniqueStorySlug(title: string, storyId?: string) {
   }
 }
 
-function serializeStory(story: StoryDocument | null) {
+async function serializeStory(story: StoryDocument | null) {
   if (!story) {
     throw new AppError("Story not found", 404);
   }
+
+  const coverImageUrl = await resolveStoredObjectUrl(story.coverImageUrl ?? null);
+  const chapters = await Promise.all(
+    story.chapters.map(async (chapter) => ({
+      title: chapter.title,
+      body: chapter.body,
+      type: chapter.type,
+      order: chapter.order,
+      imageUrls: (await Promise.all(chapter.imageUrls.map((imageUrl) => resolveStoredObjectUrl(imageUrl)))).filter(Boolean) as string[],
+      imageKeys: chapter.imageUrls,
+      voiceNoteUrl: await resolveStoredObjectUrl(chapter.voiceNoteUrl ?? null),
+      voiceNoteKey: chapter.voiceNoteUrl ?? null,
+      moments: await Promise.all(
+        chapter.moments.map(async (moment) => ({
+          title: moment.title,
+          description: moment.description,
+          happenedAt: moment.happenedAt,
+          imageUrls: (await Promise.all(moment.imageUrls.map((imageUrl) => resolveStoredObjectUrl(imageUrl)))).filter(Boolean) as string[],
+          imageKeys: moment.imageUrls,
+          voiceNoteUrl: await resolveStoredObjectUrl(moment.voiceNoteUrl ?? null),
+          voiceNoteKey: moment.voiceNoteUrl ?? null
+        }))
+      )
+    }))
+  );
 
   return {
     id: story.id,
@@ -56,7 +82,8 @@ function serializeStory(story: StoryDocument | null) {
     status: story.status,
     title: story.title,
     summary: story.summary,
-    coverImageUrl: story.coverImageUrl ?? null,
+    coverImageUrl,
+    coverImageKey: story.coverImageUrl ?? null,
     visibility: story.visibility,
     anonymous: story.anonymous,
     authorName: story.authorName,
@@ -67,21 +94,7 @@ function serializeStory(story: StoryDocument | null) {
     likesCount: story.likesCount,
     bookmarksCount: story.bookmarksCount,
     commentsCount: story.commentsCount,
-    chapters: story.chapters.map((chapter) => ({
-      title: chapter.title,
-      body: chapter.body,
-      type: chapter.type,
-      order: chapter.order,
-      imageUrls: chapter.imageUrls,
-      voiceNoteUrl: chapter.voiceNoteUrl ?? null,
-      moments: chapter.moments.map((moment) => ({
-        title: moment.title,
-        description: moment.description,
-        happenedAt: moment.happenedAt,
-        imageUrls: moment.imageUrls,
-        voiceNoteUrl: moment.voiceNoteUrl ?? null
-      }))
-    })),
+    chapters,
     createdAt: story.createdAt,
     updatedAt: story.updatedAt
   };
@@ -107,7 +120,7 @@ export async function saveStory(authorId: string, input: StorySaveInput, storyId
     });
     await deleteCache("stories:feed");
     await deleteCacheByPrefix(`stories:mine:${authorId}`);
-    return serializeStory(story);
+    return await serializeStory(story);
   }
 
   const story = await StoryModel.findOne({ _id: storyId, authorId });
@@ -132,7 +145,7 @@ export async function saveStory(authorId: string, input: StorySaveInput, storyId
   await deleteCacheByPrefix(`stories:mine:${authorId}`);
   await deleteCache(`stories:public:${story.slug}`);
 
-  return serializeStory(story);
+  return await serializeStory(story);
 }
 
 export async function getMyStories(authorId: string) {
@@ -148,14 +161,14 @@ export async function getMyStories(authorId: string) {
       "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount chapters createdAt updatedAt"
     );
 
-  const payload = stories.map((story) => serializeStory(story));
+  const payload = await Promise.all(stories.map((story) => serializeStory(story)));
   await writeJsonCache(cacheKey, payload, 30);
   return payload;
 }
 
 export async function getMyStory(authorId: string, storyId: string) {
   const story = await StoryModel.findOne({ _id: storyId, authorId });
-  return serializeStory(story);
+  return await serializeStory(story);
 }
 
 export async function getStoryBySlug(shareSlug: string) {
@@ -172,7 +185,7 @@ export async function getStoryBySlug(shareSlug: string) {
 
   story.readCount += 1;
   await story.save();
-  const payload = serializeStory(story);
+  const payload = await serializeStory(story);
   await writeJsonCache(`stories:public:${shareSlug}`, payload, 30);
   return payload;
 }
@@ -202,11 +215,11 @@ export async function getPublicFeed() {
   );
 
   const commentMap = new Map(chapterCommentCounts);
-  const payload = stories.map((story) => ({
-    ...serializeStory(story),
+  const payload = await Promise.all(stories.map(async (story) => ({
+    ...(await serializeStory(story)),
     commentCount: commentMap.get(story.id) ?? 0,
     chapterCount: story.chapters.length
-  }));
+  })));
   await writeJsonCache("stories:feed", payload, 30);
   return payload;
 }
@@ -264,5 +277,5 @@ export async function listBookmarkedStories(userId: string) {
     .map((storyId) => storiesById.get(String(storyId)))
     .filter(Boolean);
 
-  return orderedStories.map((story) => serializeStory(story ?? null));
+  return Promise.all(orderedStories.map((story) => serializeStory(story ?? null)));
 }

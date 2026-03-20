@@ -9,6 +9,7 @@ export interface StatusDocument extends mongoose.Document {
   visibility: "public" | "followers" | "private";
   imageUrl?: string;
   shareSlug?: string;
+  expiresAt: Date;
   commentsCount: number;
   likesCount: number;
   bookmarksCount: number;
@@ -26,11 +27,19 @@ const statusSchema = new Schema<StatusDocument>(
     visibility: { type: String, enum: ["public", "followers", "private"], default: "public", index: true },
     imageUrl: { type: String },
     shareSlug: { type: String, index: true, sparse: true },
+    expiresAt: {
+      type: Date,
+      required: true,
+      default: () => new Date(Date.now() + 24 * 60 * 60 * 1000),
+      index: true
+    },
     commentsCount: { type: Number, default: 0 },
     likesCount: { type: Number, default: 0 },
     bookmarksCount: { type: Number, default: 0 }
   },
   { timestamps: true }
 );
+
+statusSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export const StatusModel = mongoose.model<StatusDocument>("Status", statusSchema);

@@ -57,6 +57,10 @@ export async function createSignedUploadUrl(input: {
   };
 }
 
+export function isOwnedStorageObjectKey(value: string) {
+  return /^users\/[^/]+\/.+/.test(value);
+}
+
 export function assertOwnedObjectKey(userId: string, objectKey: string) {
   if (!objectKey.startsWith(`users/${userId}/`)) {
     throw new AppError("You do not have access to this media object.", 403);
@@ -81,4 +85,21 @@ export async function createSignedReadUrl(input: {
     objectKey: input.objectKey,
     readUrl
   };
+}
+
+export async function resolveStoredObjectUrl(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  if (!isOwnedStorageObjectKey(value)) {
+    return value;
+  }
+
+  if (env.R2_PUBLIC_BASE_URL) {
+    return `${env.R2_PUBLIC_BASE_URL.replace(/\/$/, "")}/${value}`;
+  }
+
+  const result = await createSignedReadUrl({ objectKey: value });
+  return result.readUrl;
 }

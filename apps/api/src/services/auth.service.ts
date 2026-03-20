@@ -26,6 +26,7 @@ import { recordAuditEvent } from "./audit.service.js";
 import { sendDeviceVerificationEmail, sendVerificationOtpEmail } from "./email.service.js";
 import { sendDeviceVerificationPush } from "./push.service.js";
 import { AppError } from "../utils/app-error.js";
+import { resolveStoredObjectUrl } from "./storage.service.js";
 
 const accessTokenTtl = env.ACCESS_TOKEN_TTL;
 const refreshTokenTtlDays = env.REFRESH_TOKEN_TTL_DAYS;
@@ -49,6 +50,7 @@ type AuthPayload = {
     fullName: string;
     username: string;
     email: string;
+    avatarUrl?: string | null;
     subscriptionTier: "free" | "premium";
   };
 };
@@ -90,7 +92,7 @@ export function buildCookieOptions(): CookieOptions {
 }
 
 async function createSessionPayload(userId: string, context?: RequestContext, device?: DeviceContext): Promise<AuthPayload> {
-  const user = await UserModel.findById(userId).select("fullName username email subscriptionTier emailVerified");
+  const user = await UserModel.findById(userId).select("fullName username email avatarUrl subscriptionTier emailVerified");
   if (!user) {
     throw new AppError("User not found", 404);
   }
@@ -114,6 +116,8 @@ async function createSessionPayload(userId: string, context?: RequestContext, de
   session.tokenHash = hashToken(refreshToken);
   await session.save();
 
+  const avatarUrl = await resolveStoredObjectUrl(user.avatarUrl ?? null);
+
   return {
     accessToken: buildAccessToken(userId),
     refreshToken,
@@ -122,6 +126,7 @@ async function createSessionPayload(userId: string, context?: RequestContext, de
       fullName: user.fullName,
       username: user.username,
       email: user.email,
+      avatarUrl,
       subscriptionTier: user.subscriptionTier
     }
   };

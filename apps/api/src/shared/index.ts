@@ -3,13 +3,24 @@ import { z } from "zod";
 export const visibilitySchema = z.enum(["private", "public", "selected"]);
 export const subscriptionTierSchema = z.enum(["free", "premium"]);
 export const chapterTypeSchema = z.enum(["memory", "reflection", "milestone", "anonymous"]);
+const mediaReferenceSchema = z.string().refine(
+  (value) => {
+    try {
+      new URL(value);
+      return true;
+    } catch {
+      return /^users\/[^/]+\/.+/.test(value);
+    }
+  },
+  "Media reference must be a valid URL or storage object key."
+);
 
 export const momentSchema = z.object({
   title: z.string().min(2).max(120),
   description: z.string().min(10).max(1000),
   happenedAt: z.string().datetime(),
-  imageUrls: z.array(z.string().url()).max(10).default([]),
-  voiceNoteUrl: z.string().url().optional()
+  imageUrls: z.array(mediaReferenceSchema).max(10).default([]),
+  voiceNoteUrl: mediaReferenceSchema.optional()
 });
 
 export const chapterSchema = z.object({
@@ -17,15 +28,15 @@ export const chapterSchema = z.object({
   body: z.string().min(80).max(12000),
   type: chapterTypeSchema.default("memory"),
   order: z.number().int().min(1),
-  imageUrls: z.array(z.string().url()).max(10).default([]),
-  voiceNoteUrl: z.string().url().optional(),
+  imageUrls: z.array(mediaReferenceSchema).max(10).default([]),
+  voiceNoteUrl: mediaReferenceSchema.optional(),
   moments: z.array(momentSchema).max(20).default([])
 });
 
 export const storySchema = z.object({
   title: z.string().min(3).max(140),
   summary: z.string().min(40).max(500),
-  coverImageUrl: z.string().url().optional(),
+  coverImageUrl: mediaReferenceSchema.optional(),
   visibility: visibilitySchema.default("private"),
   anonymous: z.boolean().default(false),
   allowedViewerIds: z.array(z.string()).max(100).default([]),
@@ -201,6 +212,7 @@ export const profileUpdateSchema = z.object({
   username: z.string().min(3).max(24).regex(/^[a-z0-9_]+$/),
   bio: z.string().max(240).default(""),
   location: z.string().max(120).default(""),
+  avatarUrl: mediaReferenceSchema.nullish(),
   profileVisibility: z.enum(["public", "selected", "private"]).default("public"),
   defaultStoryVisibility: z.enum(["public", "selected", "private", "anonymous"]).default("selected"),
   allowCommentsByDefault: z.boolean().default(true),

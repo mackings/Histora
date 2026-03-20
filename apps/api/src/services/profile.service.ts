@@ -9,6 +9,7 @@ import { UserModel } from "../models/user.model.js";
 import type { ContributorInviteInput, DeviceRenameInput, ProfileUpdateInput } from "../shared/index.js";
 import { AppError } from "../utils/app-error.js";
 import { listBookmarkedStories } from "./story.service.js";
+import { resolveStoredObjectUrl } from "./storage.service.js";
 
 function formatSessionDevice(session: {
   userAgent?: string;
@@ -32,7 +33,7 @@ function formatSessionDevice(session: {
 
 export async function getProfileDashboard(userId: string) {
   const user = await UserModel.findById(userId).select(
-    "fullName username email bio location subscriptionTier profileVisibility defaultStoryVisibility allowCommentsByDefault allowHelpRequests hideReadCounts showAnonymousActivity"
+    "fullName username email bio location avatarUrl subscriptionTier profileVisibility defaultStoryVisibility allowCommentsByDefault allowHelpRequests hideReadCounts showAnonymousActivity"
   );
   if (!user) {
     throw new AppError("User not found", 404);
@@ -49,6 +50,8 @@ export async function getProfileDashboard(userId: string) {
     FollowModel.countDocuments({ followerUserId: userId })
   ]);
 
+  const avatarUrl = await resolveStoredObjectUrl(user.avatarUrl ?? null);
+
   return {
     user: {
       id: user.id,
@@ -57,6 +60,7 @@ export async function getProfileDashboard(userId: string) {
       email: user.email,
       bio: user.bio ?? "",
       location: user.location ?? "",
+      avatarUrl,
       subscriptionTier: user.subscriptionTier,
       profileVisibility: user.profileVisibility,
       defaultStoryVisibility: user.defaultStoryVisibility,
@@ -120,6 +124,7 @@ export async function updateProfile(userId: string, input: ProfileUpdateInput) {
         username: input.username.toLowerCase(),
         bio: input.bio,
         location: input.location,
+        avatarUrl: input.avatarUrl ?? "",
         profileVisibility: input.profileVisibility,
         defaultStoryVisibility: input.defaultStoryVisibility,
         allowCommentsByDefault: input.allowCommentsByDefault,
@@ -130,7 +135,7 @@ export async function updateProfile(userId: string, input: ProfileUpdateInput) {
     },
     { new: true }
   ).select(
-    "fullName username email bio location subscriptionTier profileVisibility defaultStoryVisibility allowCommentsByDefault allowHelpRequests hideReadCounts showAnonymousActivity"
+    "fullName username email bio location avatarUrl subscriptionTier profileVisibility defaultStoryVisibility allowCommentsByDefault allowHelpRequests hideReadCounts showAnonymousActivity"
   );
 
   if (!user) {
@@ -147,6 +152,8 @@ export async function updateProfile(userId: string, input: ProfileUpdateInput) {
     }
   );
 
+  const avatarUrl = await resolveStoredObjectUrl(user.avatarUrl ?? null);
+
   return {
     id: user.id,
     fullName: user.fullName,
@@ -154,6 +161,7 @@ export async function updateProfile(userId: string, input: ProfileUpdateInput) {
     email: user.email,
     bio: user.bio ?? "",
     location: user.location ?? "",
+    avatarUrl,
     subscriptionTier: user.subscriptionTier,
     profileVisibility: user.profileVisibility,
     defaultStoryVisibility: user.defaultStoryVisibility,

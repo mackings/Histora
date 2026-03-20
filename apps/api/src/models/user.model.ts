@@ -10,6 +10,7 @@ export interface UserDocument extends mongoose.Document {
   dateOfBirth?: Date;
   bio?: string;
   location?: string;
+  avatarUrl?: string;
   subscriptionTier: "free" | "premium";
   profileVisibility: "public" | "selected" | "private";
   defaultStoryVisibility: "public" | "selected" | "private" | "anonymous";
@@ -32,6 +33,7 @@ const userSchema = new Schema<UserDocument>(
     dateOfBirth: { type: Date },
     bio: { type: String, trim: true, default: "" },
     location: { type: String, trim: true, default: "" },
+    avatarUrl: { type: String, trim: true, default: "" },
     subscriptionTier: { type: String, enum: ["free", "premium"], default: "free" },
     profileVisibility: { type: String, enum: ["public", "selected", "private"], default: "public" },
     defaultStoryVisibility: {
