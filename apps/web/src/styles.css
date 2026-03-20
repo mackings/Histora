@@ -2994,6 +2994,12 @@ textarea {
   color: var(--ink);
 }
 
+.icon-chip-dark {
+  border-color: #0f172a;
+  background: #0f172a;
+  color: #fff;
+}
+
 .story-viewer-author strong,
 .story-stage-card strong {
   color: var(--ink);

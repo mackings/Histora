@@ -3,6 +3,7 @@ import type { StatusCreateInput } from "../shared/index.js";
 import { StatusModel } from "../models/status.model.js";
 import { StatusInteractionModel } from "../models/status-interaction.model.js";
 import { UserModel } from "../models/user.model.js";
+import { CommentModel } from "../models/comment.model.js";
 import { deleteCache, readJsonCache, writeJsonCache } from "./cache.service.js";
 import { enqueueCounterSync } from "./queue.service.js";
 import { AppError } from "../utils/app-error.js";
@@ -163,6 +164,33 @@ export async function toggleStatusReaction(statusId: string, userId: string, act
     likesCount: status.likesCount,
     bookmarksCount: status.bookmarksCount
   };
+}
+
+export async function deleteStatus(statusId: string, userId: string) {
+  const status = await StatusModel.findOne({ _id: statusId, authorId: userId });
+
+  if (!status) {
+    throw new AppError("Status not found", 404);
+  }
+
+  await Promise.all([
+    StatusInteractionModel.deleteMany({ statusId: status.id }),
+    CommentModel.deleteMany({ targetType: "status", targetId: status.id }),
+    status.deleteOne()
+  ]);
+
+  await deleteCache("statuses:feed");
+  await recordStatusAuditEvent(userId, status.id, "status.deleted", {
+    anonymous: status.anonymous,
+    visibility: status.visibility
+  });
+
+  broadcastAppEvent("feed", {
+    kind: "status.deleted",
+    statusId: status.id
+  });
+
+  return { ok: true as const };
 }
 
 async function recordStatusAuditEvent(

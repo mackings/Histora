@@ -4,6 +4,7 @@ import {
   AnonymousMessageModel,
   type AnonymousMessageDocument
 } from "../models/anonymous-message.model.js";
+import { CommentModel } from "../models/comment.model.js";
 import { UserModel } from "../models/user.model.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
 import { recordAuditEvent } from "./audit.service.js";
@@ -209,4 +210,33 @@ export async function unlockAnonymousHelperContact(input: {
   });
 
   return toAnonymousResponse(message, { includeHelperContact: true });
+}
+
+export async function deleteAnonymousMessage(userId: string, messageId: string) {
+  const message = await AnonymousMessageModel.findOne({
+    _id: messageId,
+    senderUserId: userId
+  });
+
+  if (!message) {
+    throw new AppError("Anonymous message not found", 404);
+  }
+
+  await Promise.all([
+    CommentModel.deleteMany({ targetType: "anonymousMessage", targetId: message.id }),
+    message.deleteOne()
+  ]);
+
+  await recordAuditEvent({
+    actorUserId: userId,
+    targetUserId: message.recipientUserId.toString(),
+    entityType: "anonymousMessage",
+    entityId: message.id,
+    action: "anonymous-message.deleted",
+    metadata: {
+      shareSlug: message.shareSlug
+    }
+  });
+
+  return { ok: true as const };
 }

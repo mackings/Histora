@@ -4,6 +4,7 @@ import { statusCreateSchema, statusReactionSchema } from "../shared/index.js";
 import { asyncHandler } from "../utils/async-handler.js";
 import {
   createStatus,
+  deleteStatus,
   getAnonymousStatusByShareSlug,
   getMyStatuses,
   getStatusFeed,
@@ -35,5 +36,11 @@ export const toggleStatusReactionController = asyncHandler(async (request, respo
   const params = z.object({ statusId: z.string().min(1) }).parse(request.params);
   const body = statusReactionSchema.parse(request.body);
   const result = await toggleStatusReaction(params.statusId, request.auth!.userId, body.action);
+  response.status(200).json(result);
+});
+
+export const deleteStatusController = asyncHandler(async (request, response) => {
+  const params = z.object({ statusId: z.string().min(1) }).parse(request.params);
+  const result = await deleteStatus(params.statusId, request.auth!.userId);
   response.status(200).json(result);
 });

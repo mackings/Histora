@@ -35,6 +35,7 @@ function Icon({
     | "close"
     | "person"
     | "download"
+    | "trash"
     | "mic"
     | "pause"
     | "eye"
@@ -64,6 +65,7 @@ function Icon({
     close: "M6.4 5 12 10.6 17.6 5 19 6.4 13.4 12 19 17.6 17.6 19 12 13.4 6.4 19 5 17.6 10.6 12 5 6.4 6.4 5Z",
     person: "M12 12a4.5 4.5 0 1 0 0-9 4.5 4.5 0 0 0 0 9Zm0 2c-4.7 0-8.5 2.6-8.5 5.8 0 .7.6 1.2 1.2 1.2h14.6c.7 0 1.2-.5 1.2-1.2C20.5 16.6 16.7 14 12 14Z",
     download: "M11 4h2v8.2l2.6-2.6 1.4 1.4-5 5-5-5 1.4-1.4 2.6 2.6V4Zm-6 14h14v2H5v-2Z",
+    trash: "M9 3h6l1 2h4v2H4V5h4l1-2Zm1 6h2v8h-2V9Zm4 0h2v8h-2V9ZM7 9h2v8H7V9Zm-1 12a2 2 0 0 1-2-2V7h16v12a2 2 0 0 1-2 2H6Z",
     mic: "M12 15a3 3 0 0 0 3-3V7a3 3 0 1 0-6 0v5a3 3 0 0 0 3 3Zm5-3a1 1 0 1 1 2 0 7 7 0 0 1-6 6.93V21h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3v-2.07A7 7 0 0 1 5 12a1 1 0 1 1 2 0 5 5 0 0 0 10 0Z",
     pause: "M7 5h3v14H7V5Zm7 0h3v14h-3V5Z",
     eye: "M12 6c5.1 0 9.3 3.3 10.8 6-1.5 2.7-5.7 6-10.8 6S2.7 14.7 1.2 12C2.7 9.3 6.9 6 12 6Zm0 2C8.1 8 4.8 10.3 3.4 12 4.8 13.7 8.1 16 12 16s7.2-2.3 8.6-4C19.2 10.3 15.9 8 12 8Zm0 1.7a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6Z",
@@ -156,6 +158,7 @@ type StoredAnonymousStatus = {
   body: string;
   meta: string;
   shareSlug: string;
+  imageUrl?: string | null;
   comments: Array<{ author: string; text: string }>;
   helpFee: number;
   distribution: "app" | "external";
@@ -694,11 +697,51 @@ const disablePushAlerts = async (accessToken: string): Promise<PushSyncResult> =
   };
 };
 
-const formatAnonymousMeta = (createdAt: string) =>
-  new Date(createdAt).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short"
+const formatAnonymousMeta = (createdAt: string) => {
+  const createdTime = new Date(createdAt).getTime();
+
+  if (Number.isNaN(createdTime)) {
+    return createdAt;
+  }
+
+  const now = Date.now();
+  const diffMs = Math.max(0, now - createdTime);
+  const diffMinutes = Math.floor(diffMs / (60 * 1000));
+  const diffHours = Math.floor(diffMs / (60 * 60 * 1000));
+  const diffDays = Math.floor(diffMs / (24 * 60 * 60 * 1000));
+
+  if (diffMinutes < 1) {
+    return "Just now";
+  }
+
+  if (diffMinutes < 60) {
+    return diffMinutes < 5 ? "Few mins ago" : `${diffMinutes} mins ago`;
+  }
+
+  const createdDate = new Date(createdTime);
+  const nowDate = new Date(now);
+  const isSameDay =
+    createdDate.getFullYear() === nowDate.getFullYear() &&
+    createdDate.getMonth() === nowDate.getMonth() &&
+    createdDate.getDate() === nowDate.getDate();
+
+  if (isSameDay) {
+    return diffHours < 6 ? (diffHours === 1 ? "1 hour ago" : `${diffHours} hours ago`) : "Today";
+  }
+
+  if (diffDays === 1) {
+    return "Yesterday";
+  }
+
+  if (diffDays < 7) {
+    return `${diffDays} days ago`;
+  }
+
+  return createdDate.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric"
   });
+};
 
 const toStoredAnonymousStatus = (
   message: ApiAnonymousMessage,
@@ -724,6 +767,7 @@ const toStoredAnonymousStatusEntry = (status: ApiStatus): StoredAnonymousStatus 
   body: status.body,
   meta: formatAnonymousMeta(status.createdAt),
   shareSlug: status.shareSlug ?? status.id,
+  imageUrl: status.imageUrl ?? null,
   comments: [],
   helpFee: 8,
   distribution: "app",
@@ -865,7 +909,7 @@ const addStatusEntry: StatusEntry = {
 };
 
 const toStatusEntry = (status: ApiStatus): StatusEntry => ({
-  name: status.anonymous ? "Anonymous" : status.authorName,
+  name: status.anonymous ? "Anonymous" : `@${status.authorUsername}`,
   meta: formatAnonymousMeta(status.createdAt),
   tone: status.anonymous ? "ink" : "blue",
   label: status.anonymous ? "Advice status" : "Memory status",
@@ -1496,6 +1540,16 @@ function StoryCirclesRow({
                 </div>
               </div>
               <div className="story-viewer-top-actions">
+                {activeStatus.anonymous ? (
+                  <button
+                    aria-label="Save anonymous status image"
+                    className="icon-chip icon-chip-dark"
+                    onClick={() => downloadAnonymousStatusImage(activeStatus)}
+                    type="button"
+                  >
+                    <Icon className="button-icon" name="download" />
+                  </button>
+                ) : null}
                 <button className="story-chip" onClick={() => setIsPaused((current) => !current)} type="button">
                   {isPaused ? "Resume" : "Pause"}
                 </button>
@@ -1523,7 +1577,6 @@ function StoryCirclesRow({
                 {activeStatus.anonymous ? (
                   <div className="anonymous-status-tools">
                     <button className="story-chip" onClick={() => copyStatusLink(activeStatus)} type="button">Copy link</button>
-                    <button className="story-chip" onClick={() => downloadAnonymousStatusImage(activeStatus)} type="button">Save image</button>
                     <button className="story-chip" onClick={() => setHelpRequestTarget(activeStatus)} type="button">Request to help</button>
                   </div>
                 ) : null}
@@ -2315,6 +2368,84 @@ function AnonymousHubPage({
     }
   };
 
+  const deletePostedItem = async (status: StoredAnonymousStatus) => {
+    try {
+      if (status.kind === "status") {
+        await apiRequest<{ ok: boolean }>(`/statuses/${status.id}`, {
+          method: "DELETE",
+          accessToken
+        });
+      } else {
+        await apiRequest<{ ok: boolean }>(`/anonymous-messages/${status.id}`, {
+          method: "DELETE",
+          accessToken
+        });
+      }
+
+      setStatuses((current) => current.filter((entry) => !(entry.id === status.id && entry.kind === status.kind)));
+      setShareFeedback(status.kind === "status" ? "Anonymous status deleted." : "Anonymous message deleted.");
+    } catch (error) {
+      setShareFeedback(getErrorMessage(error, "Could not delete this anonymous post."));
+    }
+  };
+
+  const downloadPostedStatusImage = (status: StoredAnonymousStatus) => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 1080;
+    canvas.height = 1350;
+    const context = canvas.getContext("2d");
+
+    if (!context) {
+      setShareFeedback("Could not prepare the anonymous status image.");
+      return;
+    }
+
+    const gradient = context.createLinearGradient(0, 0, 1080, 1350);
+    gradient.addColorStop(0, "#f6f9ff");
+    gradient.addColorStop(1, "#fff0e7");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 1080, 1350);
+    context.fillStyle = "#1b2440";
+    context.font = "700 46px Space Grotesk, sans-serif";
+    context.fillText("HISTORA // ANONYMOUS STATUS", 80, 120);
+    context.font = "700 72px Space Grotesk, sans-serif";
+    context.fillText("Anonymous advice status", 80, 240);
+    context.font = "400 42px Manrope, sans-serif";
+
+    const words = status.body.split(" ");
+    const lines: string[] = [];
+    let currentLine = "";
+    for (const word of words) {
+      const nextLine = currentLine ? `${currentLine} ${word}` : word;
+      if (context.measureText(nextLine).width > 880) {
+        lines.push(currentLine);
+        currentLine = word;
+      } else {
+        currentLine = nextLine;
+      }
+    }
+    if (currentLine) {
+      lines.push(currentLine);
+    }
+
+    lines.slice(0, 10).forEach((line, index) => {
+      context.fillText(line, 80, 360 + index * 60);
+    });
+    context.font = "700 36px Space Grotesk, sans-serif";
+    context.fillStyle = "#cc5a24";
+    context.fillText(`Advice replies stay anonymous // ${status.meta}`, 80, 1160);
+
+    const link = document.createElement("a");
+    link.href = canvas.toDataURL("image/png");
+    link.download = `${status.shareSlug}.png`;
+    link.click();
+    setShareFeedback("Anonymous status image saved to your device.");
+  };
+
   const toggleDistribution = async (status: StoredAnonymousStatus, distribution: "app" | "external") => {
     try {
       const updated = await apiRequest<ApiAnonymousMessage>(`/anonymous-messages/${status.id}/distribution`, {
@@ -2514,6 +2645,26 @@ function AnonymousHubPage({
                       <div className="anonymous-hub-card-copy">
                         <strong>{status.kind === "status" ? "Anonymous status" : "Anonymous message"}</strong>
                         <span>{status.meta}</span>
+                      </div>
+                      <div className="story-viewer-top-actions">
+                        {status.kind === "status" ? (
+                          <button
+                            aria-label="Save anonymous status image"
+                            className="icon-chip icon-chip-dark"
+                            onClick={() => downloadPostedStatusImage(status)}
+                            type="button"
+                          >
+                            <Icon className="button-icon" name="download" />
+                          </button>
+                        ) : null}
+                        <button
+                          aria-label="Delete anonymous post"
+                          className="icon-chip icon-chip-dark"
+                          onClick={() => void deletePostedItem(status)}
+                          type="button"
+                        >
+                          <Icon className="button-icon" name="trash" />
+                        </button>
                       </div>
                     </div>
                     <p>{status.body}</p>

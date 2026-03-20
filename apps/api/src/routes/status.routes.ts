@@ -2,6 +2,7 @@ import { Router } from "express";
 
 import {
   createStatusController,
+  deleteStatusController,
   getAnonymousStatusByShareSlugController,
   getMyStatusesController,
   getStatusFeedController,
@@ -16,5 +17,6 @@ statusRouter.get("/share/:shareSlug", getAnonymousStatusByShareSlugController);
 statusRouter.get("/", getStatusFeedController);
 statusRouter.post("/", requireAuth, createStatusController);
 statusRouter.post("/:statusId/reactions", requireAuth, toggleStatusReactionController);
+statusRouter.delete("/:statusId", requireAuth, deleteStatusController);
 
 export { statusRouter };

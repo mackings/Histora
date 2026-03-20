@@ -8,6 +8,7 @@ import {
 import { asyncHandler } from "../utils/async-handler.js";
 import {
   createAnonymousMessage,
+  deleteAnonymousMessage,
   getAnonymousMessageForRecipient,
   getAnonymousMessageBySlug,
   listAnonymousInbox,
@@ -65,4 +66,10 @@ export const unlockAnonymousHelperContactController = asyncHandler(async (reques
     }
   });
   response.status(200).json(message);
+});
+
+export const deleteAnonymousMessageController = asyncHandler(async (request, response) => {
+  const params = z.object({ messageId: z.string().min(1) }).parse(request.params);
+  const result = await deleteAnonymousMessage(request.auth!.userId, params.messageId);
+  response.status(200).json(result);
 });

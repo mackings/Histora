@@ -2,6 +2,7 @@ import { Router } from "express";
 
 import {
   createAnonymousMessageController,
+  deleteAnonymousMessageController,
   getAnonymousRecipientMessageController,
   getAnonymousMessageController,
   listAnonymousInboxController,
@@ -20,5 +21,6 @@ anonymousMessageRouter.get("/:shareSlug/private", requireAuth, getAnonymousRecip
 anonymousMessageRouter.get("/:shareSlug", getAnonymousMessageController);
 anonymousMessageRouter.patch("/:messageId/distribution", requireAuth, updateAnonymousDistributionController);
 anonymousMessageRouter.post("/:messageId/helper-contact/unlock", requireAuth, unlockAnonymousHelperContactController);
+anonymousMessageRouter.delete("/:messageId", requireAuth, deleteAnonymousMessageController);
 
 export { anonymousMessageRouter };
