@@ -372,9 +372,15 @@ type PushSyncResult = {
 
 const anonymousStatusStorageKey = "histora-anonymous-feed-v1";
 const anonymousStatusUpdateEvent = "histora-anonymous-status-updated";
+const statusUpdateEvent = "histora-status-updated";
 const deviceIdentityStorageKey = "histora-device-identity-v1";
 const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
 const pushServiceWorkerPath = "/histora-push-sw.js";
+let latestAccessToken: string | null = null;
+
+const updateLatestAccessToken = (token: string | null) => {
+  latestAccessToken = token;
+};
 
 class ApiRequestError extends Error {
   status: number;
@@ -403,17 +409,41 @@ async function apiRequest<T>(
   const method = options?.method ?? "GET";
   const hasRawBody = typeof options?.rawBody !== "undefined";
   const isJsonBody = typeof options?.body !== "undefined" && !hasRawBody;
-  const response = await fetch(`${apiBaseUrl}${path}`, {
-    method,
-    credentials: "include",
-    headers: {
-      ...(isJsonBody ? { "Content-Type": "application/json" } : {}),
-      ...(method !== "GET" ? { "X-Requested-With": "XMLHttpRequest" } : {}),
-      ...(options?.accessToken ? { Authorization: `Bearer ${options.accessToken}` } : {}),
-      ...(options?.headers ?? {})
-    },
-    body: hasRawBody ? options?.rawBody : isJsonBody ? JSON.stringify(options.body) : undefined
-  });
+  const executeRequest = async (tokenOverride?: string | null) =>
+    fetch(`${apiBaseUrl}${path}`, {
+      method,
+      credentials: "include",
+      headers: {
+        ...(isJsonBody ? { "Content-Type": "application/json" } : {}),
+        ...(method !== "GET" ? { "X-Requested-With": "XMLHttpRequest" } : {}),
+        ...(tokenOverride ? { Authorization: `Bearer ${tokenOverride}` } : {}),
+        ...(options?.headers ?? {})
+      },
+      body: hasRawBody ? options?.rawBody : isJsonBody ? JSON.stringify(options.body) : undefined
+    });
+
+  let effectiveToken = options?.accessToken ?? latestAccessToken;
+  let response = await executeRequest(effectiveToken);
+
+  if (response.status === 401 && effectiveToken) {
+    const refreshResponse = await fetch(`${apiBaseUrl}/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "X-Requested-With": "XMLHttpRequest"
+      }
+    });
+
+    if (refreshResponse.ok) {
+      const refreshedSession = (await refreshResponse.json()) as AuthSession;
+      effectiveToken = refreshedSession.accessToken;
+      updateLatestAccessToken(refreshedSession.accessToken);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("histora-auth-session", { detail: refreshedSession }));
+      }
+      response = await executeRequest(effectiveToken);
+    }
+  }
 
   if (!response.ok) {
     let message = "Request failed.";
@@ -1331,6 +1361,9 @@ function StoryCirclesRow({
     })
       .then((createdStatus) => {
         setStatusItems((current) => [current[0], toStatusEntry(createdStatus, { owned: true }), ...current.slice(1)]);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent(statusUpdateEvent, { detail: { type: "created", status: createdStatus } }));
+        }
         setStatusDraft("Today I finally wrote the chapter I kept postponing.");
         setSelectedImage(null);
         setIsComposerOpen(false);
@@ -1357,6 +1390,9 @@ function StoryCirclesRow({
     })
       .then(() => {
         setStatusItems((current) => current.filter((entry) => entry.id !== activeStatus.id));
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent(statusUpdateEvent, { detail: { type: "deleted", statusId: activeStatus.id } }));
+        }
         setActiveIndex(null);
         setShareFeedback(activeStatus.anonymous ? "Anonymous status deleted." : "Status deleted.");
       })
@@ -4549,6 +4585,41 @@ function FeedPage({
     };
   }, [accessToken]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleStatusUpdate = (event: Event) => {
+      const payload = (event as CustomEvent<{ type: "created" | "deleted"; status?: ApiStatus; statusId?: string }>).detail;
+      if (!payload) {
+        return;
+      }
+
+      if (payload.type === "created" && payload.status) {
+        setFeedStatuses((current) => {
+          const next = current.filter((status) => status.id !== payload.status!.id);
+          return payload.status!.anonymous && payload.status!.shareSlug ? [payload.status!, ...next] : next;
+        });
+        setMyStatusIds((current) => new Set([...current, payload.status!.id]));
+        return;
+      }
+
+      if (payload.type === "deleted" && payload.statusId) {
+        const statusId = payload.statusId;
+        setFeedStatuses((current) => current.filter((status) => status.id !== statusId));
+        setMyStatusIds((current) => {
+          const next = new Set(current);
+          next.delete(statusId);
+          return next;
+        });
+      }
+    };
+
+    window.addEventListener(statusUpdateEvent, handleStatusUpdate as EventListener);
+    return () => window.removeEventListener(statusUpdateEvent, handleStatusUpdate as EventListener);
+  }, []);
+
   const anonymousFeedSources: AnonymousFeedSource[] = [
     ...feedStatuses.map((status) => ({
       id: status.id,
@@ -4708,6 +4779,9 @@ function FeedPage({
     })
       .then(() => {
         setFeedStatuses((current) => current.filter((status) => status.id !== activeAnonymousPost.id));
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent(statusUpdateEvent, { detail: { type: "deleted", statusId: activeAnonymousPost.id } }));
+        }
         setActiveAnonymousIndex(null);
         setShareFeedback("Anonymous status deleted.");
       })
@@ -8129,6 +8203,26 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    updateLatestAccessToken(authSession?.accessToken ?? null);
+  }, [authSession?.accessToken]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const syncSession = (event: Event) => {
+      const session = (event as CustomEvent<AuthSession>).detail;
+      if (session?.accessToken) {
+        setAuthSession(session);
+      }
+    };
+
+    window.addEventListener("histora-auth-session", syncSession as EventListener);
+    return () => window.removeEventListener("histora-auth-session", syncSession as EventListener);
   }, []);
 
   useEffect(() => {
