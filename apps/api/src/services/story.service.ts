@@ -250,15 +250,14 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
     active = true;
   }
 
-  if (action === "like") {
-    story.likesCount = Math.max(0, story.likesCount + (active ? 1 : -1));
-  }
+  const [likesCount, bookmarksCount] = await Promise.all([
+    StoryInteractionModel.countDocuments({ storyId, kind: "like" }),
+    StoryInteractionModel.countDocuments({ storyId, kind: "bookmark" })
+  ]);
 
-  if (action === "bookmark") {
-    story.bookmarksCount = Math.max(0, story.bookmarksCount + (active ? 1 : -1));
-  }
-
-  story.reactionsCount = Math.max(0, story.likesCount + story.bookmarksCount);
+  story.likesCount = likesCount;
+  story.bookmarksCount = bookmarksCount;
+  story.reactionsCount = likesCount + bookmarksCount;
   await story.save();
 
   await enqueueCounterSync("story", story.id);
