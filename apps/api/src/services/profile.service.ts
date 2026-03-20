@@ -1,10 +1,12 @@
 import { ContributorInviteModel } from "../models/contributor-invite.model.js";
+import { PushSubscriptionModel } from "../models/push-subscription.model.js";
+import { TrustedDeviceModel } from "../models/trusted-device.model.js";
 import { FollowModel } from "../models/follow.model.js";
 import { AnonymousMessageModel } from "../models/anonymous-message.model.js";
 import { SessionModel } from "../models/session.model.js";
 import { StoryModel } from "../models/story.model.js";
 import { UserModel } from "../models/user.model.js";
-import type { ContributorInviteInput, ProfileUpdateInput } from "../shared/index.js";
+import type { ContributorInviteInput, DeviceRenameInput, ProfileUpdateInput } from "../shared/index.js";
 import { AppError } from "../utils/app-error.js";
 import { listBookmarkedStories } from "./story.service.js";
 
@@ -282,4 +284,87 @@ export async function revokeUserSession(userId: string, sessionId: string) {
   }
 
   return formatSessionDevice(session);
+}
+
+export async function listTrustedDevices(userId: string) {
+  const devices = await TrustedDeviceModel.find({ userId })
+    .sort({ lastSeenAt: -1 })
+    .limit(30)
+    .select("label userAgent lastIpAddress approvedAt lastSeenAt revokedAt deviceKeyHash");
+
+  const pushEnabledDeviceKeys = new Set(
+    (
+      await PushSubscriptionModel.find({ userId, revokedAt: null })
+        .select("deviceKeyHash")
+        .lean()
+    ).map((subscription) => subscription.deviceKeyHash)
+  );
+
+  return devices.map((device) => ({
+    id: device.id,
+    label: device.label,
+    userAgent: device.userAgent ?? "Unknown device",
+    ipAddress: device.lastIpAddress ?? null,
+    approvedAt: device.approvedAt,
+    lastSeenAt: device.lastSeenAt,
+    revokedAt: device.revokedAt ?? null,
+    active: !device.revokedAt,
+    pushEnabled: pushEnabledDeviceKeys.has(device.deviceKeyHash)
+  }));
+}
+
+export async function renameTrustedDevice(userId: string, deviceId: string, input: DeviceRenameInput) {
+  const device = await TrustedDeviceModel.findOneAndUpdate(
+    { _id: deviceId, userId },
+    { $set: { label: input.label } },
+    { new: true }
+  ).select("label userAgent lastIpAddress approvedAt lastSeenAt revokedAt");
+
+  if (!device) {
+    throw new AppError("Device not found", 404);
+  }
+
+  return {
+    id: device.id,
+    label: device.label,
+    userAgent: device.userAgent ?? "Unknown device",
+    ipAddress: device.lastIpAddress ?? null,
+    approvedAt: device.approvedAt,
+    lastSeenAt: device.lastSeenAt,
+    revokedAt: device.revokedAt ?? null,
+    active: !device.revokedAt
+  };
+}
+
+export async function revokeTrustedDevice(userId: string, deviceId: string) {
+  const device = await TrustedDeviceModel.findOneAndUpdate(
+    { _id: deviceId, userId },
+    { $set: { revokedAt: new Date() } },
+    { new: true }
+  ).select("label userAgent lastIpAddress approvedAt lastSeenAt revokedAt deviceKeyHash");
+
+  if (!device) {
+    throw new AppError("Device not found", 404);
+  }
+
+  await SessionModel.updateMany(
+    { userId, deviceKeyHash: device.deviceKeyHash, revokedAt: null },
+    { $set: { revokedAt: new Date() } }
+  );
+  await PushSubscriptionModel.updateMany(
+    { userId, deviceKeyHash: device.deviceKeyHash, revokedAt: null },
+    { $set: { revokedAt: new Date() } }
+  );
+
+  return {
+    id: device.id,
+    label: device.label,
+    userAgent: device.userAgent ?? "Unknown device",
+    ipAddress: device.lastIpAddress ?? null,
+    approvedAt: device.approvedAt,
+    lastSeenAt: device.lastSeenAt,
+    revokedAt: device.revokedAt ?? null,
+    active: !device.revokedAt,
+    pushEnabled: false
+  };
 }

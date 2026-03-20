@@ -2461,6 +2461,12 @@ textarea {
   cursor: pointer;
 }
 
+.profile-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .form-error {
   color: #c24b23;
   font-size: 0.8rem;
@@ -4506,6 +4512,10 @@ textarea {
   }
 
   .auth-inline-action {
+    width: 100%;
+  }
+
+  .profile-row-actions {
     width: 100%;
   }
 

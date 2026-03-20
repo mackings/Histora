@@ -9,17 +9,22 @@ import type {
   EmailVerificationRequestInput,
   ForgotPasswordInput,
   LoginInput,
+  ResendDeviceVerificationInput,
   ResetPasswordInput,
   SignUpInput,
+  VerifyDeviceInput,
   VerifyEmailInput
 } from "../shared/index.js";
 import { env } from "../config/env.js";
+import { DeviceVerificationChallengeModel } from "../models/device-verification-challenge.model.js";
 import { EmailVerificationTokenModel } from "../models/email-verification-token.model.js";
 import { PasswordResetTokenModel } from "../models/password-reset-token.model.js";
 import { SessionModel } from "../models/session.model.js";
+import { TrustedDeviceModel, hashDeviceKey } from "../models/trusted-device.model.js";
 import { UserModel } from "../models/user.model.js";
 import { recordAuditEvent } from "./audit.service.js";
-import { sendVerificationOtpEmail } from "./email.service.js";
+import { sendDeviceVerificationEmail, sendVerificationOtpEmail } from "./email.service.js";
+import { sendDeviceVerificationPush } from "./push.service.js";
 import { AppError } from "../utils/app-error.js";
 
 const accessTokenTtl = env.ACCESS_TOKEN_TTL;
@@ -29,6 +34,11 @@ const refreshTokenTtl = `${refreshTokenTtlDays}d` as SignOptions["expiresIn"];
 type RequestContext = {
   ipAddress?: string;
   userAgent?: string;
+};
+
+type DeviceContext = {
+  deviceId: string;
+  deviceName: string;
 };
 
 type AuthPayload = {
@@ -62,6 +72,7 @@ const buildRefreshToken = (sessionId: string, userId: string) =>
   );
 
 const hashToken = (token: string) => crypto.createHash("sha256").update(token).digest("hex");
+const maxOtpAttempts = 5;
 
 const buildResetCode = () => crypto.randomBytes(3).toString("hex").toUpperCase();
 const buildVerificationOtp = () => crypto.randomInt(10000, 100000).toString();
@@ -78,7 +89,7 @@ export function buildCookieOptions(): CookieOptions {
   };
 }
 
-async function createSessionPayload(userId: string, context?: RequestContext): Promise<AuthPayload> {
+async function createSessionPayload(userId: string, context?: RequestContext, device?: DeviceContext): Promise<AuthPayload> {
   const user = await UserModel.findById(userId).select("fullName username email subscriptionTier emailVerified");
   if (!user) {
     throw new AppError("User not found", 404);
@@ -91,6 +102,8 @@ async function createSessionPayload(userId: string, context?: RequestContext): P
   const session = await SessionModel.create({
     userId,
     tokenHash: "pending",
+    deviceKeyHash: device ? hashDeviceKey(device.deviceId) : null,
+    deviceLabel: device?.deviceName ?? null,
     userAgent: context?.userAgent,
     ipAddress: context?.ipAddress,
     expiresAt: new Date(Date.now() + refreshTokenTtlDays * 24 * 60 * 60 * 1000),
@@ -149,6 +162,73 @@ export async function registerUser(payload: SignUpInput, context?: RequestContex
   } satisfies VerificationRequestResult;
 }
 
+async function ensureTrustedDevice(userId: string, device: DeviceContext, context?: RequestContext) {
+  const deviceKeyHash = hashDeviceKey(device.deviceId);
+  const trustedDevice = await TrustedDeviceModel.findOne({
+    userId,
+    deviceKeyHash,
+    revokedAt: null
+  });
+
+  if (!trustedDevice) {
+    return null;
+  }
+
+  trustedDevice.label = device.deviceName;
+  trustedDevice.userAgent = context?.userAgent ?? trustedDevice.userAgent;
+  trustedDevice.lastIpAddress = context?.ipAddress ?? trustedDevice.lastIpAddress;
+  trustedDevice.lastSeenAt = new Date();
+  await trustedDevice.save();
+
+  return trustedDevice;
+}
+
+async function issueDeviceVerificationChallenge(
+  userId: string,
+  email: string,
+  device: DeviceContext,
+  context?: RequestContext
+) {
+  const deviceKeyHash = hashDeviceKey(device.deviceId);
+  const existingRecentChallenge = await DeviceVerificationChallengeModel.findOne({
+    userId,
+    deviceKeyHash,
+    consumedAt: null,
+    expiresAt: { $gt: new Date() }
+  }).sort({ createdAt: -1 });
+
+  if (existingRecentChallenge && Date.now() - existingRecentChallenge.createdAt.getTime() < 60_000) {
+    throw new AppError(
+      "A device approval code was already sent. Check your email or wait a minute.",
+      429,
+      "DEVICE_VERIFICATION_COOLDOWN"
+    );
+  }
+
+  await DeviceVerificationChallengeModel.deleteMany({ userId, deviceKeyHash, consumedAt: null });
+
+  const otp = buildVerificationOtp();
+  const challenge = await DeviceVerificationChallengeModel.create({
+    userId,
+    email,
+    deviceKeyHash,
+    deviceLabel: device.deviceName,
+    userAgent: context?.userAgent,
+    ipAddress: context?.ipAddress,
+    otpHash: hashToken(otp),
+    expiresAt: new Date(Date.now() + 10 * 60 * 1000)
+  });
+
+  await sendDeviceVerificationEmail(email, otp, device.deviceName);
+  await sendDeviceVerificationPush(userId, {
+    email,
+    challengeId: challenge.id,
+    requestedDeviceName: device.deviceName
+  });
+
+  return challenge;
+}
+
 export async function loginUser(payload: LoginInput, context?: RequestContext) {
   const user = await UserModel.findOne({ email: payload.email.toLowerCase() });
   if (!user) {
@@ -164,7 +244,27 @@ export async function loginUser(payload: LoginInput, context?: RequestContext) {
     throw new AppError("Verify your email before signing in.", 403, "EMAIL_NOT_VERIFIED");
   }
 
-  const sessionPayload = await createSessionPayload(user.id, context);
+  const device = {
+    deviceId: payload.deviceId,
+    deviceName: payload.deviceName
+  };
+
+  const trustedDevice = await ensureTrustedDevice(user.id, device, context);
+  if (!trustedDevice) {
+    const challenge = await issueDeviceVerificationChallenge(user.id, user.email, device, context);
+    throw new AppError(
+      "This device must be approved before sign in.",
+      403,
+      "DEVICE_VERIFICATION_REQUIRED",
+      {
+        challengeId: challenge.id,
+        email: user.email,
+        deviceName: device.deviceName
+      }
+    );
+  }
+
+  const sessionPayload = await createSessionPayload(user.id, context, device);
   await recordAuditEvent({
     actorUserId: user.id,
     targetUserId: user.id,
@@ -249,15 +349,31 @@ export async function verifyEmailAddress(payload: VerifyEmailInput) {
     throw new AppError("Verification code is invalid or expired.", 400, "INVALID_VERIFICATION_CODE");
   }
 
-  const token = await EmailVerificationTokenModel.findOne({
+  const activeToken = await EmailVerificationTokenModel.findOne({
     userId: user.id,
     email,
-    codeHash: hashToken(payload.otp),
     consumedAt: null,
     expiresAt: { $gt: new Date() }
   }).sort({ createdAt: -1 });
 
-  if (!token) {
+  if (!activeToken) {
+    throw new AppError("Verification code is invalid or expired.", 400, "INVALID_VERIFICATION_CODE");
+  }
+
+  if (activeToken.failedAttempts >= maxOtpAttempts) {
+    await EmailVerificationTokenModel.deleteMany({ userId: user.id, consumedAt: null });
+    throw new AppError("Too many incorrect codes. Request a new verification code.", 429, "VERIFICATION_ATTEMPTS_EXCEEDED");
+  }
+
+  if (activeToken.codeHash !== hashToken(payload.otp)) {
+    activeToken.failedAttempts += 1;
+    activeToken.lastAttemptAt = new Date();
+    await activeToken.save();
+
+    if (activeToken.failedAttempts >= maxOtpAttempts) {
+      throw new AppError("Too many incorrect codes. Request a new verification code.", 429, "VERIFICATION_ATTEMPTS_EXCEEDED");
+    }
+
     throw new AppError("Verification code is invalid or expired.", 400, "INVALID_VERIFICATION_CODE");
   }
 
@@ -265,8 +381,9 @@ export async function verifyEmailAddress(payload: VerifyEmailInput) {
   user.emailVerifiedAt = new Date();
   await user.save();
 
-  token.consumedAt = new Date();
-  await token.save();
+  activeToken.consumedAt = new Date();
+  activeToken.lastAttemptAt = new Date();
+  await activeToken.save();
   await EmailVerificationTokenModel.deleteMany({ userId: user.id, consumedAt: null });
 
   await recordAuditEvent({
@@ -280,6 +397,134 @@ export async function verifyEmailAddress(payload: VerifyEmailInput) {
   return {
     ok: true,
     email
+  };
+}
+
+export async function verifyDeviceAndLogin(payload: VerifyDeviceInput, context?: RequestContext) {
+  const email = payload.email.toLowerCase();
+  const challenge = await DeviceVerificationChallengeModel.findOne({
+    _id: payload.challengeId,
+    email,
+    deviceKeyHash: hashDeviceKey(payload.deviceId),
+    consumedAt: null,
+    expiresAt: { $gt: new Date() }
+  });
+
+  if (!challenge) {
+    throw new AppError("Device verification code is invalid or expired.", 400, "INVALID_DEVICE_VERIFICATION_CODE");
+  }
+
+  if (challenge.failedAttempts >= maxOtpAttempts) {
+    await DeviceVerificationChallengeModel.deleteMany({
+      userId: challenge.userId,
+      deviceKeyHash: challenge.deviceKeyHash,
+      consumedAt: null
+    });
+    throw new AppError(
+      "Too many incorrect device codes. Request a new device approval code.",
+      429,
+      "DEVICE_VERIFICATION_ATTEMPTS_EXCEEDED"
+    );
+  }
+
+  if (challenge.otpHash !== hashToken(payload.otp)) {
+    challenge.failedAttempts += 1;
+    challenge.lastAttemptAt = new Date();
+    await challenge.save();
+
+    if (challenge.failedAttempts >= maxOtpAttempts) {
+      throw new AppError(
+        "Too many incorrect device codes. Request a new device approval code.",
+        429,
+        "DEVICE_VERIFICATION_ATTEMPTS_EXCEEDED"
+      );
+    }
+
+    throw new AppError("Device verification code is invalid or expired.", 400, "INVALID_DEVICE_VERIFICATION_CODE");
+  }
+
+  const user = await UserModel.findById(challenge.userId).select("fullName username email subscriptionTier emailVerified");
+  if (!user || !user.emailVerified) {
+    throw new AppError("Verify your email before approving a device.", 403, "EMAIL_NOT_VERIFIED");
+  }
+
+  await TrustedDeviceModel.findOneAndUpdate(
+    {
+      userId: user.id,
+      deviceKeyHash: challenge.deviceKeyHash
+    },
+    {
+      $set: {
+        label: payload.deviceName,
+        userAgent: context?.userAgent ?? challenge.userAgent,
+        lastIpAddress: context?.ipAddress ?? challenge.ipAddress,
+        approvedAt: new Date(),
+        lastSeenAt: new Date(),
+        revokedAt: null
+      }
+    },
+    { upsert: true, new: true }
+  );
+
+  challenge.consumedAt = new Date();
+  challenge.lastAttemptAt = new Date();
+  await challenge.save();
+
+  await DeviceVerificationChallengeModel.deleteMany({
+    userId: user.id,
+    deviceKeyHash: challenge.deviceKeyHash,
+    consumedAt: null
+  });
+
+  await recordAuditEvent({
+    actorUserId: user.id,
+    targetUserId: user.id,
+    entityType: "session",
+    entityId: challenge.id,
+    action: "device-verification.completed"
+  });
+
+  return createSessionPayload(
+    user.id,
+    context,
+    {
+      deviceId: payload.deviceId,
+      deviceName: payload.deviceName
+    }
+  );
+}
+
+export async function resendDeviceVerification(payload: ResendDeviceVerificationInput, context?: RequestContext) {
+  const user = await UserModel.findOne({ email: payload.email.toLowerCase() }).select("email emailVerified");
+  if (!user) {
+    return { ok: true };
+  }
+
+  if (!user.emailVerified) {
+    throw new AppError("Verify your email before approving a device.", 403, "EMAIL_NOT_VERIFIED");
+  }
+
+  const trustedDevice = await TrustedDeviceModel.findOne({
+    userId: user.id,
+    deviceKeyHash: hashDeviceKey(payload.deviceId),
+    revokedAt: null
+  });
+  if (trustedDevice) {
+    return { ok: true, alreadyTrusted: true };
+  }
+
+  const challenge = await issueDeviceVerificationChallenge(
+    user.id,
+    user.email,
+    { deviceId: payload.deviceId, deviceName: payload.deviceName },
+    context
+  );
+
+  return {
+    ok: true,
+    challengeId: challenge.id,
+    email: user.email,
+    deviceName: payload.deviceName
   };
 }
 
@@ -318,6 +563,8 @@ export async function refreshAccessToken(refreshToken: string, context?: Request
     tokenHash: "pending",
     family: session.family,
     parentSessionId: session._id,
+    deviceKeyHash: session.deviceKeyHash ?? null,
+    deviceLabel: session.deviceLabel ?? null,
     userAgent: context?.userAgent ?? session.userAgent,
     ipAddress: context?.ipAddress ?? session.ipAddress,
     expiresAt: new Date(Date.now() + refreshTokenTtlDays * 24 * 60 * 60 * 1000),
@@ -378,6 +625,7 @@ export async function createPasswordResetRequest(payload: ForgotPasswordInput) {
   }
 
   const rawCode = buildResetCode();
+  await PasswordResetTokenModel.deleteMany({ userId: user.id, usedAt: null });
   await PasswordResetTokenModel.create({
     userId: user.id,
     codeHash: hashToken(rawCode),
@@ -399,8 +647,9 @@ export async function createPasswordResetRequest(payload: ForgotPasswordInput) {
 }
 
 export async function resetPassword(payload: ResetPasswordInput) {
-  const codeHash = hashToken(payload.code.trim().toUpperCase());
-  const resetToken = await PasswordResetTokenModel.findOne({
+  const rawCode = payload.code.trim().toUpperCase();
+  const codeHash = hashToken(rawCode);
+  let resetToken = await PasswordResetTokenModel.findOne({
     codeHash,
     usedAt: null,
     expiresAt: { $gt: new Date() }
@@ -408,6 +657,11 @@ export async function resetPassword(payload: ResetPasswordInput) {
 
   if (!resetToken) {
     throw new AppError("Reset code is invalid or expired", 400);
+  }
+
+  if (resetToken.failedAttempts >= maxOtpAttempts) {
+    await PasswordResetTokenModel.deleteMany({ userId: resetToken.userId, usedAt: null });
+    throw new AppError("Too many incorrect reset attempts. Request a new reset code.", 429, "RESET_ATTEMPTS_EXCEEDED");
   }
 
   const user = await UserModel.findById(resetToken.userId);

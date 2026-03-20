@@ -8,8 +8,10 @@ import {
   meController,
   refreshController,
   registerController,
+  resendDeviceVerificationController,
   resendVerificationController,
   resetPasswordController,
+  verifyDeviceController,
   verifyEmailController
 } from "../controllers/auth.controller.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
@@ -44,5 +46,7 @@ authRouter.post("/forgot-password", requireTrustedBrowserOrigin, authWriteLimite
 authRouter.post("/reset-password", requireTrustedBrowserOrigin, authWriteLimiter, resetPasswordController);
 authRouter.post("/verify-email", requireTrustedBrowserOrigin, authWriteLimiter, verifyEmailController);
 authRouter.post("/resend-verification", requireTrustedBrowserOrigin, authWriteLimiter, resendVerificationController);
+authRouter.post("/verify-device", requireTrustedBrowserOrigin, authWriteLimiter, verifyDeviceController);
+authRouter.post("/resend-device-verification", requireTrustedBrowserOrigin, authWriteLimiter, resendDeviceVerificationController);
 
 export { authRouter };

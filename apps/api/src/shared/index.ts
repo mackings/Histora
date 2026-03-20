@@ -74,7 +74,9 @@ export const signUpSchema = z.object({
 
 export const loginSchema = z.object({
   email: allowedEmailSchema,
-  password: z.string().min(10).max(72)
+  password: z.string().min(10).max(72),
+  deviceId: z.string().trim().min(16).max(160),
+  deviceName: z.string().trim().min(2).max(80)
 });
 
 export const forgotPasswordSchema = z.object({
@@ -93,6 +95,39 @@ export const emailVerificationRequestSchema = z.object({
 export const verifyEmailSchema = z.object({
   email: allowedEmailSchema,
   otp: z.string().trim().regex(/^\d{5}$/)
+});
+
+export const verifyDeviceSchema = z.object({
+  challengeId: z.string().min(1),
+  email: allowedEmailSchema,
+  otp: z.string().trim().regex(/^\d{5}$/),
+  deviceId: z.string().trim().min(16).max(160),
+  deviceName: z.string().trim().min(2).max(80)
+});
+
+export const resendDeviceVerificationSchema = z.object({
+  email: allowedEmailSchema,
+  deviceId: z.string().trim().min(16).max(160),
+  deviceName: z.string().trim().min(2).max(80)
+});
+
+export const pushSubscriptionSchema = z.object({
+  endpoint: z.string().url(),
+  expirationTime: z.number().nullable().optional(),
+  keys: z.object({
+    p256dh: z.string().min(1),
+    auth: z.string().min(1)
+  })
+});
+
+export const pushSubscriptionCreateSchema = z.object({
+  deviceId: z.string().trim().min(16).max(160),
+  deviceName: z.string().trim().min(2).max(80),
+  subscription: pushSubscriptionSchema
+});
+
+export const pushSubscriptionDeleteSchema = z.object({
+  endpoint: z.string().url()
 });
 
 export const statusVisibilitySchema = z.enum(["public", "followers", "private"]);
@@ -180,6 +215,10 @@ export const contributorInviteSchema = z.object({
   storyId: z.string().min(1)
 });
 
+export const deviceRenameSchema = z.object({
+  label: z.string().trim().min(2).max(80)
+});
+
 export type StoryInput = z.infer<typeof storySchema>;
 export type StorySaveInput = z.infer<typeof storySaveSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
@@ -188,6 +227,10 @@ export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 export type EmailVerificationRequestInput = z.infer<typeof emailVerificationRequestSchema>;
 export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
+export type VerifyDeviceInput = z.infer<typeof verifyDeviceSchema>;
+export type ResendDeviceVerificationInput = z.infer<typeof resendDeviceVerificationSchema>;
+export type PushSubscriptionCreateInput = z.infer<typeof pushSubscriptionCreateSchema>;
+export type PushSubscriptionDeleteInput = z.infer<typeof pushSubscriptionDeleteSchema>;
 export type StatusCreateInput = z.infer<typeof statusCreateSchema>;
 export type CommentCreateInput = z.infer<typeof commentCreateSchema>;
 export type StoryReactionInput = z.infer<typeof storyReactionSchema>;
@@ -196,3 +239,4 @@ export type SignedUploadInput = z.infer<typeof signedUploadSchema>;
 export type AnonymousHelpUnlockInput = z.infer<typeof anonymousHelpUnlockSchema>;
 export type ProfileUpdateInput = z.infer<typeof profileUpdateSchema>;
 export type ContributorInviteInput = z.infer<typeof contributorInviteSchema>;
+export type DeviceRenameInput = z.infer<typeof deviceRenameSchema>;

@@ -6,6 +6,8 @@ export interface SessionDocument extends mongoose.Document {
   tokenHash: string;
   family: string;
   parentSessionId?: mongoose.Types.ObjectId | null;
+  deviceKeyHash?: string | null;
+  deviceLabel?: string | null;
   userAgent?: string;
   ipAddress?: string;
   expiresAt: Date;
@@ -21,6 +23,8 @@ const sessionSchema = new Schema<SessionDocument>(
     tokenHash: { type: String, required: true, unique: true, index: true },
     family: { type: String, required: true, index: true, default: () => crypto.randomUUID() },
     parentSessionId: { type: Schema.Types.ObjectId, ref: "Session", default: null, index: true },
+    deviceKeyHash: { type: String, default: null, index: true },
+    deviceLabel: { type: String, default: null },
     userAgent: { type: String },
     ipAddress: { type: String },
     expiresAt: { type: Date, required: true, index: true },

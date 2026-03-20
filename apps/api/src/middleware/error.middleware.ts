@@ -20,7 +20,8 @@ export function errorMiddleware(error: unknown, _request: Request, response: Res
   if (error instanceof AppError) {
     response.status(error.statusCode).json({
       message: error.message,
-      ...(error.code ? { code: error.code } : {})
+      ...(error.code ? { code: error.code } : {}),
+      ...(error.details ? { details: error.details } : {})
     });
     return;
   }

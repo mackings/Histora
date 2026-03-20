@@ -319,19 +319,45 @@ type ProfileSession = {
   active: boolean;
 };
 
+type ProfileTrustedDevice = {
+  id: string;
+  label: string;
+  userAgent: string;
+  ipAddress?: string | null;
+  approvedAt: string;
+  lastSeenAt: string;
+  revokedAt?: string | null;
+  active: boolean;
+  pushEnabled?: boolean;
+};
+
+type PushPublicKeyResponse = {
+  publicKey: string | null;
+};
+
+type PushSyncResult = {
+  supported: boolean;
+  enabled: boolean;
+  message: string;
+};
+
 const anonymousStatusStorageKey = "histora-anonymous-feed-v1";
 const anonymousStatusUpdateEvent = "histora-anonymous-status-updated";
+const deviceIdentityStorageKey = "histora-device-identity-v1";
 const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
+const pushServiceWorkerPath = "/histora-push-sw.js";
 
 class ApiRequestError extends Error {
   status: number;
   code?: string;
+  details?: Record<string, unknown>;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, details?: Record<string, unknown>) {
     super(message);
     this.name = "ApiRequestError";
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -358,11 +384,13 @@ async function apiRequest<T>(
   if (!response.ok) {
     let message = "Request failed.";
     let code: string | undefined;
+    let details: Record<string, unknown> | undefined;
 
     if ((response.headers.get("content-type") ?? "").includes("application/json")) {
-      const payload = (await response.json()) as { message?: string; error?: string; code?: string };
+      const payload = (await response.json()) as { message?: string; error?: string; code?: string; details?: Record<string, unknown> };
       message = payload.message ?? payload.error ?? message;
       code = payload.code;
+      details = payload.details;
     } else {
       const text = await response.text();
       if (text.trim()) {
@@ -370,7 +398,7 @@ async function apiRequest<T>(
       }
     }
 
-    throw new ApiRequestError(message, response.status, code);
+    throw new ApiRequestError(message, response.status, code, details);
   }
 
   if (response.status === 204) {
@@ -382,6 +410,200 @@ async function apiRequest<T>(
 
 const getErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error && error.message.trim() ? error.message : fallback;
+
+const buildDeviceLabel = () => {
+  if (typeof navigator === "undefined") {
+    return "Unknown device";
+  }
+
+  const platform = navigator.platform || "Unknown platform";
+  const browser = navigator.userAgent.includes("Chrome")
+    ? "Chrome"
+    : navigator.userAgent.includes("Safari")
+      ? "Safari"
+      : navigator.userAgent.includes("Firefox")
+        ? "Firefox"
+        : "Browser";
+
+  return `${platform} // ${browser}`;
+};
+
+const getStoredDeviceIdentity = () => {
+  if (typeof window === "undefined") {
+    return {
+      deviceId: "server-render-device",
+      deviceName: "Server render"
+    };
+  }
+
+  const existing = window.localStorage.getItem(deviceIdentityStorageKey);
+  if (existing) {
+    try {
+      const parsed = JSON.parse(existing) as { deviceId?: string; deviceName?: string };
+      if (parsed.deviceId && parsed.deviceName) {
+        return {
+          deviceId: parsed.deviceId,
+          deviceName: parsed.deviceName
+        };
+      }
+    } catch {
+      // Ignore malformed local device state and replace it.
+    }
+  }
+
+  const identity = {
+    deviceId: window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    deviceName: buildDeviceLabel()
+  };
+  window.localStorage.setItem(deviceIdentityStorageKey, JSON.stringify(identity));
+  return identity;
+};
+
+const supportsBrowserPush = () =>
+  typeof window !== "undefined" &&
+  typeof navigator !== "undefined" &&
+  "serviceWorker" in navigator &&
+  "PushManager" in window &&
+  "Notification" in window;
+
+const urlBase64ToUint8Array = (base64String: string) => {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let index = 0; index < rawData.length; index += 1) {
+    outputArray[index] = rawData.charCodeAt(index);
+  }
+
+  return outputArray;
+};
+
+const getPushRegistration = async () => {
+  if (!supportsBrowserPush()) {
+    return null;
+  }
+
+  const existingRegistration = await navigator.serviceWorker.getRegistration(pushServiceWorkerPath);
+  if (existingRegistration) {
+    return existingRegistration;
+  }
+
+  return navigator.serviceWorker.register(pushServiceWorkerPath);
+};
+
+const syncPushAlerts = async (accessToken: string, shouldPrompt: boolean): Promise<PushSyncResult> => {
+  if (!supportsBrowserPush()) {
+    return {
+      supported: false,
+      enabled: false,
+      message: "Browser push is not available on this device."
+    };
+  }
+
+  const { publicKey } = await apiRequest<PushPublicKeyResponse>("/profile/push/public-key", {
+    accessToken
+  });
+
+  if (!publicKey) {
+    return {
+      supported: true,
+      enabled: false,
+      message: "Push alerts are not configured on the server yet."
+    };
+  }
+
+  const registration = await getPushRegistration();
+  if (!registration) {
+    return {
+      supported: false,
+      enabled: false,
+      message: "Service worker registration failed on this browser."
+    };
+  }
+
+  let permission = Notification.permission;
+  if (permission === "default" && shouldPrompt) {
+    permission = await Notification.requestPermission();
+  }
+
+  let subscription = await registration.pushManager.getSubscription();
+
+  if (!subscription && permission === "granted") {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey)
+    });
+  }
+
+  if (!subscription) {
+    return {
+      supported: true,
+      enabled: false,
+      message:
+        permission === "denied"
+          ? "Push alerts are blocked in this browser."
+          : "Enable notifications on this trusted device to receive sign-in alerts."
+    };
+  }
+
+  const serializedSubscription = subscription.toJSON();
+  if (!serializedSubscription.endpoint || !serializedSubscription.keys?.p256dh || !serializedSubscription.keys?.auth) {
+    throw new Error("Push subscription is incomplete on this browser.");
+  }
+
+  const deviceIdentity = getStoredDeviceIdentity();
+  await apiRequest<{ ok: boolean }>("/profile/push/subscriptions", {
+    method: "POST",
+    accessToken,
+    body: {
+      deviceId: deviceIdentity.deviceId,
+      deviceName: deviceIdentity.deviceName,
+      subscription: {
+        endpoint: serializedSubscription.endpoint,
+        expirationTime: serializedSubscription.expirationTime ?? null,
+        keys: {
+          p256dh: serializedSubscription.keys.p256dh,
+          auth: serializedSubscription.keys.auth
+        }
+      }
+    }
+  });
+
+  return {
+    supported: true,
+    enabled: true,
+    message: "Push alerts are active on this trusted device."
+  };
+};
+
+const disablePushAlerts = async (accessToken: string): Promise<PushSyncResult> => {
+  if (!supportsBrowserPush()) {
+    return {
+      supported: false,
+      enabled: false,
+      message: "Browser push is not available on this device."
+    };
+  }
+
+  const registration = await navigator.serviceWorker.getRegistration(pushServiceWorkerPath);
+  const subscription = await registration?.pushManager.getSubscription();
+
+  if (subscription) {
+    await apiRequest<{ ok: boolean }>("/profile/push/subscriptions", {
+      method: "DELETE",
+      accessToken,
+      body: { endpoint: subscription.endpoint }
+    });
+    await subscription.unsubscribe();
+  }
+
+  return {
+    supported: true,
+    enabled: false,
+    message: "Push alerts are off on this device."
+  };
+};
 
 const formatAnonymousMeta = (createdAt: string) =>
   new Date(createdAt).toLocaleString(undefined, {
@@ -1290,7 +1512,7 @@ function AuthPage({
   mode,
   onAuthenticated
 }: {
-  mode: "signin" | "signup" | "forgot" | "reset" | "verify";
+  mode: "signin" | "signup" | "forgot" | "reset" | "verify" | "device";
   onAuthenticated: (session: AuthSession) => void;
 }) {
   const isSignup = mode === "signup";
@@ -1298,10 +1520,14 @@ function AuthPage({
   const isReset = mode === "reset";
   const isSignin = mode === "signin";
   const isVerify = mode === "verify";
+  const isDevice = mode === "device";
   const navigate = useNavigate();
   const location = useLocation();
-  const redirectAfterAuth = new URLSearchParams(location.search).get("redirect");
-  const emailFromUrl = new URLSearchParams(location.search).get("email") ?? "";
+  const searchParams = new URLSearchParams(location.search);
+  const redirectAfterAuth = searchParams.get("redirect");
+  const emailFromUrl = searchParams.get("email") ?? "";
+  const challengeIdFromUrl = searchParams.get("challengeId") ?? "";
+  const deviceNameFromUrl = searchParams.get("deviceName") ?? "";
   const authEyebrow = isSignup
     ? "OPEN_YOUR_ARCHIVE"
     : isForgot
@@ -1310,6 +1536,8 @@ function AuthPage({
         ? "RESET_ENTRY"
         : isVerify
           ? "VERIFY_ADDRESS"
+          : isDevice
+            ? "APPROVE_DEVICE"
         : "RETURN_TO_RECORD";
   const authHeadline = isSignup
     ? "Begin your archive."
@@ -1319,6 +1547,8 @@ function AuthPage({
         ? "Choose a new password."
         : isVerify
           ? "Verify your email."
+          : isDevice
+            ? "Approve this device."
         : "Welcome back.";
   const authIntro = isSignup
     ? "Build a private record first. Publish only when the story is ready."
@@ -1328,7 +1558,10 @@ function AuthPage({
         ? "Set a stronger password and reopen your archive."
         : isVerify
           ? "Enter the 5-digit code we sent to unlock sign in."
+          : isDevice
+            ? "A new device needs approval before it can sign in. If alerts are active on another trusted browser, we notified it too."
         : "Sign in to continue writing, reading, and managing your archive.";
+  const deviceIdentity = getStoredDeviceIdentity();
   const [form, setForm] = useState({
     fullName: "",
     username: "",
@@ -1348,12 +1581,23 @@ function AuthPage({
     newPassword: false,
     confirmPassword: false
   });
+  const [deviceChallengeId, setDeviceChallengeId] = useState(challengeIdFromUrl);
+  const [pendingDeviceName, setPendingDeviceName] = useState(deviceNameFromUrl || deviceIdentity.deviceName);
 
   useEffect(() => {
     if (emailFromUrl && !form.email) {
       setForm((current) => ({ ...current, email: emailFromUrl }));
     }
   }, [emailFromUrl, form.email]);
+
+  useEffect(() => {
+    if (challengeIdFromUrl) {
+      setDeviceChallengeId(challengeIdFromUrl);
+    }
+    if (deviceNameFromUrl) {
+      setPendingDeviceName(deviceNameFromUrl);
+    }
+  }, [challengeIdFromUrl, deviceNameFromUrl]);
 
   const updateField = (field: keyof typeof form, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -1379,7 +1623,7 @@ function AuthPage({
     const nextErrors: Record<string, string> = {};
     const trimmedEmail = form.email.trim();
 
-    if (isSignin || isSignup || isForgot || isVerify) {
+    if (isSignin || isSignup || isForgot || isVerify || isDevice) {
       if (!trimmedEmail) {
         nextErrors.email = "Email is required.";
       } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
@@ -1442,7 +1686,7 @@ function AuthPage({
       }
     }
 
-    if (isVerify) {
+    if (isVerify || isDevice) {
       if (!/^\d{5}$/.test(form.verificationCode.trim())) {
         nextErrors.verificationCode = "Enter the 5-digit code.";
       }
@@ -1477,6 +1721,30 @@ function AuthPage({
     }
   };
 
+  const handleResendDeviceCode = async () => {
+    setIsSubmitting(true);
+    setFormFeedback("");
+
+    try {
+      const payload = await apiRequest<{ ok: boolean; challengeId?: string; deviceName?: string }>("/auth/resend-device-verification", {
+        method: "POST",
+        body: {
+          email: form.email.trim(),
+          deviceId: deviceIdentity.deviceId,
+          deviceName: pendingDeviceName
+        }
+      });
+      if (payload.challengeId) {
+        setDeviceChallengeId(payload.challengeId);
+      }
+      setFormFeedback(`A new device code was sent to ${form.email.trim().toLowerCase()}.`);
+    } catch (error) {
+      setFormFeedback(getErrorMessage(error, "Could not send another device code."));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const handlePrimaryAction = async () => {
     if (!validateForm()) {
       setFormFeedback("Please fix the highlighted fields.");
@@ -1493,7 +1761,9 @@ function AuthPage({
             method: "POST",
             body: {
               email: form.email.trim(),
-              password: form.password
+              password: form.password,
+              deviceId: deviceIdentity.deviceId,
+              deviceName: deviceIdentity.deviceName
             }
           });
           onAuthenticated(session);
@@ -1503,6 +1773,16 @@ function AuthPage({
         } catch (error) {
           if (error instanceof ApiRequestError && error.code === "EMAIL_NOT_VERIFIED") {
             navigate(`/verify-email?email=${encodeURIComponent(form.email.trim().toLowerCase())}`);
+            return;
+          }
+          if (error instanceof ApiRequestError && error.code === "DEVICE_VERIFICATION_REQUIRED") {
+            const nextChallengeId = typeof error.details?.challengeId === "string" ? error.details.challengeId : "";
+            const nextDeviceName: string = typeof error.details?.deviceName === "string" ? error.details.deviceName : deviceIdentity.deviceName;
+            setDeviceChallengeId(nextChallengeId);
+            setPendingDeviceName(nextDeviceName);
+            navigate(
+              `/verify-device?email=${encodeURIComponent(form.email.trim().toLowerCase())}&challengeId=${encodeURIComponent(nextChallengeId)}&deviceName=${encodeURIComponent(nextDeviceName)}`
+            );
             return;
           }
           throw error;
@@ -1535,6 +1815,23 @@ function AuthPage({
         });
         setFormFeedback("Email verified. Redirecting to sign in...");
         navigate(`/signin?email=${encodeURIComponent(form.email.trim().toLowerCase())}`);
+        return;
+      }
+
+      if (isDevice) {
+        const session = await apiRequest<AuthSession>("/auth/verify-device", {
+          method: "POST",
+          body: {
+            challengeId: deviceChallengeId,
+            email: form.email.trim(),
+            otp: form.verificationCode.trim(),
+            deviceId: deviceIdentity.deviceId,
+            deviceName: pendingDeviceName
+          }
+        });
+        onAuthenticated(session);
+        setFormFeedback("Device approved. Redirecting...");
+        navigate(redirectAfterAuth || "/feed");
         return;
       }
 
@@ -1625,16 +1922,16 @@ function AuthPage({
                 {errors.username ? <small className="form-error">{errors.username}</small> : null}
               </label>
             ) : null}
-            {isSignin || isSignup || isForgot || isVerify ? (
+            {isSignin || isSignup || isForgot || isVerify || isDevice ? (
               <label className="auth-field">
                 <span>Email address</span>
                 <input onChange={(event) => updateField("email", event.target.value)} placeholder="Email address" type="email" value={form.email} />
                 {errors.email ? <small className="form-error">{errors.email}</small> : null}
               </label>
             ) : null}
-            {isVerify ? (
+            {isVerify || isDevice ? (
               <label className="auth-field">
-                <span>Verification code</span>
+                <span>{isDevice ? "Device code" : "Verification code"}</span>
                 <div className="auth-otp-row" role="group" aria-label="Verification code">
                   {Array.from({ length: 5 }, (_, index) => {
                     const currentValue = form.verificationCode[index] ?? "";
@@ -1767,6 +2064,8 @@ function AuthPage({
                 ? "PROCESSING..."
                 : isSignup
                   ? "CREATE ACCOUNT"
+                  : isDevice
+                    ? "APPROVE DEVICE"
                   : isVerify
                     ? "VERIFY EMAIL"
                   : isForgot
@@ -1785,14 +2084,18 @@ function AuthPage({
             {isReset ? <NavLink to="/signin">Back to sign in</NavLink> : null}
             {isVerify ? <button className="auth-inline-action" disabled={isSubmitting} onClick={() => void handleResendVerification()} type="button">Request another code</button> : null}
             {isVerify ? <NavLink to="/signin">Back to sign in</NavLink> : null}
+            {isDevice ? <button className="auth-inline-action" disabled={isSubmitting} onClick={() => void handleResendDeviceCode()} type="button">Request another device code</button> : null}
+            {isDevice ? <NavLink to="/signin">Back to sign in</NavLink> : null}
           </div>
           <div className="auth-note card">
-            <strong>{isSignin ? "Protected access" : isVerify ? "Verification required" : "Archive settings"}</strong>
+            <strong>{isSignin ? "Protected access" : isVerify ? "Verification required" : isDevice ? "Trusted device required" : "Archive settings"}</strong>
             <span>
               {isSignin
                 ? "Your session restores drafts, saved stories, and archive controls."
                 : isVerify
                   ? "You can create an account first and verify later, but sign in stays locked until verification is complete."
+                  : isDevice
+                    ? `Only trusted devices can open your archive. Approve ${pendingDeviceName} to continue.`
                 : "Your account controls visibility, defaults, and archive ownership."}
             </span>
           </div>
@@ -3079,12 +3382,19 @@ function EditProfilePage({
 }) {
   const [dashboard, setDashboard] = useState<ProfileDashboard | null>(null);
   const [sessions, setSessions] = useState<ProfileSession[]>([]);
+  const [devices, setDevices] = useState<ProfileTrustedDevice[]>([]);
   const [formFeedback, setFormFeedback] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteCircle, setInviteCircle] = useState<"family" | "friend">("family");
   const [stories, setStories] = useState<ApiStory[]>([]);
   const [inviteStoryId, setInviteStoryId] = useState("");
   const [contributorInvites, setContributorInvites] = useState<ContributorInviteRecord[]>([]);
+  const [pushState, setPushState] = useState<PushSyncResult>({
+    supported: false,
+    enabled: false,
+    message: "Checking browser alert support..."
+  });
+  const [isPushBusy, setIsPushBusy] = useState(false);
   const [profileForm, setProfileForm] = useState({
     fullName: "",
     username: "",
@@ -3147,6 +3457,30 @@ function EditProfilePage({
         }
       })
       .catch(() => undefined);
+
+    void apiRequest<{ devices: ProfileTrustedDevice[] }>("/profile/devices", { accessToken })
+      .then((payload) => {
+        if (!cancelled) {
+          setDevices(payload.devices);
+        }
+      })
+      .catch(() => undefined);
+
+    void syncPushAlerts(accessToken, false)
+      .then((result) => {
+        if (!cancelled) {
+          setPushState(result);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPushState({
+            supported: supportsBrowserPush(),
+            enabled: false,
+            message: "Could not confirm push-alert status on this device."
+          });
+        }
+      });
 
     return () => {
       cancelled = true;
@@ -3229,6 +3563,78 @@ function EditProfilePage({
       setFormFeedback("Session revoked.");
     } catch (error) {
       setFormFeedback(getErrorMessage(error, "Could not revoke session."));
+    }
+  };
+
+  const renameDevice = async (deviceId: string, currentLabel: string) => {
+    const nextLabel = window.prompt("Rename trusted device", currentLabel)?.trim();
+    if (!nextLabel || nextLabel === currentLabel) {
+      return;
+    }
+
+    try {
+      const payload = await apiRequest<{ device: ProfileTrustedDevice }>(`/profile/devices/${deviceId}`, {
+        method: "PATCH",
+        accessToken,
+        body: { label: nextLabel }
+      });
+      setDevices((current) => current.map((device) => (device.id === deviceId ? payload.device : device)));
+      setFormFeedback("Device renamed.");
+    } catch (error) {
+      setFormFeedback(getErrorMessage(error, "Could not rename device."));
+    }
+  };
+
+  const revokeDevice = async (deviceId: string) => {
+    try {
+      const payload = await apiRequest<{ device: ProfileTrustedDevice }>(`/profile/devices/${deviceId}/revoke`, {
+        method: "POST",
+        accessToken
+      });
+      setDevices((current) => current.map((device) => (device.id === deviceId ? payload.device : device)));
+      setFormFeedback("Device revoked.");
+    } catch (error) {
+      setFormFeedback(getErrorMessage(error, "Could not revoke device."));
+    }
+  };
+
+  const enablePushOnThisDevice = async () => {
+    setIsPushBusy(true);
+    try {
+      const result = await syncPushAlerts(accessToken, true);
+      setPushState(result);
+      if (result.enabled) {
+        const deviceIdentity = getStoredDeviceIdentity();
+        setDevices((current) =>
+          current.map((device) =>
+            device.label === deviceIdentity.deviceName ? { ...device, pushEnabled: true } : device
+          )
+        );
+      }
+      setFormFeedback(result.message);
+    } catch (error) {
+      setFormFeedback(getErrorMessage(error, "Could not enable push alerts on this device."));
+    } finally {
+      setIsPushBusy(false);
+    }
+  };
+
+  const disablePushOnThisDevice = async () => {
+    setIsPushBusy(true);
+    try {
+      const result = await disablePushAlerts(accessToken);
+      setPushState(result);
+      const deviceIdentity = getStoredDeviceIdentity();
+      setDevices((current) =>
+        current.map((device) =>
+          device.label === deviceIdentity.deviceName ? { ...device, pushEnabled: false } : device
+        )
+      );
+      setFormFeedback(result.message);
+    } catch (error) {
+      setFormFeedback(getErrorMessage(error, "Could not disable push alerts on this device."));
+    } finally {
+      setIsPushBusy(false);
     }
   };
 
@@ -3409,6 +3815,47 @@ function EditProfilePage({
                   <strong>Password</strong>
                   <span>Last changed 14 days ago</span>
                 </div>
+                <div className="profile-setting-row">
+                  <strong>Browser sign-in alerts</strong>
+                  <span>{pushState.message}</span>
+                  <div className="profile-row-actions">
+                    <button
+                      className="ghost-action slim-action"
+                      disabled={isPushBusy || !pushState.supported}
+                      onClick={() => void enablePushOnThisDevice()}
+                      type="button"
+                    >
+                      {isPushBusy ? "WORKING..." : pushState.enabled ? "REFRESH" : "ENABLE"}
+                    </button>
+                    <button
+                      className="ghost-action slim-action"
+                      disabled={isPushBusy || !pushState.enabled}
+                      onClick={() => void disablePushOnThisDevice()}
+                      type="button"
+                    >
+                      DISABLE
+                    </button>
+                  </div>
+                </div>
+                {devices.map((device) => (
+                  <div className="profile-setting-row" key={device.id}>
+                    <strong>{device.label}</strong>
+                    <span>
+                      {device.active ? "Trusted device" : "Revoked"}
+                      {device.pushEnabled ? " // Push alerts on" : ""}
+                      {device.ipAddress ? ` // ${device.ipAddress}` : ""}
+                    </span>
+                    <small>{device.userAgent}</small>
+                    <div className="profile-row-actions">
+                      <button className="ghost-action slim-action" onClick={() => void renameDevice(device.id, device.label)} type="button">
+                        RENAME
+                      </button>
+                      <button className="ghost-action slim-action" onClick={() => void revokeDevice(device.id)} type="button">
+                        {device.active ? "REMOVE" : "REMOVED"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
                 {sessions.map((session) => (
                   <div className="profile-setting-row" key={session.id}>
                     <strong>{session.userAgent}</strong>
@@ -6680,6 +7127,14 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!authSession?.accessToken) {
+      return;
+    }
+
+    void syncPushAlerts(authSession.accessToken, false).catch(() => undefined);
+  }, [authSession?.accessToken]);
+
   const handleAuthenticated = (session: AuthSession) => {
     setAuthSession(session);
   };
@@ -6762,6 +7217,7 @@ export default function App() {
         <Route element={<AuthPage mode="forgot" onAuthenticated={handleAuthenticated} />} path="/forgot-password" />
         <Route element={<AuthPage mode="reset" onAuthenticated={handleAuthenticated} />} path="/reset-password" />
         <Route element={<AuthPage mode="verify" onAuthenticated={handleAuthenticated} />} path="/verify-email" />
+        <Route element={<AuthPage mode="device" onAuthenticated={handleAuthenticated} />} path="/verify-device" />
       </Routes>
     </AppShell>
   );

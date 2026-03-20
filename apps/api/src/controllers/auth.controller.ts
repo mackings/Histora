@@ -4,8 +4,10 @@ import {
   emailVerificationRequestSchema,
   forgotPasswordSchema,
   loginSchema,
+  resendDeviceVerificationSchema,
   resetPasswordSchema,
   signUpSchema,
+  verifyDeviceSchema,
   verifyEmailSchema
 } from "../shared/index.js";
 import { env } from "../config/env.js";
@@ -16,10 +18,12 @@ import {
   getAuthenticatedUser,
   loginUser,
   logoutSession,
+  resendDeviceVerification,
   resendEmailVerification,
   refreshAccessToken,
   registerUser,
   resetPassword,
+  verifyDeviceAndLogin,
   verifyEmailAddress
 } from "../services/auth.service.js";
 
@@ -99,6 +103,38 @@ export const verifyEmailController = asyncHandler(async (request, response) => {
       email: request.body.email,
       otp: request.body.otp ?? request.body.code
     })
+  );
+  response.status(200).json(result);
+});
+
+export const verifyDeviceController = asyncHandler(async (request, response) => {
+  const result = await verifyDeviceAndLogin(
+    verifyDeviceSchema.parse({
+      challengeId: request.body.challengeId,
+      email: request.body.email,
+      otp: request.body.otp ?? request.body.code,
+      deviceId: request.body.deviceId,
+      deviceName: request.body.deviceName
+    }),
+    getRequestContext(request)
+  );
+
+  applySensitiveResponseHeaders(response);
+  appendRefreshCookie(response, result.refreshToken);
+  response.status(200).json({
+    accessToken: result.accessToken,
+    user: result.user
+  });
+});
+
+export const resendDeviceVerificationController = asyncHandler(async (request, response) => {
+  const result = await resendDeviceVerification(
+    resendDeviceVerificationSchema.parse({
+      email: request.body.email,
+      deviceId: request.body.deviceId,
+      deviceName: request.body.deviceName
+    }),
+    getRequestContext(request)
   );
   response.status(200).json(result);
 });
