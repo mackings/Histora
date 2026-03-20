@@ -103,7 +103,7 @@ async function createSessionPayload(userId: string, context?: RequestContext, de
 
   const session = await SessionModel.create({
     userId,
-    tokenHash: "pending",
+    tokenHash: crypto.randomUUID(),
     deviceKeyHash: device ? hashDeviceKey(device.deviceId) : null,
     deviceLabel: device?.deviceName ?? null,
     userAgent: context?.userAgent,

@@ -5718,6 +5718,79 @@ function StudioPage({
     chapter.imageAttachments.length > 0 ||
     chapter.voiceNotes.length > 0 ||
     hasTimelineContent(chapter.timelineEntries);
+  const normalizeFetchedStoryChapter = (chapter: ApiStory["chapters"][number], storyStatus: ApiStory["status"]): StudioChapter => ({
+    title: chapter.title,
+    type: chapter.type.toUpperCase(),
+    words: getChapterWordCount(chapter.body),
+    status: storyStatus === "published" ? "Published" : "Draft saved",
+    moments: chapter.moments.length,
+    body: chapter.body,
+    imageAttachments: (chapter.imageUrls ?? []).map((imageUrl, index) => ({
+      name: `${chapter.title} image ${index + 1}`,
+      url: imageUrl,
+      source: "Saved story",
+      objectKey: chapter.imageKeys?.[index]
+    })),
+    voiceNotes: chapter.voiceNoteUrl
+      ? [{
+          name: `Voice note ${chapter.order}`,
+          url: chapter.voiceNoteUrl,
+          source: "Saved story",
+          objectKey: chapter.voiceNoteKey ?? undefined
+        }]
+      : [],
+    timelineEntries:
+      chapter.moments.length > 0
+        ? chapter.moments.map((moment) => {
+            const momentDate = new Date(moment.happenedAt);
+            return {
+              year: String(momentDate.getFullYear()),
+              month: String(momentDate.getMonth() + 1).padStart(2, "0"),
+              day: String(momentDate.getDate()).padStart(2, "0"),
+              title: moment.title,
+              body: moment.description
+            };
+          })
+        : [createEmptyTimelineEntry()]
+  });
+  const mergeFetchedDraftChapters = (localChapters: StudioChapter[], fetchedChapters: StudioChapter[]) => {
+    const localByTitle = new Map(localChapters.map((chapter) => [chapter.title, chapter]));
+    const mergedFetched = fetchedChapters.map((fetchedChapter) => {
+      const localChapter = localByTitle.get(fetchedChapter.title);
+      if (!localChapter) {
+        return fetchedChapter;
+      }
+
+      const body = getChapterWordCount(localChapter.body) > 0 ? localChapter.body : fetchedChapter.body;
+      const imageAttachments = localChapter.imageAttachments.length ? localChapter.imageAttachments : fetchedChapter.imageAttachments;
+      const voiceNotes = localChapter.voiceNotes.length ? localChapter.voiceNotes : fetchedChapter.voiceNotes;
+      const timelineEntries = hasTimelineContent(localChapter.timelineEntries)
+        ? localChapter.timelineEntries
+        : fetchedChapter.timelineEntries;
+
+      return {
+        ...fetchedChapter,
+        ...localChapter,
+        body,
+        words: getChapterWordCount(body),
+        imageAttachments,
+        voiceNotes,
+        timelineEntries,
+        moments: timelineEntries.filter((entry) => entry.title.trim() || entry.body.trim()).length
+      };
+    });
+
+    const fetchedTitles = new Set(fetchedChapters.map((chapter) => chapter.title));
+    const localOnlyChapters = localChapters.filter(
+      (chapter) => !fetchedTitles.has(chapter.title) && isPersistableStudioChapter(chapter)
+    );
+
+    return [...mergedFetched, ...localOnlyChapters];
+  };
+  const canPersistStoryRemotely = (sourceChapters: StudioChapter[]) =>
+    storyTitle.trim().length >= 3 &&
+    storySummary.trim().split(/\s+/).filter(Boolean).length >= 20 &&
+    sourceChapters.some((chapter) => isPersistableStudioChapter(chapter));
   const isChapterComplete = (chapter: { title: string; body: string }) =>
     chapter.title.trim().length > 0 && getChapterWordCount(chapter.body) >= chapterCompletionThreshold;
   const transcriptionLanguages = [
@@ -5921,7 +5994,7 @@ function StudioPage({
 
     void apiRequest<ApiStory[]>("/stories/mine", { accessToken })
       .then((stories) => {
-        if (cancelled || stories.length === 0 || restoredLocalDraftRef.current) {
+        if (cancelled || stories.length === 0) {
           return;
         }
 
@@ -5931,45 +6004,17 @@ function StudioPage({
         setStorySummary(draft.summary);
         setVisibility(draft.visibility as "private" | "selected" | "public");
         setAnonymous(draft.anonymous);
-        setChapters(
-          draft.chapters
-            .map((chapter) => ({
-              title: chapter.title,
-              type: chapter.type.toUpperCase(),
-              words: getChapterWordCount(chapter.body),
-              status: draft.status === "published" ? "Published" : "Draft saved",
-              moments: chapter.moments.length,
-              body: chapter.body,
-              imageAttachments: (chapter.imageUrls ?? []).map((imageUrl, index) => ({
-                name: `${chapter.title} image ${index + 1}`,
-                url: imageUrl,
-                source: "Saved story",
-                objectKey: chapter.imageKeys?.[index]
-              })),
-              voiceNotes: chapter.voiceNoteUrl
-                ? [{
-                    name: `Voice note ${chapter.order}`,
-                    url: chapter.voiceNoteUrl,
-                    source: "Saved story",
-                    objectKey: chapter.voiceNoteKey ?? undefined
-                  }]
-                : [],
-              timelineEntries:
-                chapter.moments.length > 0
-                  ? chapter.moments.map((moment) => {
-                      const momentDate = new Date(moment.happenedAt);
-                      return {
-                        year: String(momentDate.getFullYear()),
-                        month: String(momentDate.getMonth() + 1).padStart(2, "0"),
-                        day: String(momentDate.getDate()).padStart(2, "0"),
-                        title: moment.title,
-                        body: moment.description
-                      };
-                    })
-                  : [createEmptyTimelineEntry()]
-            }))
-            .filter((chapter) => !isLegacySeedChapter(chapter))
-        );
+        const fetchedChapters = draft.chapters
+          .map((chapter) => normalizeFetchedStoryChapter(chapter, draft.status))
+          .filter((chapter) => !isLegacySeedChapter(chapter));
+
+        setChapters((current) => {
+          if (!restoredLocalDraftRef.current) {
+            return fetchedChapters;
+          }
+
+          return mergeFetchedDraftChapters(current, fetchedChapters);
+        });
       })
       .catch(() => undefined);
 
@@ -6154,11 +6199,15 @@ function StudioPage({
   }, [voiceNotes]);
 
   useEffect(() => {
+    if (isEnteringStudio) {
+      return;
+    }
+
     const editor = chapterBodyRef.current;
     if (editor && editor.innerHTML !== chapterBody) {
       editor.innerHTML = chapterBody;
     }
-  }, [chapterBody, activeChapter]);
+  }, [chapterBody, activeChapter, isEnteringStudio]);
 
   useEffect(() => {
     return () => {
@@ -7138,11 +7187,15 @@ function StudioPage({
         chapter.title === activeChapter ? { ...chapter, status: "Draft saved", words: wordCount } : chapter
       )
     );
-    void ensureStoryMediaUploaded(snapshot)
-      .then((uploadedChapters) => persistStory(buildStoryPayload("draft", uploadedChapters), "Autosaved."))
-      .catch((error) => {
-        setStudioMessage(getErrorMessage(error, "Could not upload chapter media."));
-      });
+
+    if (canPersistStoryRemotely(snapshot)) {
+      void ensureStoryMediaUploaded(snapshot)
+        .then((uploadedChapters) => persistStory(buildStoryPayload("draft", uploadedChapters), "Autosaved."))
+        .catch((error) => {
+          setStudioMessage(getErrorMessage(error, "Could not upload chapter media."));
+        });
+    }
+
     if (quiet) {
       setStudioMessage("All studio changes auto-saved.");
       return;
@@ -7673,7 +7726,7 @@ function StudioPage({
                         ? "chapter-pill active-chapter-pill"
                         : "chapter-pill"
                   }
-                  key={chapter.title}
+                  key={chapter.chapterLabel}
                   onClick={() => handleChapterSwitch(chapter.title, chapter.isLocked)}
                   type="button"
                 >
