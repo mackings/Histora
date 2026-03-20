@@ -8,7 +8,9 @@ import {
   meController,
   refreshController,
   registerController,
-  resetPasswordController
+  resendVerificationController,
+  resetPasswordController,
+  verifyEmailController
 } from "../controllers/auth.controller.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
 import { requireTrustedBrowserOrigin } from "../middleware/origin-protection.middleware.js";
@@ -40,5 +42,7 @@ authRouter.post("/refresh", requireTrustedBrowserOrigin, refreshLimiter, refresh
 authRouter.post("/logout", requireTrustedBrowserOrigin, refreshLimiter, logoutController);
 authRouter.post("/forgot-password", requireTrustedBrowserOrigin, authWriteLimiter, forgotPasswordController);
 authRouter.post("/reset-password", requireTrustedBrowserOrigin, authWriteLimiter, resetPasswordController);
+authRouter.post("/verify-email", requireTrustedBrowserOrigin, authWriteLimiter, verifyEmailController);
+authRouter.post("/resend-verification", requireTrustedBrowserOrigin, authWriteLimiter, resendVerificationController);
 
 export { authRouter };

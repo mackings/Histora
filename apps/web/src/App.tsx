@@ -186,11 +186,19 @@ type AuthUser = {
   username: string;
   email: string;
   subscriptionTier: "free" | "premium";
+  emailVerified?: boolean;
 };
 
 type AuthSession = {
   accessToken: string;
   user: AuthUser;
+};
+
+type VerificationResponse = {
+  ok: true;
+  email: string;
+  verificationRequired?: true;
+  alreadyVerified?: boolean;
 };
 
 type ApiComment = {
@@ -317,11 +325,13 @@ const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
 
 class ApiRequestError extends Error {
   status: number;
+  code?: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "ApiRequestError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -347,18 +357,20 @@ async function apiRequest<T>(
 
   if (!response.ok) {
     let message = "Request failed.";
+    let code: string | undefined;
 
-    try {
-      const payload = (await response.json()) as { message?: string; error?: string };
+    if ((response.headers.get("content-type") ?? "").includes("application/json")) {
+      const payload = (await response.json()) as { message?: string; error?: string; code?: string };
       message = payload.message ?? payload.error ?? message;
-    } catch {
+      code = payload.code;
+    } else {
       const text = await response.text();
       if (text.trim()) {
         message = text;
       }
     }
 
-    throw new ApiRequestError(message, response.status);
+    throw new ApiRequestError(message, response.status, code);
   }
 
   if (response.status === 204) {
@@ -1278,22 +1290,26 @@ function AuthPage({
   mode,
   onAuthenticated
 }: {
-  mode: "signin" | "signup" | "forgot" | "reset";
+  mode: "signin" | "signup" | "forgot" | "reset" | "verify";
   onAuthenticated: (session: AuthSession) => void;
 }) {
   const isSignup = mode === "signup";
   const isForgot = mode === "forgot";
   const isReset = mode === "reset";
   const isSignin = mode === "signin";
+  const isVerify = mode === "verify";
   const navigate = useNavigate();
   const location = useLocation();
   const redirectAfterAuth = new URLSearchParams(location.search).get("redirect");
+  const emailFromUrl = new URLSearchParams(location.search).get("email") ?? "";
   const authEyebrow = isSignup
     ? "OPEN_YOUR_ARCHIVE"
     : isForgot
       ? "RECOVER_ACCESS"
       : isReset
         ? "RESET_ENTRY"
+        : isVerify
+          ? "VERIFY_ADDRESS"
         : "RETURN_TO_RECORD";
   const authHeadline = isSignup
     ? "Begin your archive."
@@ -1301,6 +1317,8 @@ function AuthPage({
       ? "Recover access."
       : isReset
         ? "Choose a new password."
+        : isVerify
+          ? "Verify your email."
         : "Welcome back.";
   const authIntro = isSignup
     ? "Build a private record first. Publish only when the story is ready."
@@ -1308,12 +1326,15 @@ function AuthPage({
       ? "Request a reset code and get back to your drafts."
       : isReset
         ? "Set a stronger password and reopen your archive."
+        : isVerify
+          ? "Enter the 5-digit code we sent to unlock sign in."
         : "Sign in to continue writing, reading, and managing your archive.";
   const [form, setForm] = useState({
     fullName: "",
     username: "",
     email: "",
     password: "",
+    verificationCode: "",
     resetCode: "",
     newPassword: "",
     confirmPassword: "",
@@ -1327,6 +1348,12 @@ function AuthPage({
     newPassword: false,
     confirmPassword: false
   });
+
+  useEffect(() => {
+    if (emailFromUrl && !form.email) {
+      setForm((current) => ({ ...current, email: emailFromUrl }));
+    }
+  }, [emailFromUrl, form.email]);
 
   const updateField = (field: keyof typeof form, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -1352,7 +1379,7 @@ function AuthPage({
     const nextErrors: Record<string, string> = {};
     const trimmedEmail = form.email.trim();
 
-    if (isSignin || isSignup || isForgot) {
+    if (isSignin || isSignup || isForgot || isVerify) {
       if (!trimmedEmail) {
         nextErrors.email = "Email is required.";
       } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
@@ -1415,8 +1442,39 @@ function AuthPage({
       }
     }
 
+    if (isVerify) {
+      if (!/^\d{5}$/.test(form.verificationCode.trim())) {
+        nextErrors.verificationCode = "Enter the 5-digit code.";
+      }
+    }
+
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
+  };
+
+  const handleResendVerification = async () => {
+    if (!form.email.trim()) {
+      setErrors((current) => ({ ...current, email: "Email is required." }));
+      setFormFeedback("Enter your email to request a new code.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setFormFeedback("");
+
+    try {
+      await apiRequest<VerificationResponse>("/auth/resend-verification", {
+        method: "POST",
+        body: {
+          email: form.email.trim()
+        }
+      });
+      setFormFeedback(`A new verification code was sent to ${form.email.trim().toLowerCase()}.`);
+    } catch (error) {
+      setFormFeedback(getErrorMessage(error, "Could not send a new verification code."));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handlePrimaryAction = async () => {
@@ -1430,21 +1488,29 @@ function AuthPage({
 
     try {
       if (isSignin) {
-        const session = await apiRequest<AuthSession>("/auth/login", {
-          method: "POST",
-          body: {
-            email: form.email.trim(),
-            password: form.password
+        try {
+          const session = await apiRequest<AuthSession>("/auth/login", {
+            method: "POST",
+            body: {
+              email: form.email.trim(),
+              password: form.password
+            }
+          });
+          onAuthenticated(session);
+          setFormFeedback("Sign-in complete. Redirecting...");
+          navigate(redirectAfterAuth || "/feed");
+          return;
+        } catch (error) {
+          if (error instanceof ApiRequestError && error.code === "EMAIL_NOT_VERIFIED") {
+            navigate(`/verify-email?email=${encodeURIComponent(form.email.trim().toLowerCase())}`);
+            return;
           }
-        });
-        onAuthenticated(session);
-        setFormFeedback("Sign-in complete. Redirecting...");
-        navigate(redirectAfterAuth || "/feed");
-        return;
+          throw error;
+        }
       }
 
       if (isSignup) {
-        const session = await apiRequest<AuthSession>("/auth/register", {
+        const result = await apiRequest<VerificationResponse>("/auth/register", {
           method: "POST",
           body: {
             fullName: form.fullName.trim(),
@@ -1454,9 +1520,21 @@ function AuthPage({
             dateOfBirth: form.dateOfBirth
           }
         });
-        onAuthenticated(session);
-        setFormFeedback("Account created. Redirecting...");
-        navigate(redirectAfterAuth || "/feed");
+        setFormFeedback("Account created. Enter the code we sent to your email.");
+        navigate(`/verify-email?email=${encodeURIComponent(result.email)}`);
+        return;
+      }
+
+      if (isVerify) {
+        await apiRequest<{ ok: boolean; email: string }>("/auth/verify-email", {
+          method: "POST",
+          body: {
+            email: form.email.trim(),
+            otp: form.verificationCode.trim()
+          }
+        });
+        setFormFeedback("Email verified. Redirecting to sign in...");
+        navigate(`/signin?email=${encodeURIComponent(form.email.trim().toLowerCase())}`);
         return;
       }
 
@@ -1529,8 +1607,8 @@ function AuthPage({
 
         <article className="auth-card card">
           <div className="auth-card-head">
-            <SectionLabel>{isSignup ? "ACCOUNT_SETUP" : isForgot ? "EMAIL_RECOVERY" : isReset ? "PASSWORD_RESET" : "SIGN_IN"}</SectionLabel>
-            <h2>{isSignup ? "Create account" : isForgot ? "Forgot password" : isReset ? "Reset password" : "Sign in"}</h2>
+            <SectionLabel>{isSignup ? "ACCOUNT_SETUP" : isForgot ? "EMAIL_RECOVERY" : isReset ? "PASSWORD_RESET" : isVerify ? "EMAIL_VERIFICATION" : "SIGN_IN"}</SectionLabel>
+            <h2>{isSignup ? "Create account" : isForgot ? "Forgot password" : isReset ? "Reset password" : isVerify ? "Verify email" : "Sign in"}</h2>
           </div>
           <form className="auth-form">
             {isSignup ? (
@@ -1547,11 +1625,54 @@ function AuthPage({
                 {errors.username ? <small className="form-error">{errors.username}</small> : null}
               </label>
             ) : null}
-            {isSignin || isSignup || isForgot ? (
+            {isSignin || isSignup || isForgot || isVerify ? (
               <label className="auth-field">
                 <span>Email address</span>
                 <input onChange={(event) => updateField("email", event.target.value)} placeholder="Email address" type="email" value={form.email} />
                 {errors.email ? <small className="form-error">{errors.email}</small> : null}
+              </label>
+            ) : null}
+            {isVerify ? (
+              <label className="auth-field">
+                <span>Verification code</span>
+                <div className="auth-otp-row" role="group" aria-label="Verification code">
+                  {Array.from({ length: 5 }, (_, index) => {
+                    const currentValue = form.verificationCode[index] ?? "";
+                    return (
+                      <input
+                        key={`otp-${index}`}
+                        className="auth-otp-input"
+                        inputMode="numeric"
+                        maxLength={1}
+                        onChange={(event) => {
+                          const nextValue = event.target.value.replace(/\D/g, "").slice(-1);
+                          const nextCode = Array.from({ length: 5 }, (_, otpIndex) =>
+                            otpIndex === index ? nextValue : form.verificationCode[otpIndex] ?? ""
+                          ).join("");
+                          updateField("verificationCode", nextCode);
+                          if (nextValue && event.currentTarget.nextElementSibling instanceof HTMLInputElement) {
+                            event.currentTarget.nextElementSibling.focus();
+                          }
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Backspace" && !currentValue && event.currentTarget.previousElementSibling instanceof HTMLInputElement) {
+                            event.currentTarget.previousElementSibling.focus();
+                          }
+                        }}
+                        onPaste={(event) => {
+                          const pasted = event.clipboardData.getData("text").replace(/\D/g, "").slice(0, 5);
+                          if (!pasted) {
+                            return;
+                          }
+                          event.preventDefault();
+                          updateField("verificationCode", pasted);
+                        }}
+                        value={currentValue}
+                      />
+                    );
+                  })}
+                </div>
+                {errors.verificationCode ? <small className="form-error">{errors.verificationCode}</small> : null}
               </label>
             ) : null}
             {isSignin || isSignup ? (
@@ -1646,6 +1767,8 @@ function AuthPage({
                 ? "PROCESSING..."
                 : isSignup
                   ? "CREATE ACCOUNT"
+                  : isVerify
+                    ? "VERIFY EMAIL"
                   : isForgot
                     ? "SEND RESET LINK"
                     : isReset
@@ -1660,12 +1783,16 @@ function AuthPage({
             {isSignup ? <NavLink to="/signin">Already have an account? Sign in</NavLink> : null}
             {isForgot ? <NavLink to="/reset-password">Already have a code? Reset password</NavLink> : null}
             {isReset ? <NavLink to="/signin">Back to sign in</NavLink> : null}
+            {isVerify ? <button className="auth-inline-action" disabled={isSubmitting} onClick={() => void handleResendVerification()} type="button">Request another code</button> : null}
+            {isVerify ? <NavLink to="/signin">Back to sign in</NavLink> : null}
           </div>
           <div className="auth-note card">
-            <strong>{isSignin ? "Protected access" : "Archive settings"}</strong>
+            <strong>{isSignin ? "Protected access" : isVerify ? "Verification required" : "Archive settings"}</strong>
             <span>
               {isSignin
                 ? "Your session restores drafts, saved stories, and archive controls."
+                : isVerify
+                  ? "You can create an account first and verify later, but sign in stays locked until verification is complete."
                 : "Your account controls visibility, defaults, and archive ownership."}
             </span>
           </div>
@@ -6634,6 +6761,7 @@ export default function App() {
         <Route element={<AuthPage mode="signup" onAuthenticated={handleAuthenticated} />} path="/signup" />
         <Route element={<AuthPage mode="forgot" onAuthenticated={handleAuthenticated} />} path="/forgot-password" />
         <Route element={<AuthPage mode="reset" onAuthenticated={handleAuthenticated} />} path="/reset-password" />
+        <Route element={<AuthPage mode="verify" onAuthenticated={handleAuthenticated} />} path="/verify-email" />
       </Routes>
     </AppShell>
   );

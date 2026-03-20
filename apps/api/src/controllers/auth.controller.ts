@@ -1,10 +1,12 @@
 import type { Request, Response } from "express";
 
 import {
+  emailVerificationRequestSchema,
   forgotPasswordSchema,
   loginSchema,
   resetPasswordSchema,
-  signUpSchema
+  signUpSchema,
+  verifyEmailSchema
 } from "../shared/index.js";
 import { env } from "../config/env.js";
 import { asyncHandler } from "../utils/async-handler.js";
@@ -14,9 +16,11 @@ import {
   getAuthenticatedUser,
   loginUser,
   logoutSession,
+  resendEmailVerification,
   refreshAccessToken,
   registerUser,
-  resetPassword
+  resetPassword,
+  verifyEmailAddress
 } from "../services/auth.service.js";
 
 const getRequestContext = (request: Request) => ({
@@ -40,11 +44,7 @@ const clearRefreshCookie = (response: Response) => {
 export const registerController = asyncHandler(async (request, response) => {
   const result = await registerUser(signUpSchema.parse(request.body), getRequestContext(request));
   applySensitiveResponseHeaders(response);
-  appendRefreshCookie(response, result.refreshToken);
-  response.status(201).json({
-    accessToken: result.accessToken,
-    user: result.user
-  });
+  response.status(201).json(result);
 });
 
 export const loginController = asyncHandler(async (request, response) => {
@@ -85,6 +85,21 @@ export const logoutController = asyncHandler(async (request, response) => {
 
 export const forgotPasswordController = asyncHandler(async (request, response) => {
   const result = await createPasswordResetRequest(forgotPasswordSchema.parse(request.body));
+  response.status(200).json(result);
+});
+
+export const resendVerificationController = asyncHandler(async (request, response) => {
+  const result = await resendEmailVerification(emailVerificationRequestSchema.parse(request.body));
+  response.status(200).json(result);
+});
+
+export const verifyEmailController = asyncHandler(async (request, response) => {
+  const result = await verifyEmailAddress(
+    verifyEmailSchema.parse({
+      email: request.body.email,
+      otp: request.body.otp ?? request.body.code
+    })
+  );
   response.status(200).json(result);
 });
 

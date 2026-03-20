@@ -5,6 +5,8 @@ export interface UserDocument extends mongoose.Document {
   username: string;
   email: string;
   passwordHash: string;
+  emailVerified: boolean;
+  emailVerifiedAt?: Date | null;
   dateOfBirth?: Date;
   bio?: string;
   location?: string;
@@ -25,6 +27,8 @@ const userSchema = new Schema<UserDocument>(
     username: { type: String, required: true, unique: true, lowercase: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     passwordHash: { type: String, required: true },
+    emailVerified: { type: Boolean, default: false },
+    emailVerifiedAt: { type: Date, default: null },
     dateOfBirth: { type: Date },
     bio: { type: String, trim: true, default: "" },
     location: { type: String, trim: true, default: "" },

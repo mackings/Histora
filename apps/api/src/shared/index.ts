@@ -37,26 +37,62 @@ export const storySaveSchema = storySchema.extend({
   status: z.enum(["draft", "published"]).default("draft")
 });
 
+const disposableEmailDomains = new Set([
+  "10minutemail.com",
+  "guerrillamail.com",
+  "mailinator.com",
+  "tempmail.com",
+  "temp-mail.org",
+  "yopmail.com",
+  "sharklasers.com",
+  "dispostable.com",
+  "trashmail.com",
+  "getnada.com"
+]);
+
+const allowedEmailSchema = z
+  .string()
+  .trim()
+  .email()
+  .transform((value) => value.toLowerCase())
+  .refine((value) => {
+    const [, domain = ""] = value.split("@");
+    return domain === "gmail.com" || domain.endsWith(".com");
+  }, "Use a valid gmail.com or .com email address.")
+  .refine((value) => {
+    const [, domain = ""] = value.split("@");
+    return !disposableEmailDomains.has(domain);
+  }, "Temporary email addresses are not allowed.");
+
 export const signUpSchema = z.object({
   fullName: z.string().min(2).max(80),
   username: z.string().min(3).max(24).regex(/^[a-z0-9_]+$/),
-  email: z.string().email(),
+  email: allowedEmailSchema,
   password: z.string().min(10).max(72),
   dateOfBirth: z.string().date().optional()
 });
 
 export const loginSchema = z.object({
-  email: z.string().email(),
+  email: allowedEmailSchema,
   password: z.string().min(10).max(72)
 });
 
 export const forgotPasswordSchema = z.object({
-  email: z.string().email()
+  email: allowedEmailSchema
 });
 
 export const resetPasswordSchema = z.object({
   code: z.string().min(4).max(64),
   password: z.string().min(10).max(72)
+});
+
+export const emailVerificationRequestSchema = z.object({
+  email: allowedEmailSchema
+});
+
+export const verifyEmailSchema = z.object({
+  email: allowedEmailSchema,
+  otp: z.string().trim().regex(/^\d{5}$/)
 });
 
 export const statusVisibilitySchema = z.enum(["public", "followers", "private"]);
@@ -150,6 +186,8 @@ export type LoginInput = z.infer<typeof loginSchema>;
 export type SignUpInput = z.infer<typeof signUpSchema>;
 export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
 export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+export type EmailVerificationRequestInput = z.infer<typeof emailVerificationRequestSchema>;
+export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
 export type StatusCreateInput = z.infer<typeof statusCreateSchema>;
 export type CommentCreateInput = z.infer<typeof commentCreateSchema>;
 export type StoryReactionInput = z.infer<typeof storyReactionSchema>;

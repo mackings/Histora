@@ -2311,6 +2311,22 @@ textarea {
   padding-right: 52px;
 }
 
+.auth-otp-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.auth-otp-input {
+  margin-top: 0;
+  padding: 14px 0;
+  text-align: center;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 .auth-visibility-toggle {
   position: absolute;
   top: 50%;
@@ -2434,6 +2450,15 @@ textarea {
 .auth-support-links a {
   color: var(--blue-deep);
   font-weight: 700;
+}
+
+.auth-inline-action {
+  padding: 0;
+  background: transparent;
+  color: var(--blue-deep);
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
 }
 
 .form-error {
@@ -3772,6 +3797,15 @@ textarea {
     gap: 12px;
   }
 
+  .auth-otp-row {
+    gap: 8px;
+  }
+
+  .auth-otp-input {
+    min-height: 56px;
+    font-size: 1.15rem;
+  }
+
   .auth-copy-stack {
     gap: 6px;
   }
@@ -4469,6 +4503,10 @@ textarea {
   .auth-motto {
     font-size: 0.82rem;
     line-height: 1.45;
+  }
+
+  .auth-inline-action {
+    width: 100%;
   }
 
   .profile-hero h1 {
