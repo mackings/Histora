@@ -2,7 +2,13 @@ import { z } from "zod";
 
 import { statusCreateSchema, statusReactionSchema } from "../shared/index.js";
 import { asyncHandler } from "../utils/async-handler.js";
-import { createStatus, getStatusFeed, toggleStatusReaction } from "../services/status.service.js";
+import {
+  createStatus,
+  getAnonymousStatusByShareSlug,
+  getMyStatuses,
+  getStatusFeed,
+  toggleStatusReaction
+} from "../services/status.service.js";
 
 export const getStatusFeedController = asyncHandler(async (_request, response) => {
   const statuses = await getStatusFeed();
@@ -12,6 +18,17 @@ export const getStatusFeedController = asyncHandler(async (_request, response) =
 export const createStatusController = asyncHandler(async (request, response) => {
   const status = await createStatus(request.auth!.userId, statusCreateSchema.parse(request.body));
   response.status(201).json(status);
+});
+
+export const getMyStatusesController = asyncHandler(async (request, response) => {
+  const statuses = await getMyStatuses(request.auth!.userId);
+  response.status(200).json(statuses);
+});
+
+export const getAnonymousStatusByShareSlugController = asyncHandler(async (request, response) => {
+  const params = z.object({ shareSlug: z.string().min(1) }).parse(request.params);
+  const status = await getAnonymousStatusByShareSlug(params.shareSlug);
+  response.status(200).json(status);
 });
 
 export const toggleStatusReactionController = asyncHandler(async (request, response) => {

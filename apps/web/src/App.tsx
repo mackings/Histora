@@ -160,6 +160,7 @@ type StoredAnonymousStatus = {
   helpFee: number;
   distribution: "app" | "external";
   source: "posted" | "received";
+  kind?: "message" | "status";
   helperContact?: {
     name: string;
     phone: string;
@@ -713,7 +714,22 @@ const toStoredAnonymousStatus = (
   helpFee: message.helpFee,
   distribution: message.distribution,
   source,
+  kind: "message",
   helperContact: message.helperContact ?? null
+});
+
+const toStoredAnonymousStatusEntry = (status: ApiStatus): StoredAnonymousStatus => ({
+  id: status.id,
+  title: status.body.slice(0, 72),
+  body: status.body,
+  meta: formatAnonymousMeta(status.createdAt),
+  shareSlug: status.shareSlug ?? status.id,
+  comments: [],
+  helpFee: 8,
+  distribution: "app",
+  source: "posted",
+  kind: "status",
+  helperContact: null
 });
 
 const storyTypeToGenre = (type: ApiStory["chapters"][number]["type"]) => {
@@ -1145,7 +1161,7 @@ function StoryCirclesRow({
       return "";
     }
 
-    return `${window.location.origin}/anonymous/${entry.shareSlug}`;
+    return `${window.location.origin}/anonymous/status/${entry.shareSlug}`;
   };
 
   const copyStatusLink = async (entry: StatusEntry) => {
@@ -1219,57 +1235,12 @@ function StoryCirclesRow({
   };
 
   const postStatus = () => {
-    const shareSlug = isAnonymousComposer ? createShareSlug() : undefined;
-    const nextEntry: StatusEntry = {
-      name: isAnonymousComposer ? "Anonymous" : "Your status",
-      meta: "Just now",
-      tone: isAnonymousComposer ? "ink" : "blue",
-      label: isAnonymousComposer ? "Advice status" : "Memory status",
-      contentTitle: isAnonymousComposer ? "Anonymous advice status" : "Fresh memory status",
-      contentBody: statusDraft,
-      anonymous: isAnonymousComposer,
-      shareSlug,
-      comments: isAnonymousComposer
-        ? [
-            { author: "Reply 1", text: "You are not overreacting. Protect your peace first." },
-            { author: "Reply 2", text: "Take your time. You can ask for help without revealing yourself." }
-          ]
-        : [],
-      helpFee: isAnonymousComposer ? 8 : undefined
-    };
-
-    if (isAnonymousComposer && shareSlug) {
-      const currentStoredStatuses = readStoredAnonymousStatuses();
-      writeStoredAnonymousStatuses([
-        {
-          id: shareSlug,
-          title: nextEntry.contentTitle,
-          body: nextEntry.contentBody,
-          meta: nextEntry.meta,
-          shareSlug,
-          comments: nextEntry.comments ?? [],
-          helpFee: nextEntry.helpFee ?? 8,
-          distribution: "app",
-          source: "posted",
-          helperContact: null
-        },
-        ...currentStoredStatuses
-      ]);
-
-      setStatusDraft("Today I finally wrote the chapter I kept postponing.");
-      setSelectedImage(null);
-      setIsComposerOpen(false);
-      setIsAnonymousComposer(false);
-      navigate("/anonymous");
-      return;
-    }
-
     void apiRequest<ApiStatus>("/statuses", {
       method: "POST",
       accessToken,
       body: {
         body: statusDraft.trim(),
-        anonymous: false,
+        anonymous: isAnonymousComposer,
         visibility: "public"
       }
     })
@@ -1279,7 +1250,7 @@ function StoryCirclesRow({
         setSelectedImage(null);
         setIsComposerOpen(false);
         setIsAnonymousComposer(false);
-        setShareFeedback("Status posted.");
+        setShareFeedback(createdStatus.anonymous ? "Anonymous status posted." : "Status posted.");
         setActiveIndex(1);
       })
       .catch((error) => {
@@ -2288,9 +2259,10 @@ function AnonymousHubPage({
 
     const loadStatuses = async () => {
       try {
-        const [inboxMessages, sentMessages] = await Promise.all([
+        const [inboxMessages, sentMessages, postedStatuses] = await Promise.all([
           apiRequest<ApiAnonymousMessage[]>("/anonymous-messages/inbox", { accessToken }),
-          apiRequest<ApiAnonymousMessage[]>("/anonymous-messages/sent", { accessToken })
+          apiRequest<ApiAnonymousMessage[]>("/anonymous-messages/sent", { accessToken }),
+          apiRequest<ApiStatus[]>("/statuses/mine", { accessToken })
         ]);
 
         if (cancelled) {
@@ -2299,7 +2271,8 @@ function AnonymousHubPage({
 
         setStatuses([
           ...inboxMessages.map((message) => toStoredAnonymousStatus(message, "received")),
-          ...sentMessages.map((message) => toStoredAnonymousStatus(message, "posted"))
+          ...sentMessages.map((message) => toStoredAnonymousStatus(message, "posted")),
+          ...postedStatuses.filter((status) => status.anonymous && status.shareSlug).map((status) => toStoredAnonymousStatusEntry(status))
         ]);
       } catch (error) {
         if (!cancelled) {
@@ -2321,7 +2294,8 @@ function AnonymousHubPage({
     }
 
     try {
-      await navigator.clipboard.writeText(`${window.location.origin}/anonymous/${status.shareSlug}`);
+      const sharePath = status.kind === "status" ? `/anonymous/status/${status.shareSlug}` : `/anonymous/${status.shareSlug}`;
+      await navigator.clipboard.writeText(`${window.location.origin}${sharePath}`);
       setShareFeedback("Anonymous link copied.");
     } catch {
       setShareFeedback("Could not copy the anonymous link on this device.");
@@ -2524,6 +2498,44 @@ function AnonymousHubPage({
             ) : null}
           </div>
         </article>
+
+        {postedMessages.length ? (
+          <article className="chapter-reader-card card anonymous-hub-panel">
+            <div className="anonymous-panel-body">
+              <div className="profile-section-copy anonymous-section-copy">
+                <SectionLabel>POSTED</SectionLabel>
+                <h2>Your anonymous posts</h2>
+                <span>{postedMessages.length} anonymous post{postedMessages.length === 1 ? "" : "s"} created by you.</span>
+              </div>
+              <div className="anonymous-hub-list">
+                {postedMessages.map((status) => (
+                  <article className="anonymous-hub-card" key={`${status.kind ?? "message"}-${status.id}`}>
+                    <div className="anonymous-hub-card-top">
+                      <div className="anonymous-hub-card-copy">
+                        <strong>{status.kind === "status" ? "Anonymous status" : "Anonymous message"}</strong>
+                        <span>{status.meta}</span>
+                      </div>
+                    </div>
+                    <p>{status.body}</p>
+                    <div className="anonymous-hub-actions">
+                      <button className="ghost-action" onClick={() => copyAnonymousLink(status)} type="button">
+                        COPY LINK
+                      </button>
+                      <button
+                        className="primary-action"
+                        onClick={() => navigate(status.kind === "status" ? `/anonymous/status/${status.shareSlug}` : `/anonymous/${status.shareSlug}`)}
+                        type="button"
+                      >
+                        OPEN
+                        <Icon className="button-icon" name="arrow" />
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+          </article>
+        ) : null}
       </section>
     </main>
   );
@@ -2782,6 +2794,137 @@ function AnonymousStoryPage({
           </article>
         </div>
       ) : null}
+    </main>
+  );
+}
+
+function AnonymousStatusPage({
+  accessToken
+}: {
+  accessToken: string;
+}) {
+  const { shareSlug = "" } = useParams();
+  const navigate = useNavigate();
+  const [status, setStatus] = useState<ApiStatus | null>(null);
+  const [comments, setComments] = useState<Array<{ author: string; text: string }>>([]);
+  const [replyDraft, setReplyDraft] = useState("");
+  const [feedback, setFeedback] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void apiRequest<ApiStatus>(`/statuses/share/${shareSlug}`)
+      .then((payload) => {
+        if (!cancelled) {
+          setStatus(payload);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setFeedback(getErrorMessage(error, "Could not load this anonymous status."));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [shareSlug]);
+
+  useEffect(() => {
+    if (!status) {
+      return;
+    }
+
+    void apiRequest<ApiComment[]>(`/comments?targetType=status&targetId=${encodeURIComponent(status.id)}`)
+      .then((statusComments) => {
+        setComments(
+          statusComments.map((comment) => ({
+            author: comment.authorName,
+            text: comment.body
+          }))
+        );
+      })
+      .catch(() => undefined);
+  }, [status?.id]);
+
+  const submitReply = async () => {
+    if (!status || !replyDraft.trim()) {
+      return;
+    }
+
+    try {
+      const createdComment = await apiRequest<ApiComment>("/comments", {
+        method: "POST",
+        accessToken,
+        body: {
+          targetType: "status",
+          targetId: status.id,
+          body: replyDraft.trim()
+        }
+      });
+
+      setComments((current) => [{ author: createdComment.authorName, text: createdComment.body }, ...current]);
+      setReplyDraft("");
+      setFeedback("Reply posted.");
+    } catch (error) {
+      setFeedback(getErrorMessage(error, "Could not post your reply."));
+    }
+  };
+
+  return (
+    <main className="feed-reader-shell">
+      <div className="profile-edit-back">
+        <button className="ghost-action" onClick={() => navigate("/anonymous")} type="button">
+          <Icon className="button-icon" name="arrow" />
+          BACK
+        </button>
+      </div>
+
+      <section className="story-reader-stage card">
+        <div className="story-reader-stage-copy">
+          <SectionLabel>ANONYMOUS_STATUS</SectionLabel>
+          <h1>{status ? "Anonymous status" : "Loading status..."}</h1>
+          <p>{status?.body ?? "Open an anonymous status from the feed or anonymous hub to read it here."}</p>
+        </div>
+      </section>
+
+      {feedback ? <p className="status-feedback">{feedback}</p> : null}
+
+      <section className="feed-reader-single-column">
+        <article className="chapter-reader-card card">
+          <div className="chapter-section-head">
+            <div>
+              <SectionLabel>REPLIES</SectionLabel>
+              <h3>Reply anonymously on Histora</h3>
+            </div>
+            <span>{comments.length} replies</span>
+          </div>
+          <div className="feed-thread-list">
+            {comments.map((comment, index) => (
+              <article className="feed-thread-item" key={`${comment.author}-${index}`}>
+                <div className="feed-thread-line" aria-hidden="true" />
+                <div className="feed-thread-copy">
+                  <div className="feed-thread-head">
+                    <strong>{comment.author}</strong>
+                  </div>
+                  <p>{comment.text}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+          <div className="feed-thread-reply">
+            <textarea
+              className="status-compose-input feed-thread-input"
+              onChange={(event) => setReplyDraft(event.target.value)}
+              placeholder="Reply to this anonymous status..."
+              value={replyDraft}
+            />
+            <button className="primary-action" onClick={() => void submitReply()} type="button">
+              Post reply
+            </button>
+          </div>
+        </article>
+      </section>
     </main>
   );
 }
@@ -7663,6 +7806,14 @@ export default function App() {
               : <RequireCurrentLocationSignInRedirect />
           }
           path="/anonymous/write/:recipientSlug"
+        />
+        <Route
+          element={
+            isLoggedIn && authSession
+              ? <AnonymousStatusPage accessToken={authSession.accessToken} />
+              : <RequireCurrentLocationSignInRedirect />
+          }
+          path="/anonymous/status/:shareSlug"
         />
         <Route
           element={

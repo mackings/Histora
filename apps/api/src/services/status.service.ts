@@ -79,6 +79,36 @@ export async function getStatusFeed() {
   return feed;
 }
 
+export async function getMyStatuses(userId: string) {
+  return StatusModel.find({
+    authorId: userId,
+    $or: [
+      { expiresAt: { $gt: new Date() } },
+      { createdAt: { $gt: new Date(Date.now() - statusLifetimeMs) } }
+    ]
+  })
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+}
+
+export async function getAnonymousStatusByShareSlug(shareSlug: string) {
+  const status = await StatusModel.findOne({
+    shareSlug,
+    anonymous: true,
+    $or: [
+      { expiresAt: { $gt: new Date() } },
+      { createdAt: { $gt: new Date(Date.now() - statusLifetimeMs) } }
+    ]
+  }).select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+
+  if (!status) {
+    throw new AppError("Anonymous status not found", 404);
+  }
+
+  return status;
+}
+
 export async function toggleStatusReaction(statusId: string, userId: string, action: "like" | "bookmark") {
   const status = await StatusModel.findById(statusId);
 
