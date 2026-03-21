@@ -274,7 +274,9 @@ export function StudioPage({
     "Advice post: Should I reconnect?":
       "I do not know if reopening this relationship will heal anything or only restart a wound I barely closed."
   } as const;
+  const studioOpenEditorOnceKey = "histora-studio-open-editor-once";
   const [isEnteringStudio, setIsEnteringStudio] = useState(true);
+  const [isStudioEditorOpen, setIsStudioEditorOpen] = useState(false);
   const [activeChapter, setActiveChapter] = useState("Chapter 1");
   const [isPremium, setIsPremium] = useState(currentUser.subscriptionTier === "premium");
   const [visibility, setVisibility] = useState<"private" | "selected" | "public">("selected");
@@ -285,7 +287,7 @@ export function StudioPage({
   const [chapterType, setChapterType] = useState("memory");
   const [allowComments, setAllowComments] = useState(true);
   const [chapters, setChapters] = useState<StudioChapter[]>(
-    [createInitialStudioChapter(0), createInitialStudioChapter(1)]
+    [createInitialStudioChapter(0)]
   );
   const [studioMessage, setStudioMessage] = useState("Studio ready.");
   const [currentStoryId, setCurrentStoryId] = useState<string | null>(null);
@@ -364,8 +366,12 @@ export function StudioPage({
 
     return editorHtml ?? chapterBody;
   };
-  const plainChapterText = getPlainTextFromHtml(chapterBody);
-  const wordCount = getChapterWordCount(chapterBody);
+  const liveEditorBody = getLatestChapterBody();
+  const plainChapterText = getPlainTextFromHtml(liveEditorBody);
+  const wordCount = getChapterWordCount(liveEditorBody);
+  const summaryWordCount = storySummary.trim().split(/\s+/).filter(Boolean).length;
+  const summaryWordsRemaining = Math.max(20 - summaryWordCount, 0);
+  const bodyWordsRemaining = Math.max(chapterCompletionThreshold - wordCount, 0);
   const chapterMetrics = chapters.map((chapter) => ({
     ...chapter,
     words: getChapterWordCount(chapter.body),
@@ -376,7 +382,6 @@ export function StudioPage({
   const activeChapterReady = chapterMetrics[activeChapterIndex >= 0 ? activeChapterIndex : 0];
   const activeChapterNumber = Math.max(activeChapterIndex + 1, 1);
   const activeChapterNumberLabel = `Chapter ${activeChapterNumber}`;
-  const liveEditorBody = getLatestChapterBody();
   const autoSaveSignature = JSON.stringify({
     activeChapter,
     anonymous,
@@ -416,29 +421,28 @@ export function StudioPage({
       ? null
       : "add a timeline moment"
   ].filter(Boolean) as string[];
-  const chapterSlots = Array.from({ length: 6 }).map((_, index) => {
-    const existingChapter = chapters[index];
+  const chapterSlots = chapters.map((chapter, index) => {
     const isLocked = index >= chapterLimit;
     const chapterLabel = `Chapter ${index + 1}`;
 
-    return existingChapter
-      ? { ...existingChapter, isLocked, chapterLabel }
-      : {
-          title: "Premium chapter",
-          chapterLabel,
-          status: "PREMIUM",
-          type: "PREMIUM",
-          words: 0,
-          moments: 0,
-          body: "",
-          isLocked: true
-        };
+    return { ...chapter, isLocked, chapterLabel };
   });
 
   useEffect(() => {
     const timer = window.setTimeout(() => setIsEnteringStudio(false), 1200);
     return () => window.clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    if (window.sessionStorage.getItem(studioOpenEditorOnceKey) === "true") {
+      setIsStudioEditorOpen(true);
+      window.sessionStorage.removeItem(studioOpenEditorOnceKey);
+    }
+  }, [studioOpenEditorOnceKey]);
 
   useEffect(() => {
     chaptersRef.current = chapters;
@@ -466,14 +470,15 @@ export function StudioPage({
     setStoryLinks(story.links ?? []);
     setVisibility(story.visibility as "private" | "selected" | "public");
     setAnonymous(story.anonymous);
-    setChapters(nextChapters.length ? nextChapters : [createInitialStudioChapter(0), createInitialStudioChapter(1)]);
+    setChapters(nextChapters.length ? nextChapters : [createInitialStudioChapter(0)]);
     setActiveChapter(nextChapters[0]?.title ?? "Chapter 1");
+    setIsStudioEditorOpen(true);
     setStudioMessage(`Loaded ${story.title}.`);
     setStudioNotice(null);
     invalidatePreviewReview();
     void hydrateStudioChaptersForMedia(accessToken, nextChapters)
       .then((hydratedChapters) => {
-        setChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0), createInitialStudioChapter(1)]);
+        setChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)]);
       })
       .catch(() => undefined);
   };
@@ -494,8 +499,9 @@ export function StudioPage({
     setAnonymous(currentUser.defaultStoryVisibility === "anonymous");
     setChapterType("memory");
     setAllowComments(currentUser.allowCommentsByDefault);
-    setChapters([createInitialStudioChapter(0), createInitialStudioChapter(1)]);
+    setChapters([createInitialStudioChapter(0)]);
     setActiveChapter("Chapter 1");
+    setIsStudioEditorOpen(true);
     setDraftHistory((current) => ["New story started.", ...current].slice(0, 6));
     setStudioMessage("New story ready.");
     if (typeof window !== "undefined") {
@@ -519,29 +525,6 @@ export function StudioPage({
 
         setStoryLibrary(stories);
         setIsStoryLibraryLoading(false);
-        if (stories.length === 0) {
-          return;
-        }
-
-        let restoredStoryId: string | null = null;
-        if (typeof window !== "undefined") {
-          try {
-            const rawDraft = window.localStorage.getItem(studioStorageKey);
-            const parsedDraft = rawDraft ? JSON.parse(rawDraft) as { currentStoryId?: string | null } : null;
-            restoredStoryId = typeof parsedDraft?.currentStoryId === "string" ? parsedDraft.currentStoryId : null;
-          } catch {
-            restoredStoryId = null;
-          }
-        }
-
-        const selectedStory =
-          stories.find((story) => story.id === restoredStoryId) ??
-          stories.find((story) => story.status === "draft") ??
-          stories[0];
-
-        if (selectedStory) {
-          loadStoryIntoStudio(selectedStory, { mergeRestoredDraft: Boolean(restoredStoryId) });
-        }
       })
       .catch(() => {
         if (!cancelled) {
@@ -2136,6 +2119,25 @@ export function StudioPage({
     invalidatePreviewReview();
   };
 
+  const addChapter = () => {
+    if (chapters.length >= chapterLimit) {
+      const message = isPremium
+        ? "Chapter limit reached for this plan."
+        : "Free users can write in the first 2 chapters only.";
+      setStudioMessage(message);
+      openStudioNotice("Chapter limit reached", message);
+      return;
+    }
+
+    const nextChapter = createInitialStudioChapter(chapters.length);
+    setChapters((current) => [...current, nextChapter]);
+    setActiveChapter(nextChapter.title);
+    setIsStudioEditorOpen(true);
+    setStudioMessage(`${nextChapter.title} added.`);
+    setDraftHistory((current) => [`${nextChapter.title} added.`, ...current].slice(0, 6));
+    invalidatePreviewReview();
+  };
+
   const addStoryLink = () => {
     setStoryLinks((current) => [...current, createEmptyStoryLink()]);
     setStudioMessage("Story link slot added.");
@@ -2288,6 +2290,12 @@ export function StudioPage({
     window.setTimeout(() => navigate("/feed"), 180);
   };
 
+  const returnToStoryLibrary = () => {
+    saveCurrentDraft({ quiet: true });
+    setIsStudioEditorOpen(false);
+    setStudioMessage("Story library ready.");
+  };
+
   const publishPanel = (
     <article className="studio-panel card">
       <SectionLabelComponent>PUBLISH_CONTROL</SectionLabelComponent>
@@ -2372,6 +2380,55 @@ export function StudioPage({
     );
   }
 
+  const storyLibraryPanel = (
+    <section className="studio-panel card studio-library-panel">
+      <div className="section-head">
+        <div>
+          <SectionLabelComponent>YOUR_STORIES</SectionLabelComponent>
+          <h2>Open a story you are already writing</h2>
+        </div>
+        <button className="primary-action" onClick={startFreshStory} type="button">NEW STORY</button>
+      </div>
+      <div className="studio-library-list">
+        {isStoryLibraryLoading ? (
+          <div className="studio-library-card studio-library-empty">
+            <strong>Loading your story library...</strong>
+            <span>Checking drafts and published stories linked to this account.</span>
+          </div>
+        ) : storyLibrary.length ? (
+          storyLibrary.map((story) => (
+            <button
+              className={`studio-library-card${currentStoryId === story.id ? " studio-library-card-active" : ""}`}
+              key={story.id}
+              onClick={() =>
+                loadStoryIntoStudio(story, {
+                  mergeRestoredDraft: restoredLocalDraftRef.current && currentStoryId === story.id
+                })
+              }
+              type="button"
+            >
+              <div className="studio-library-head">
+                <strong>{story.title}</strong>
+                <span className="story-tag">{story.status === "published" ? "LIVE" : "DRAFT"}</span>
+              </div>
+              <p>{story.summary}</p>
+              <div className="studio-library-meta">
+                <span>{story.chapters.length} chapter{story.chapters.length === 1 ? "" : "s"}</span>
+                <span>{story.visibility.toUpperCase()}</span>
+                <span>{new Date(story.updatedAt).toLocaleDateString()}</span>
+              </div>
+            </button>
+          ))
+        ) : (
+          <div className="studio-library-card studio-library-empty">
+            <strong>No saved stories yet</strong>
+            <span>Start a new story here and it will stay available in your library once autosave begins.</span>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+
   return (
     <main className="page-shell">
       <section className="studio-header card">
@@ -2381,55 +2438,23 @@ export function StudioPage({
           <p>Build chapters, attach images and voice notes, and control how every finished draft gets published.</p>
         </div>
         <div className="hero-actions">
+          {isStudioEditorOpen ? (
+            <button className="ghost-action" onClick={returnToStoryLibrary} type="button">STORY LIBRARY</button>
+          ) : null}
           <button className="ghost-action" onClick={exitStudioMode} type="button">EXIT STUDIO</button>
         </div>
       </section>
       <section className="studio-status-bar card">
         <strong>{studioMessage}</strong>
-        <span>{isAutoSavingDraft ? "Auto-saving..." : `${wordCount} words in active chapter`}</span>
+        <span>
+          {isAutoSavingDraft
+            ? "Auto-saving..."
+            : isStudioEditorOpen
+              ? `${wordCount} words in active chapter`
+              : `${storyLibrary.length} stor${storyLibrary.length === 1 ? "y" : "ies"} in your library`}
+        </span>
       </section>
-      <section className="studio-panel card studio-library-panel">
-        <div className="section-head">
-          <div>
-            <SectionLabelComponent>YOUR_STORIES</SectionLabelComponent>
-            <h2>Open a story you are already writing</h2>
-          </div>
-          <button className="primary-action" onClick={startFreshStory} type="button">NEW STORY</button>
-        </div>
-        <div className="studio-library-list">
-          {isStoryLibraryLoading ? (
-            <div className="studio-library-card studio-library-empty">
-              <strong>Loading your story library...</strong>
-              <span>Checking drafts and published stories linked to this account.</span>
-            </div>
-          ) : storyLibrary.length ? (
-            storyLibrary.map((story) => (
-              <button
-                className={`studio-library-card${currentStoryId === story.id ? " studio-library-card-active" : ""}`}
-                key={story.id}
-                onClick={() => loadStoryIntoStudio(story)}
-                type="button"
-              >
-                <div className="studio-library-head">
-                  <strong>{story.title}</strong>
-                  <span className="story-tag">{story.status === "published" ? "LIVE" : "DRAFT"}</span>
-                </div>
-                <p>{story.summary}</p>
-                <div className="studio-library-meta">
-                  <span>{story.chapters.length} chapter{story.chapters.length === 1 ? "" : "s"}</span>
-                  <span>{story.visibility.toUpperCase()}</span>
-                  <span>{new Date(story.updatedAt).toLocaleDateString()}</span>
-                </div>
-              </button>
-            ))
-          ) : (
-            <div className="studio-library-card studio-library-empty">
-              <strong>No saved stories yet</strong>
-              <span>Start a new story here and it will stay available in your library once autosave begins.</span>
-            </div>
-          )}
-        </div>
-      </section>
+      {!isStudioEditorOpen ? storyLibraryPanel : null}
       {studioNotice ? (
         <section className="studio-notice card studio-notice-live" role="status">
           <span className="studio-notice-badge" aria-hidden="true">
@@ -2444,6 +2469,8 @@ export function StudioPage({
         </section>
       ) : null}
 
+      {isStudioEditorOpen ? (
+        <>
       <section className="studio-layout">
         <div className="studio-main">
           <article className="studio-panel card" ref={chapterEditorSectionRef}>
@@ -2452,7 +2479,10 @@ export function StudioPage({
                 <SectionLabelComponent>CHAPTER_SWITCHER</SectionLabelComponent>
                 <h2>Slide through your chapters</h2>
               </div>
-              <span className="story-tag">{chapterSlots.length} chapters</span>
+              <div className="chapter-switcher-actions">
+                <span className="story-tag">{chapterSlots.length} chapters</span>
+                <button className="ghost-action" onClick={addChapter} type="button">ADD CHAPTER</button>
+              </div>
             </div>
             <div className="chapter-tab-row">
               {chapterSlots.map((chapter) => (
@@ -2499,65 +2529,12 @@ export function StudioPage({
                   setStorySummary(event.target.value);
                   invalidatePreviewReview();
                 }} value={storySummary} />
+                <span className="section-meta studio-word-counter">
+                  {summaryWordsRemaining > 0
+                    ? `${summaryWordCount} words written. ${summaryWordsRemaining} remaining to reach the 20-word summary minimum.`
+                    : `${summaryWordCount} words written. Summary minimum reached.`}
+                </span>
               </label>
-            </div>
-            <div className="studio-links-section">
-              <div className="section-head studio-links-head">
-                <div>
-                  <SectionLabelComponent>STORY_LINKS</SectionLabelComponent>
-                  <h3>Attach supporting links to this story</h3>
-                </div>
-                <button className="ghost-action" onClick={addStoryLink} type="button">ADD LINK</button>
-              </div>
-              <div className="studio-links-list">
-                {storyLinks.length ? (
-                  storyLinks.map((link, index) => (
-                    <article className="studio-link-row" key={`story-link-${index}`}>
-                      <label>
-                        Label
-                        <input
-                          onChange={(event) => updateStoryLink(index, "label", event.target.value)}
-                          placeholder="Google Drive folder"
-                          value={link.label}
-                        />
-                      </label>
-                      <label>
-                        Link type
-                        <select
-                          onChange={(event) => updateStoryLink(index, "kind", event.target.value)}
-                          value={link.kind}
-                        >
-                          <option value="website">Official site</option>
-                          <option value="social">Social account</option>
-                          <option value="drive">Drive link</option>
-                          <option value="photos">Google Photos</option>
-                        </select>
-                      </label>
-                      <label className="studio-link-url-field">
-                        URL
-                        <input
-                          onChange={(event) => updateStoryLink(index, "url", event.target.value)}
-                          placeholder="https://..."
-                          value={link.url}
-                        />
-                      </label>
-                      <button
-                        aria-label="Remove story link"
-                        className="icon-chip"
-                        onClick={() => removeStoryLink(index)}
-                        type="button"
-                      >
-                        <IconComponent className="button-icon" name="close" />
-                      </button>
-                    </article>
-                  ))
-                ) : (
-                  <div className="studio-link-row studio-link-empty">
-                    <strong>No story links yet</strong>
-                    <span>Add Google Photos, Drive folders, official websites, or social profile links readers should see beside the story.</span>
-                  </div>
-                )}
-              </div>
             </div>
           </article>
 
@@ -2635,6 +2612,11 @@ export function StudioPage({
                     </button>
                   ) : null}
                 </div>
+                <span className="section-meta studio-word-counter">
+                  {bodyWordsRemaining > 0
+                    ? `${wordCount} words written. ${bodyWordsRemaining} remaining to reach chapter readiness.`
+                    : `${wordCount} words written. Chapter readiness reached.`}
+                </span>
               </div>
             </div>
             {isTranscriptionPanelVisible ? (
@@ -2948,6 +2930,67 @@ export function StudioPage({
         </article>
       </section>
 
+      <section className="timeline-stage">
+        <article className="studio-panel card">
+          <div className="section-head studio-links-head">
+            <div>
+              <SectionLabelComponent>STORY_LINKS</SectionLabelComponent>
+              <h3>Attach supporting links to this story</h3>
+            </div>
+            <button className="ghost-action" onClick={addStoryLink} type="button">ADD LINK</button>
+          </div>
+          <div className="studio-links-list">
+            {storyLinks.length ? (
+              storyLinks.map((link, index) => (
+                <article className="studio-link-row" key={`story-link-${index}`}>
+                  <label>
+                    Label
+                    <input
+                      onChange={(event) => updateStoryLink(index, "label", event.target.value)}
+                      placeholder="Google Drive folder"
+                      value={link.label}
+                    />
+                  </label>
+                  <label>
+                    Link type
+                    <select
+                      onChange={(event) => updateStoryLink(index, "kind", event.target.value)}
+                      value={link.kind}
+                    >
+                      <option value="website">Official site</option>
+                      <option value="social">Social account</option>
+                      <option value="drive">Drive link</option>
+                      <option value="photos">Google Photos</option>
+                    </select>
+                  </label>
+                  <label className="studio-link-url-field">
+                    URL
+                    <input
+                      onChange={(event) => updateStoryLink(index, "url", event.target.value)}
+                      placeholder="https://..."
+                      value={link.url}
+                    />
+                  </label>
+                  <button
+                    aria-label="Remove story link"
+                    className="icon-chip"
+                    onClick={() => removeStoryLink(index)}
+                    type="button"
+                  >
+                    <IconComponent className="button-icon" name="close" />
+                  </button>
+                </article>
+              ))
+            ) : (
+              <div className="studio-link-row studio-link-empty">
+                <strong>No story links yet</strong>
+                <span>Add Google Photos, Drive folders, official websites, or social profile links readers should see beside the story.</span>
+              </div>
+            )}
+          </div>
+        </article>
+      </section>
+
       <section className="timeline-stage mobile-only">
         {privacyPanel}
       </section>
@@ -2955,6 +2998,8 @@ export function StudioPage({
       <section className="timeline-stage">
         {publishPanel}
       </section>
+        </>
+      ) : null}
 
       {isVoiceSheetOpen ? (
         <div className="status-viewer-backdrop" onClick={closeVoiceSheet} role="presentation">

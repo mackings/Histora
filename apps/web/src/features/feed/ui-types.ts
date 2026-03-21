@@ -28,7 +28,8 @@ export type FeedIconName =
   | "quote"
   | "checklist"
   | "timeline"
-  | "note";
+  | "note"
+  | "link";
 
 export type FeedIconComponentProps = {
   name: FeedIconName;

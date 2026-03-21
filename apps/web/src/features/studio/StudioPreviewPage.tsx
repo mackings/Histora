@@ -5,6 +5,17 @@ import { type ApiStory, apiRequest } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
 import type { StudioPreviewPayload, StudioPublishPayload } from "./types";
 
+function LinkIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24">
+      <path
+        d="M10.6 13.4a1 1 0 0 1 0-1.4l4.2-4.2a3 3 0 1 1 4.2 4.2l-2.8 2.8a3 3 0 0 1-4.2 0 1 1 0 1 1 1.4-1.4 1 1 0 0 0 1.4 0l2.8-2.8a1 1 0 1 0-1.4-1.4L12 13.4a1 1 0 0 1-1.4 0ZM13.4 10.6a1 1 0 0 1 0 1.4l-4.2 4.2a3 3 0 0 1-4.2-4.2l2.8-2.8a3 3 0 0 1 4.2 0 1 1 0 0 1-1.4 1.4 1 1 0 0 0-1.4 0l-2.8 2.8a1 1 0 1 0 1.4 1.4l4.2-4.2a1 1 0 0 1 1.4 0Z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 export function StudioPreviewPage({
   accessToken
 }: {
@@ -31,7 +42,16 @@ export function StudioPreviewPage({
   return (
     <main className="studio-preview-page">
       <section className="studio-preview-topbar">
-        <button className="ghost-action" onClick={() => navigate("/studio")} type="button">Back To Edit</button>
+        <button
+          className="ghost-action"
+          onClick={() => {
+            window.sessionStorage.setItem("histora-studio-open-editor-once", "true");
+            navigate("/studio");
+          }}
+          type="button"
+        >
+          Back To Edit
+        </button>
         <button
           className="primary-action"
           disabled={isPublishing}
@@ -82,20 +102,6 @@ export function StudioPreviewPage({
         <span className="story-tag">{preview?.visibility ?? "draft"}</span>
         <h1>{preview?.storyTitle ?? "Preview unavailable"}</h1>
         <p className="preview-summary">{preview?.storySummary ?? "Open preview from the studio to see the reader view."}</p>
-
-        {preview?.storyLinks?.length ? (
-          <section className="preview-story-links">
-            <h2>Story links</h2>
-            <div className="preview-story-link-list">
-              {preview.storyLinks.map((link) => (
-                <a className="story-link-chip" href={link.url} key={`${link.kind}-${link.url}`} rel="noreferrer" target="_blank">
-                  <span>{link.label}</span>
-                  <small>{link.kind}</small>
-                </a>
-              ))}
-            </div>
-          </section>
-        ) : null}
 
         {preview?.imageAttachments?.length ? (
           <div className="preview-gallery">
@@ -156,6 +162,23 @@ export function StudioPreviewPage({
                   <span>{voice.source}</span>
                   <audio className="voice-player" controls src={voice.url} />
                 </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {preview?.storyLinks?.length ? (
+          <section className="preview-story-links">
+            <h2>Story links</h2>
+            <div className="preview-story-link-list">
+              {preview.storyLinks.map((link) => (
+                <a className="story-link-chip" href={link.url} key={`${link.kind}-${link.url}`} rel="noreferrer" target="_blank">
+                  <span className="story-link-chip-icon" aria-hidden="true">
+                    <LinkIcon className="button-icon" />
+                  </span>
+                  <span>{link.label}</span>
+                  <small>{link.kind}</small>
+                </a>
               ))}
             </div>
           </section>

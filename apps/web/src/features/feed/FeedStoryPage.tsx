@@ -737,23 +737,6 @@ export function FeedStoryPage({
               </header>
 
               <div className="chapter-reader-body">
-                {story.links.length ? (
-                  <section className="chapter-content-section">
-                    <div className="chapter-section-head">
-                      <SectionLabelComponent>STORY_LINKS</SectionLabelComponent>
-                      <span>{story.links.length} attached</span>
-                    </div>
-                    <div className="feed-reader-link-grid">
-                      {story.links.map((link) => (
-                        <a className="story-link-chip" href={link.url} key={`${link.kind}-${link.url}`} rel="noreferrer" target="_blank">
-                          <span>{link.label}</span>
-                          <small>{link.kind}</small>
-                        </a>
-                      ))}
-                    </div>
-                  </section>
-                ) : null}
-
                 <div className="preview-rich-text chapter-reader-copy">
                   {activeChapter.body.split(/\n+/).map((paragraph, index) => (
                     <p key={`${activeChapter.id}-paragraph-${index}`}>{paragraph}</p>
@@ -797,6 +780,26 @@ export function FeedStoryPage({
                             <source src={voice.src} type="audio/mpeg" />
                           </audio>
                         </article>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {story.links.length ? (
+                  <section className="chapter-content-section">
+                    <div className="chapter-section-head">
+                      <SectionLabelComponent>STORY_LINKS</SectionLabelComponent>
+                      <span>{story.links.length} attached</span>
+                    </div>
+                    <div className="feed-reader-link-grid">
+                      {story.links.map((link) => (
+                        <a className="story-link-chip" href={link.url} key={`${link.kind}-${link.url}`} rel="noreferrer" target="_blank">
+                          <span className="story-link-chip-icon" aria-hidden="true">
+                            <IconComponent className="button-icon" name="link" />
+                          </span>
+                          <span>{link.label}</span>
+                          <small>{link.kind}</small>
+                        </a>
                       ))}
                     </div>
                   </section>
