@@ -139,7 +139,7 @@ const applyLocalStatusUpdate = (payload: {
   if (payload.type === "created" && payload.status) {
     updateFeedStatuses((current) => {
       const next = current.filter((status) => status.id !== payload.status!.id);
-      return payload.status!.anonymous && payload.status!.shareSlug ? [payload.status!, ...next] : next;
+      return [payload.status!, ...next];
     });
     updateMyStatusIds((current) => new Set([...current, payload.status!.id]));
     return;
@@ -216,7 +216,7 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
     const statusEvent = (payload as { kind: "status.created"; status: ApiStatus }).status;
     updateFeedStatuses((current) => {
       const next = current.filter((status) => status.id !== statusEvent.id);
-      return statusEvent.anonymous && statusEvent.shareSlug ? [statusEvent, ...next] : next;
+      return [statusEvent, ...next];
     });
     return;
   }
@@ -305,7 +305,7 @@ async function loadFeedStore(accessToken: string, options?: { force?: boolean; s
       setFeedStoreState((current) => ({
         ...current,
         feedPosts: stories.map((story) => toFeedStoryRecord(story)),
-        feedStatuses: statuses.filter((status) => status.anonymous && status.shareSlug),
+        feedStatuses: statuses,
         myStatusIds: new Set(myStatuses.map((status) => status.id)),
         hydrated: true,
         loading: false,

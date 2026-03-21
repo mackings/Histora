@@ -646,7 +646,9 @@ export function FeedPage({
 
   const anonymousFeedSources: AnonymousFeedSource[] = [
     ...liveAnonymousSources,
-    ...feedStatuses.map((status) => ({
+    ...feedStatuses
+      .filter((status) => status.anonymous && status.shareSlug)
+      .map((status) => ({
       id: status.id,
       slug: status.shareSlug ?? status.id,
       title: "Anonymous status",
