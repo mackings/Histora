@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import {
@@ -12,6 +12,7 @@ import { AppShell } from "./app/AppShell";
 import { RequireCurrentLocationSignInRedirect, RequireSignInRedirect } from "./app/RouteRedirects";
 import { FeedPage } from "./features/feed/FeedPage";
 import { FeedStoryPage } from "./features/feed/FeedStoryPage";
+import { FeedRealtimeBridge } from "./features/feed/store";
 import { EditProfilePage } from "./features/profile/EditProfilePage";
 import { AuthPage } from "./features/auth/AuthPage";
 import { ProfilePage } from "./features/profile/ProfilePage";
@@ -182,8 +183,12 @@ export default function App() {
   }
 
   return (
-    <AppShell IconComponent={Icon} SectionLabelComponent={SectionLabel} isLoggedIn={isLoggedIn}>
-      <Routes>
+    <Fragment>
+      {authSession ? (
+        <FeedRealtimeBridge accessToken={authSession.accessToken} currentUserId={authSession.user.id} />
+      ) : null}
+      <AppShell IconComponent={Icon} SectionLabelComponent={SectionLabel} isLoggedIn={isLoggedIn}>
+        <Routes>
         <Route
           element={
             isLoggedIn && authSession ? (
@@ -330,7 +335,8 @@ export default function App() {
         <Route element={<AuthPage IconComponent={Icon} SectionLabelComponent={SectionLabel} mode="reset" onAuthenticated={handleAuthenticated} />} path="/reset-password" />
         <Route element={<AuthPage IconComponent={Icon} SectionLabelComponent={SectionLabel} mode="verify" onAuthenticated={handleAuthenticated} />} path="/verify-email" />
         <Route element={<AuthPage IconComponent={Icon} SectionLabelComponent={SectionLabel} mode="device" onAuthenticated={handleAuthenticated} />} path="/verify-device" />
-      </Routes>
-    </AppShell>
+        </Routes>
+      </AppShell>
+    </Fragment>
   );
 }

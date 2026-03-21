@@ -2,9 +2,17 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import feedStory from "../../assets/feed-story.svg";
-import { apiRequest, type ApiComment, type ApiFeedStory, type ApiStatus, getEventsSocketUrl, prefetchStoryBySlug, updateCachedStoryCounts } from "../../lib/api-client";
+import { apiRequest, type ApiComment, type ApiStatus, prefetchStoryBySlug, updateCachedStoryCounts } from "../../lib/api-client";
 import { ShareSheet } from "./FeedStoryPage";
 import { buildFeedStories, type FeedStoryRecord, type ShareSheetPayload, toFeedStoryRecord } from "./models";
+import {
+  revalidateFeedStore,
+  updateFeedPosts,
+  updateFeedStatuses,
+  updateLiveAnonymousSources,
+  updateMyStatusIds,
+  useFeedStore
+} from "./store";
 import {
   addStatusEntry,
   type AnonymousFeedSource,
@@ -71,10 +79,14 @@ const getErrorMessage = (error: unknown, fallback: string) =>
 
 function StoryCirclesRow({
   accessToken,
+  statuses,
+  myStatusIds,
   IconComponent,
   SectionLabelComponent
 }: {
   accessToken: string;
+  statuses: ApiStatus[];
+  myStatusIds: Set<string>;
   IconComponent: FeedIconComponent;
   SectionLabelComponent: FeedSectionLabelComponent;
 }) {
@@ -111,64 +123,24 @@ function StoryCirclesRow({
   const activeStatus = activeStatusIndex >= 0 ? viewableStatuses[activeStatusIndex] : null;
 
   useEffect(() => {
-    let cancelled = false;
-    void Promise.all([apiRequest<ApiStatus[]>("/statuses"), apiRequest<ApiStatus[]>("/statuses/mine", { accessToken })])
-      .then(([statuses, myStatuses]) => {
-        if (!cancelled) {
-          const ownedStatusIds = new Set(myStatuses.map((status) => status.id));
-          setStatusItems([addStatusEntry, ...statuses.map((status) => toStatusEntry(status, { owned: ownedStatusIds.has(status.id) }))]);
-        }
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [accessToken]);
+    setStatusItems((current) => {
+      const nextEntries = statuses.map((status) => toStatusEntry(status, { owned: myStatusIds.has(status.id) }));
+      const nextById = new Map(nextEntries.map((entry) => [entry.id, entry]));
+      const preservedCommentMap = new Map(
+        current
+          .filter((entry) => entry.tone !== "add")
+          .map((entry) => [entry.id, entry.comments ?? []] as const)
+      );
 
-  useEffect(() => {
-    if (typeof window === "undefined" || !accessToken) {
-      return;
-    }
-
-    const socket = new WebSocket(getEventsSocketUrl(accessToken));
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ type: "subscribe", channel: "feed" }));
+      return [
+        addStatusEntry,
+        ...nextEntries.map((entry) => ({
+          ...entry,
+          comments: preservedCommentMap.get(entry.id) ?? entry.comments
+        }))
+      ];
     });
-    socket.addEventListener("message", (event) => {
-      try {
-        const message = JSON.parse(event.data as string) as RealtimeEventMessage;
-        if (message.type !== "event") {
-          return;
-        }
-        const payload = message.payload;
-        if (payload.kind === "status.created") {
-          const statusEvent = (payload as { kind: "status.created"; status: ApiStatus }).status;
-          setStatusItems((current) => upsertStatusEntry(current, toStatusEntry(statusEvent)));
-          return;
-        }
-        if (payload.kind === "status.deleted") {
-          const statusId = (payload as { kind: "status.deleted"; statusId: string }).statusId;
-          setStatusItems((current) => removeStatusEntry(current, statusId));
-          return;
-        }
-        if (payload.kind === "comment.created" && payload.comment.targetType === "status") {
-          const commentEvent = payload.comment;
-          setStatusItems((current) =>
-            current.map((entry) =>
-              entry.id === commentEvent.targetId
-                ? { ...entry, comments: [...(entry.comments ?? []), { author: commentEvent.authorName, text: commentEvent.body }] }
-                : entry
-            )
-          );
-        }
-      } catch {
-        return;
-      }
-    });
-    return () => {
-      socket.close();
-    };
-  }, [accessToken]);
+  }, [myStatusIds, statuses]);
 
   useEffect(() => {
     if (!activeStatus) {
@@ -614,16 +586,13 @@ export function FeedPage({
   SectionLabelComponent: FeedSectionLabelComponent;
 }) {
   const navigate = useNavigate();
-  const [feedPosts, setFeedPosts] = useState<FeedStoryRecord[]>([]);
-  const [feedStatuses, setFeedStatuses] = useState<ApiStatus[]>([]);
-  const [myStatusIds, setMyStatusIds] = useState<Set<string>>(new Set());
+  const { feedPosts, feedStatuses, myStatusIds, liveAnonymousSources, error: feedStoreError, hydrated } = useFeedStore();
   const [shareSheet, setShareSheet] = useState<ShareSheetPayload | null>(null);
   const [activeAnonymousIndex, setActiveAnonymousIndex] = useState<number | null>(null);
   const [anonymousReplyDraft, setAnonymousReplyDraft] = useState("");
   const [helpTarget, setHelpTarget] = useState<AnonymousFeedSource | null>(null);
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [pendingFeedActions, setPendingFeedActions] = useState<Record<string, boolean>>({});
-  const [liveAnonymousSources, setLiveAnonymousSources] = useState<AnonymousFeedSource[]>([]);
   const [shareFeedback, setShareFeedback] = useState("");
   const anonymousFeedPosts = feedPosts.filter((post) => post.anonymous);
 
@@ -642,28 +611,18 @@ export function FeedPage({
   };
 
   useEffect(() => {
-    let cancelled = false;
-    void Promise.all([
-      apiRequest<ApiFeedStory[]>("/stories/feed", { accessToken }),
-      apiRequest<ApiStatus[]>("/statuses"),
-      apiRequest<ApiStatus[]>("/statuses/mine", { accessToken })
-    ])
-      .then(([stories, statuses, myStatuses]) => {
-        if (!cancelled) {
-          setFeedPosts(stories.map((story) => toFeedStoryRecord(story)));
-          setFeedStatuses(statuses.filter((status) => status.anonymous && status.shareSlug));
-          setMyStatusIds(new Set(myStatuses.map((status) => status.id)));
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setShareFeedback(getErrorMessage(error, "Could not load the public feed."));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [accessToken]);
+    if (feedStoreError) {
+      setShareFeedback(feedStoreError);
+    }
+  }, [feedStoreError]);
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+
+    void revalidateFeedStore(accessToken).catch(() => undefined);
+  }, [accessToken, hydrated]);
 
   useEffect(() => {
     if (!feedPosts.length) {
@@ -684,157 +643,6 @@ export function FeedPage({
     const timer = globalThis.setTimeout(warmPosts, 180);
     return () => globalThis.clearTimeout(timer);
   }, [feedPosts]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const handleStatusUpdate = (event: Event) => {
-      const payload = (event as CustomEvent<{ type: "created" | "deleted"; status?: ApiStatus; statusId?: string }>).detail;
-      if (!payload) {
-        return;
-      }
-      if (payload.type === "created" && payload.status) {
-        setFeedStatuses((current) => {
-          const next = current.filter((status) => status.id !== payload.status!.id);
-          return payload.status!.anonymous && payload.status!.shareSlug ? [payload.status!, ...next] : next;
-        });
-        setMyStatusIds((current) => new Set([...current, payload.status!.id]));
-        return;
-      }
-      if (payload.type === "deleted" && payload.statusId) {
-        setFeedStatuses((current) => current.filter((status) => status.id !== payload.statusId));
-        setMyStatusIds((current) => {
-          const next = new Set(current);
-          next.delete(payload.statusId!);
-          return next;
-        });
-      }
-    };
-    window.addEventListener(statusUpdateEvent, handleStatusUpdate as EventListener);
-    return () => window.removeEventListener(statusUpdateEvent, handleStatusUpdate as EventListener);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined" || !accessToken) {
-      return;
-    }
-    const socket = new WebSocket(getEventsSocketUrl(accessToken));
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ type: "subscribe", channel: "feed" }));
-      socket.send(JSON.stringify({ type: "subscribe", channel: "anonymous:public" }));
-      socket.send(JSON.stringify({ type: "subscribe", channel: `user:${currentUserId}` }));
-    });
-    socket.addEventListener("message", (event) => {
-      try {
-        const message = JSON.parse(event.data as string) as RealtimeEventMessage;
-        if (message.type !== "event") {
-          return;
-        }
-        const payload = message.payload;
-        if (payload.kind === "story.reaction.updated") {
-          updateCachedStoryCounts(payload.storyId, (story) => ({
-            ...story,
-            likesCount: payload.likesCount,
-            bookmarksCount: payload.bookmarksCount,
-            reactionsCount: payload.likesCount + payload.bookmarksCount,
-            ...(message.channel === `user:${currentUserId}` && payload.action
-              ? {
-                  liked: payload.action === "like" ? !!payload.active : story.liked,
-                  bookmarked: payload.action === "bookmark" ? !!payload.active : story.bookmarked
-                }
-              : {})
-          }));
-          setFeedPosts((current) =>
-            current.map((post) =>
-              post.id === payload.storyId
-                ? {
-                    ...post,
-                    likes: payload.likesCount,
-                    saves: String(payload.bookmarksCount),
-                    ...(message.channel === `user:${currentUserId}` && payload.action
-                      ? {
-                          liked: payload.action === "like" ? !!payload.active : post.liked,
-                          bookmarked: payload.action === "bookmark" ? !!payload.active : post.bookmarked
-                        }
-                      : {})
-                  }
-                : post
-            )
-          );
-          return;
-        }
-        if (payload.kind === "story.share.updated") {
-          updateCachedStoryCounts(payload.storyId, (story) => ({
-            ...story,
-            sharesCount: payload.sharesCount
-          }));
-          setFeedPosts((current) =>
-            current.map((post) =>
-              post.id === payload.storyId
-                ? {
-                    ...post,
-                    shares: payload.sharesCount
-                  }
-                : post
-            )
-          );
-          return;
-        }
-        if (payload.kind === "status.created") {
-          const statusEvent = (payload as { kind: "status.created"; status: ApiStatus }).status;
-          setFeedStatuses((current) => {
-            const next = current.filter((status) => status.id !== statusEvent.id);
-            return statusEvent.anonymous && statusEvent.shareSlug ? [statusEvent, ...next] : next;
-          });
-          return;
-        }
-        if (payload.kind === "status.deleted") {
-          const statusId = (payload as { kind: "status.deleted"; statusId: string }).statusId;
-          setFeedStatuses((current) => current.filter((status) => status.id !== statusId));
-          setMyStatusIds((current) => {
-            const next = new Set(current);
-            next.delete(statusId);
-            return next;
-          });
-          return;
-        }
-        if (payload.kind === "status.reaction.updated") {
-          const statusEvent = payload as { kind: "status.reaction.updated"; statusId: string; likesCount: number; bookmarksCount: number };
-          setFeedStatuses((current) =>
-            current.map((status) =>
-              status.id === statusEvent.statusId
-                ? { ...status, likesCount: statusEvent.likesCount, bookmarksCount: statusEvent.bookmarksCount }
-                : status
-            )
-          );
-          return;
-        }
-        if (payload.kind === "anonymous.public.created") {
-          const anonymousEvent = payload as { kind: "anonymous.public.created"; message: { id: string; shareSlug: string; body: string; commentsCount?: number; createdAt: string } };
-          setLiveAnonymousSources((current) => [toAnonymousPublicFeedSource(anonymousEvent.message), ...current.filter((entry) => entry.id !== anonymousEvent.message.id)]);
-          return;
-        }
-        if (payload.kind === "comment.created" && payload.comment.targetType === "storyChapter") {
-          const [storyId] = payload.comment.targetId.split(":");
-          setFeedPosts((current) => current.map((post) => (post.id === storyId ? { ...post, comments: post.comments + 1 } : post)));
-          return;
-        }
-        if (payload.kind === "follow.updated") {
-          setFeedPosts((current) =>
-            current.map((post) =>
-              post.handle.replace(/^@/, "") === payload.username ? { ...post, following: payload.active } : post
-            )
-          );
-        }
-      } catch {
-        return;
-      }
-    });
-    return () => {
-      socket.close();
-    };
-  }, [accessToken, currentUserId]);
 
   const anonymousFeedSources: AnonymousFeedSource[] = [
     ...liveAnonymousSources,
@@ -885,7 +693,7 @@ export function FeedPage({
     }
     const optimisticPost = { ...targetPost, liked: !targetPost.liked, likes: Math.max(0, targetPost.likes + (targetPost.liked ? -1 : 1)) };
     setPendingFeedActions((current) => ({ ...current, [`${slug}:like`]: true }));
-    setFeedPosts((current) => current.map((post) => (post.slug === slug ? optimisticPost : post)));
+    updateFeedPosts((current) => current.map((post) => (post.slug === slug ? optimisticPost : post)));
     void apiRequest<{ storyId: string; action: "like" | "bookmark"; active: boolean; likesCount: number; bookmarksCount: number; reactionsCount: number }>(
       `/stories/${targetPost.id}/reactions`,
       { method: "POST", accessToken, body: { action: "like" } }
@@ -898,7 +706,7 @@ export function FeedPage({
           bookmarksCount: result.bookmarksCount,
           reactionsCount: result.reactionsCount
         }));
-        setFeedPosts((current) =>
+        updateFeedPosts((current) =>
           current.map((post) =>
             post.slug === slug ? { ...post, liked: result.active, likes: result.likesCount, saves: String(result.bookmarksCount) } : post
           )
@@ -906,7 +714,7 @@ export function FeedPage({
         setPendingFeedActions((current) => ({ ...current, [`${slug}:like`]: false }));
       })
       .catch((error) => {
-        setFeedPosts((current) => current.map((post) => (post.slug === slug ? targetPost : post)));
+        updateFeedPosts((current) => current.map((post) => (post.slug === slug ? targetPost : post)));
         setPendingFeedActions((current) => ({ ...current, [`${slug}:like`]: false }));
         setShareFeedback(getErrorMessage(error, "Could not update story like."));
       });
@@ -919,7 +727,7 @@ export function FeedPage({
     }
     const optimisticPost = { ...targetPost, bookmarked: !targetPost.bookmarked, saves: bumpStorySaveCount(targetPost.saves, targetPost.bookmarked ? -1 : 1) };
     setPendingFeedActions((current) => ({ ...current, [`${slug}:bookmark`]: true }));
-    setFeedPosts((current) => current.map((post) => (post.slug === slug ? optimisticPost : post)));
+    updateFeedPosts((current) => current.map((post) => (post.slug === slug ? optimisticPost : post)));
     void apiRequest<{ storyId: string; action: "like" | "bookmark"; active: boolean; likesCount: number; bookmarksCount: number; reactionsCount: number }>(
       `/stories/${targetPost.id}/reactions`,
       { method: "POST", accessToken, body: { action: "bookmark" } }
@@ -932,7 +740,7 @@ export function FeedPage({
           bookmarksCount: result.bookmarksCount,
           reactionsCount: result.reactionsCount
         }));
-        setFeedPosts((current) =>
+        updateFeedPosts((current) =>
           current.map((post) =>
             post.slug === slug ? { ...post, bookmarked: result.active, likes: result.likesCount, saves: String(result.bookmarksCount) } : post
           )
@@ -940,7 +748,7 @@ export function FeedPage({
         setPendingFeedActions((current) => ({ ...current, [`${slug}:bookmark`]: false }));
       })
       .catch((error) => {
-        setFeedPosts((current) => current.map((post) => (post.slug === slug ? targetPost : post)));
+        updateFeedPosts((current) => current.map((post) => (post.slug === slug ? targetPost : post)));
         setPendingFeedActions((current) => ({ ...current, [`${slug}:bookmark`]: false }));
         setShareFeedback(getErrorMessage(error, "Could not update bookmark."));
       });
@@ -956,7 +764,7 @@ export function FeedPage({
       ...story,
       sharesCount: result.sharesCount
     }));
-    setFeedPosts((current) =>
+    updateFeedPosts((current) =>
       current.map((post) =>
         post.id === result.storyId
           ? {
@@ -978,7 +786,7 @@ export function FeedPage({
       body: { targetType: activeAnonymousPost.targetType, targetId: activeAnonymousPost.id, body: anonymousReplyDraft.trim() }
     })
       .then((comment) => {
-        setFeedPosts((current) =>
+        updateFeedPosts((current) =>
           current.map((post) =>
             post.slug === activeAnonymousPost.slug
               ? {
@@ -1006,7 +814,7 @@ export function FeedPage({
     }
     void apiRequest<{ ok: boolean }>(`/statuses/${activeAnonymousPost.id}`, { method: "DELETE", accessToken })
       .then(() => {
-        setFeedStatuses((current) => current.filter((status) => status.id !== activeAnonymousPost.id));
+        updateFeedStatuses((current) => current.filter((status) => status.id !== activeAnonymousPost.id));
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent(statusUpdateEvent, { detail: { type: "deleted", statusId: activeAnonymousPost.id } }));
         }
@@ -1090,7 +898,13 @@ export function FeedPage({
 
   return (
     <main className="page-shell">
-      <StoryCirclesRow IconComponent={IconComponent} SectionLabelComponent={SectionLabelComponent} accessToken={accessToken} />
+      <StoryCirclesRow
+        IconComponent={IconComponent}
+        SectionLabelComponent={SectionLabelComponent}
+        accessToken={accessToken}
+        myStatusIds={myStatusIds}
+        statuses={feedStatuses}
+      />
       <section className="feed-layout feed-layout-expanded">
         <div className="feed-column">
           {feedPosts.map((post, index) => (

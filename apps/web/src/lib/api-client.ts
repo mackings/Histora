@@ -218,6 +218,69 @@ export const getEventsSocketUrl = (accessToken: string) => {
   return `${protocol}//${baseUrl.host}/ws/events?token=${encodeURIComponent(accessToken)}`;
 };
 
+export function subscribeToAppEvents(
+  accessToken: string,
+  channels: string[],
+  onMessage: (message: unknown) => void
+) {
+  let socket: WebSocket | null = null;
+  let reconnectTimer: number | null = null;
+  let closedManually = false;
+
+  const cleanupReconnectTimer = () => {
+    if (reconnectTimer !== null && typeof window !== "undefined") {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+  };
+
+  const connect = () => {
+    if (closedManually || typeof window === "undefined") {
+      return;
+    }
+
+    socket = new WebSocket(getEventsSocketUrl(accessToken));
+
+    socket.addEventListener("open", () => {
+      channels.forEach((channel) => {
+        socket?.send(JSON.stringify({ type: "subscribe", channel }));
+      });
+    });
+
+    socket.addEventListener("message", (event) => {
+      try {
+        onMessage(JSON.parse(event.data as string));
+      } catch {
+        return;
+      }
+    });
+
+    socket.addEventListener("error", () => {
+      socket?.close();
+    });
+
+    socket.addEventListener("close", () => {
+      socket = null;
+      if (closedManually || typeof window === "undefined") {
+        return;
+      }
+
+      cleanupReconnectTimer();
+      reconnectTimer = window.setTimeout(() => {
+        connect();
+      }, 1000);
+    });
+  };
+
+  connect();
+
+  return () => {
+    closedManually = true;
+    cleanupReconnectTimer();
+    socket?.close();
+  };
+}
+
 export const getCachedStory = (slug: string) => storyPrefetchCache.get(slug) ?? null;
 
 export const updateCachedStoryCounts = (

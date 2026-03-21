@@ -1,4 +1,5 @@
 import type { IncomingMessage, Server as HttpServer } from "http";
+import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 import { WebSocket, WebSocketServer } from "ws";
 
@@ -10,6 +11,7 @@ type EventEnvelope = {
   type: "event";
   channel: string;
   payload: unknown;
+  eventId: string;
 };
 
 type ClientContext = {
@@ -21,6 +23,19 @@ type ClientContext = {
 const eventClients = new Set<ClientContext>();
 const redisEventChannel = "histora:events";
 let redisSubscriptionReady = false;
+const deliveredEventIds = new Map<string, number>();
+const deliveredEventTtlMs = 60_000;
+
+function rememberDeliveredEvent(eventId: string) {
+  const now = Date.now();
+  deliveredEventIds.set(eventId, now);
+
+  for (const [key, timestamp] of deliveredEventIds) {
+    if (now - timestamp > deliveredEventTtlMs) {
+      deliveredEventIds.delete(key);
+    }
+  }
+}
 
 const isEventsUpgradeRequest = (request: IncomingMessage) => {
   const host = request.headers.host;
@@ -81,16 +96,15 @@ const canSubscribeToChannel = (channel: string, userId?: string) => {
 };
 
 export function broadcastAppEvent(channel: string, payload: unknown) {
-  const envelope: EventEnvelope = { type: "event", channel, payload };
+  const envelope: EventEnvelope = { type: "event", channel, payload, eventId: randomUUID() };
   const serialized = JSON.stringify(envelope);
 
   const redis = getRedisClient();
   if (redis) {
+    deliverEvent(serialized, envelope);
     void safeRedisConnect(redis)
       .then(() => redis.publish(redisEventChannel, serialized))
-      .catch(() => {
-        deliverEvent(serialized, envelope);
-      });
+      .catch(() => undefined);
     return;
   }
 
@@ -98,6 +112,11 @@ export function broadcastAppEvent(channel: string, payload: unknown) {
 }
 
 function deliverEvent(serialized: string, envelope: EventEnvelope) {
+  if (deliveredEventIds.has(envelope.eventId)) {
+    return;
+  }
+
+  rememberDeliveredEvent(envelope.eventId);
   const { channel } = envelope;
 
   for (const client of eventClients) {

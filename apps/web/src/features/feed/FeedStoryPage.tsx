@@ -5,8 +5,8 @@ import {
   apiRequest,
   type ApiComment,
   getCachedStory,
-  getEventsSocketUrl,
   prefetchStoryBySlug,
+  subscribeToAppEvents,
   updateCachedStoryCounts
 } from "../../lib/api-client";
 import { type FeedStoryRecord, type FeedThreadComment, type ShareSheetPayload, toFeedStoryRecord } from "./models";
@@ -268,16 +268,9 @@ export function FeedStoryPage({
       return;
     }
 
-    const socket = new WebSocket(getEventsSocketUrl(accessToken));
-
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ type: "subscribe", channel: "feed" }));
-      socket.send(JSON.stringify({ type: "subscribe", channel: `user:${currentUserId}` }));
-    });
-
-    socket.addEventListener("message", (event) => {
+    const unsubscribe = subscribeToAppEvents(accessToken, ["feed", `user:${currentUserId}`], (rawMessage) => {
       try {
-        const message = JSON.parse(event.data as string) as RealtimeEventMessage;
+        const message = rawMessage as RealtimeEventMessage;
         if (message.type !== "event" || !storySlug) {
           return;
         }
@@ -374,7 +367,7 @@ export function FeedStoryPage({
     });
 
     return () => {
-      socket.close();
+      unsubscribe();
     };
   }, [accessToken, currentUserId, story?.handle, storySlug]);
 
