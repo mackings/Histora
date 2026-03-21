@@ -5,6 +5,7 @@ import { StoryModel, type StoryDocument } from "../models/story.model.js";
 import { UserModel } from "../models/user.model.js";
 import { CommentModel } from "../models/comment.model.js";
 import { StoryInteractionModel } from "../models/story-interaction.model.js";
+import { FollowModel } from "../models/follow.model.js";
 import { readJsonCache, writeJsonCache, deleteCache, deleteCacheByPrefix } from "./cache.service.js";
 import { enqueueCounterSync } from "./queue.service.js";
 import { resolveStoredObjectUrl } from "./storage.service.js";
@@ -13,6 +14,11 @@ import { broadcastAppEvent } from "../realtime/app-events.js";
 type StoryViewerState = {
   liked: boolean;
   bookmarked: boolean;
+};
+
+type StoryAuthorState = {
+  authorVerified: boolean;
+  following: boolean;
 };
 
 function enforcePremiumLimits(input: StorySaveInput, tier: "free" | "premium") {
@@ -94,7 +100,13 @@ async function serializeStory(story: StoryDocument | null) {
     anonymous: story.anonymous,
     authorName: story.authorName,
     authorUsername: story.authorUsername,
+    authorVerified: false,
     tags: story.tags,
+    links: story.links.map((link) => ({
+      label: link.label,
+      url: link.url,
+      kind: link.kind
+    })),
     readCount: story.readCount,
     reactionsCount: story.reactionsCount,
     likesCount: story.likesCount,
@@ -107,6 +119,61 @@ async function serializeStory(story: StoryDocument | null) {
     createdAt: story.createdAt,
     updatedAt: story.updatedAt
   };
+}
+
+async function getStoryAuthorStates(
+  stories: Array<{ authorUsername: string; anonymous: boolean }>,
+  viewerId?: string
+) {
+  const authorStateByUsername = new Map<string, StoryAuthorState>();
+  const visibleAuthorUsernames = [...new Set(stories.filter((story) => !story.anonymous).map((story) => story.authorUsername))];
+
+  if (!visibleAuthorUsernames.length) {
+    return authorStateByUsername;
+  }
+
+  const authors = await UserModel.find({ username: { $in: visibleAuthorUsernames } })
+    .select("username verificationStatus")
+    .lean();
+
+  const authorIdsByUsername = new Map<string, string>();
+  for (const author of authors) {
+    authorIdsByUsername.set(author.username, String(author._id));
+    authorStateByUsername.set(author.username, {
+      authorVerified: author.verificationStatus === "verified",
+      following: false
+    });
+  }
+
+  if (!viewerId) {
+    return authorStateByUsername;
+  }
+
+  const followeeIds = [...authorIdsByUsername.values()];
+  if (!followeeIds.length) {
+    return authorStateByUsername;
+  }
+
+  const follows = await FollowModel.find({
+    followerUserId: viewerId,
+    followeeUserId: { $in: followeeIds }
+  })
+    .select("followeeUserId")
+    .lean();
+
+  const followedIdSet = new Set(follows.map((follow) => String(follow.followeeUserId)));
+  for (const [username, authorId] of authorIdsByUsername) {
+    const current = authorStateByUsername.get(username) ?? {
+      authorVerified: false,
+      following: false
+    };
+    authorStateByUsername.set(username, {
+      ...current,
+      following: followedIdSet.has(authorId)
+    });
+  }
+
+  return authorStateByUsername;
 }
 
 type SerializedStory = Awaited<ReturnType<typeof serializeStory>>;
@@ -166,6 +233,28 @@ async function attachViewerStoryState<T extends { id: string; liked?: boolean; b
   };
 }
 
+async function attachStoryAuthorState<T extends {
+  authorUsername: string;
+  anonymous: boolean;
+  authorVerified?: boolean;
+  following?: boolean;
+}>(storyPayload: T, viewerId?: string) {
+  const authorStateByUsername = await getStoryAuthorStates(
+    [{ authorUsername: storyPayload.authorUsername, anonymous: storyPayload.anonymous }],
+    viewerId
+  );
+  const authorState = authorStateByUsername.get(storyPayload.authorUsername) ?? {
+    authorVerified: false,
+    following: false
+  };
+
+  return {
+    ...storyPayload,
+    authorVerified: authorState.authorVerified,
+    following: authorState.following
+  };
+}
+
 async function attachViewerStoryStateList<T extends { id: string; liked?: boolean; bookmarked?: boolean }>(
   storyPayloads: T[],
   viewerId?: string
@@ -185,6 +274,34 @@ async function attachViewerStoryStateList<T extends { id: string; liked?: boolea
       ...story,
       liked: viewerState.liked,
       bookmarked: viewerState.bookmarked
+    };
+  });
+}
+
+async function attachStoryAuthorStateList<T extends {
+  authorUsername: string;
+  anonymous: boolean;
+  authorVerified?: boolean;
+  following?: boolean;
+}>(storyPayloads: T[], viewerId?: string) {
+  const authorStateByUsername = await getStoryAuthorStates(
+    storyPayloads.map((story) => ({
+      authorUsername: story.authorUsername,
+      anonymous: story.anonymous
+    })),
+    viewerId
+  );
+
+  return storyPayloads.map((story) => {
+    const authorState = authorStateByUsername.get(story.authorUsername) ?? {
+      authorVerified: false,
+      following: false
+    };
+
+    return {
+      ...story,
+      authorVerified: authorState.authorVerified,
+      following: authorState.following
     };
   });
 }
@@ -224,6 +341,7 @@ export async function saveStory(authorId: string, input: StorySaveInput, storyId
   story.anonymous = input.anonymous;
   story.allowedViewerIds = input.allowedViewerIds.map((viewerId) => viewerId as never);
   story.tags = input.tags;
+  story.links = input.links as never;
   story.chapters = input.chapters as never;
   story.status = input.status;
   story.slug = slug;
@@ -247,7 +365,7 @@ export async function getMyStories(authorId: string) {
   const stories = await StoryModel.find({ authorId })
     .sort({ updatedAt: -1 })
     .select(
-      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
     );
 
   const payload = await Promise.all(stories.map((story) => serializeStory(story)));
@@ -264,7 +382,7 @@ export async function getStoryBySlug(shareSlug: string, viewerId?: string) {
   const cachedStory = await readJsonCache<SerializedStory>(`stories:public:${shareSlug}`);
   if (cachedStory) {
     await StoryModel.findOneAndUpdate({ slug: shareSlug, status: "published", visibility: "public" }, { $inc: { readCount: 1 } });
-    return await attachViewerStoryState(cachedStory, viewerId);
+    return await attachStoryAuthorState(await attachViewerStoryState(cachedStory, viewerId), viewerId);
   }
 
   const story = await StoryModel.findOne({ slug: shareSlug, status: "published", visibility: "public" });
@@ -276,20 +394,20 @@ export async function getStoryBySlug(shareSlug: string, viewerId?: string) {
   await story.save();
   const payload = await serializeStory(story);
   await writeJsonCache(`stories:public:${shareSlug}`, payload, 30);
-  return await attachViewerStoryState(payload, viewerId);
+  return await attachStoryAuthorState(await attachViewerStoryState(payload, viewerId), viewerId);
 }
 
 export async function getPublicFeed(viewerId?: string) {
   const cachedFeed = await readJsonCache<PublicFeedStory[]>("stories:feed");
   if (cachedFeed) {
-    return await attachViewerStoryStateList(cachedFeed, viewerId);
+    return await attachStoryAuthorStateList(await attachViewerStoryStateList(cachedFeed, viewerId), viewerId);
   }
 
   const stories = await StoryModel.find({ visibility: "public", status: "published" })
     .sort({ createdAt: -1 })
     .limit(20)
     .select(
-      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
     );
 
   const chapterCommentCounts = await Promise.all(
@@ -310,7 +428,7 @@ export async function getPublicFeed(viewerId?: string) {
     chapterCount: story.chapters.length
   })));
   await writeJsonCache("stories:feed", payload, 30);
-  return await attachViewerStoryStateList(payload, viewerId);
+  return await attachStoryAuthorStateList(await attachViewerStoryStateList(payload, viewerId), viewerId);
 }
 
 export async function toggleStoryReaction(storyId: string, userId: string, action: "like" | "bookmark") {
@@ -343,10 +461,16 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
     StoryInteractionModel.countDocuments({ storyId, kind: "bookmark" })
   ]);
 
-  story.likesCount = likesCount;
-  story.bookmarksCount = bookmarksCount;
-  story.reactionsCount = likesCount + bookmarksCount;
-  await story.save();
+  await StoryModel.updateOne(
+    { _id: story.id },
+    {
+      $set: {
+        likesCount,
+        bookmarksCount,
+        reactionsCount: likesCount + bookmarksCount
+      }
+    }
+  );
 
   await enqueueCounterSync("story", story.id);
   await deleteCache("stories:feed");
@@ -356,27 +480,27 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
   broadcastAppEvent("feed", {
     kind: "story.reaction.updated",
     storyId: story.id,
-    likesCount: story.likesCount,
-    bookmarksCount: story.bookmarksCount,
-    reactionsCount: story.reactionsCount
+    likesCount,
+    bookmarksCount,
+    reactionsCount: likesCount + bookmarksCount
   });
   broadcastAppEvent(`user:${userId}`, {
     kind: "story.reaction.updated",
     storyId: story.id,
     action,
     active,
-    likesCount: story.likesCount,
-    bookmarksCount: story.bookmarksCount,
-    reactionsCount: story.reactionsCount
+    likesCount,
+    bookmarksCount,
+    reactionsCount: likesCount + bookmarksCount
   });
 
   return {
     storyId: story.id,
     action,
     active,
-    likesCount: story.likesCount,
-    bookmarksCount: story.bookmarksCount,
-    reactionsCount: story.reactionsCount
+    likesCount,
+    bookmarksCount,
+    reactionsCount: likesCount + bookmarksCount
   };
 }
 

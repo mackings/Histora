@@ -107,6 +107,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 export default function App() {
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
+  const [liveNotification, setLiveNotification] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -162,6 +163,31 @@ export default function App() {
 
     void syncPushAlerts(authSession.accessToken, false).catch(() => undefined);
   }, [authSession?.accessToken]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleLiveNotification = (event: Event) => {
+      const payload = (event as CustomEvent<{ title?: string; body?: string }>).detail;
+      if (payload?.body) {
+        setLiveNotification(payload.body);
+      }
+    };
+
+    window.addEventListener("histora-live-notification", handleLiveNotification as EventListener);
+    return () => window.removeEventListener("histora-live-notification", handleLiveNotification as EventListener);
+  }, []);
+
+  useEffect(() => {
+    if (!liveNotification) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setLiveNotification(""), 2600);
+    return () => window.clearTimeout(timer);
+  }, [liveNotification]);
 
   const handleAuthenticated = (session: AuthSession) => {
     setAuthSession(session);
@@ -337,6 +363,11 @@ export default function App() {
         <Route element={<AuthPage IconComponent={Icon} SectionLabelComponent={SectionLabel} mode="device" onAuthenticated={handleAuthenticated} />} path="/verify-device" />
         </Routes>
       </AppShell>
+      {liveNotification ? (
+        <div className="bottom-toast" role="status">
+          {liveNotification}
+        </div>
+      ) : null}
     </Fragment>
   );
 }

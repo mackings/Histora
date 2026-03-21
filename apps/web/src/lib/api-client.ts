@@ -59,6 +59,7 @@ export type ApiStatus = {
   body: string;
   anonymous: boolean;
   visibility: "public" | "followers" | "private";
+  authorVerified?: boolean;
   imageUrl?: string | null;
   shareSlug?: string | null;
   commentsCount: number;
@@ -79,7 +80,13 @@ export type ApiStory = {
   anonymous: boolean;
   authorName: string;
   authorUsername: string;
+  authorVerified: boolean;
   tags: string[];
+  links: Array<{
+    label: string;
+    url: string;
+    kind: "website" | "social" | "drive" | "photos";
+  }>;
   readCount: number;
   reactionsCount: number;
   likesCount: number;
@@ -88,6 +95,7 @@ export type ApiStory = {
   commentsCount: number;
   liked: boolean;
   bookmarked: boolean;
+  following: boolean;
   chapters: Array<{
     title: string;
     body: string;
@@ -120,6 +128,8 @@ export type ProfileDashboard = {
   user: AuthUser & {
     bio: string;
     location: string;
+    verificationStatus: "none" | "pending" | "verified";
+    verifiedAt?: string | null;
     profileVisibility: "public" | "selected" | "private";
     defaultStoryVisibility: "public" | "selected" | "private" | "anonymous";
     allowCommentsByDefault: boolean;
@@ -140,7 +150,13 @@ export type ProfileDashboard = {
     title: string;
     visibility: string;
     chapters: string;
+    chapterCount: number;
     reads: string;
+    readsCount: number;
+    likesCount: number;
+    bookmarksCount: number;
+    sharesCount: number;
+    commentsCount: number;
     status: string;
     updatedAt: string;
   }>;
@@ -148,6 +164,24 @@ export type ProfileDashboard = {
     title: string;
     detail: string;
     time: string;
+  }>;
+  followersList: Array<{
+    id: string;
+    fullName: string;
+    username: string;
+    avatarUrl?: string | null;
+    verified: boolean;
+    followedAt: string;
+    followingBack: boolean;
+  }>;
+  followingList: Array<{
+    id: string;
+    fullName: string;
+    username: string;
+    avatarUrl?: string | null;
+    verified: boolean;
+    followedAt: string;
+    followingBack: boolean;
   }>;
 };
 

@@ -565,7 +565,7 @@ export async function refreshAccessToken(refreshToken: string, context?: Request
 
   const nextSession = await SessionModel.create({
     userId: payload.sub,
-    tokenHash: "pending",
+    tokenHash: crypto.randomUUID(),
     family: session.family,
     parentSessionId: session._id,
     deviceKeyHash: session.deviceKeyHash ?? null,

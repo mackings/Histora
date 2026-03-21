@@ -83,6 +83,20 @@ export function StudioPreviewPage({
         <h1>{preview?.storyTitle ?? "Preview unavailable"}</h1>
         <p className="preview-summary">{preview?.storySummary ?? "Open preview from the studio to see the reader view."}</p>
 
+        {preview?.storyLinks?.length ? (
+          <section className="preview-story-links">
+            <h2>Story links</h2>
+            <div className="preview-story-link-list">
+              {preview.storyLinks.map((link) => (
+                <a className="story-link-chip" href={link.url} key={`${link.kind}-${link.url}`} rel="noreferrer" target="_blank">
+                  <span>{link.label}</span>
+                  <small>{link.kind}</small>
+                </a>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         {preview?.imageAttachments?.length ? (
           <div className="preview-gallery">
             {preview.imageAttachments.map((attachment) => (

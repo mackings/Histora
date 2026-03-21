@@ -3,8 +3,11 @@ import { Router } from "express";
 import {
   createInviteController,
   listDevicesController,
+  listFollowersController,
+  listFollowingController,
   listInvitesController,
   pushPublicKeyController,
+  requestVerificationController,
   revokePushSubscriptionController,
   savedStoriesController,
   savePushSubscriptionController,
@@ -35,6 +38,9 @@ profileRouter.get("/invites", requireAuth, listInvitesController);
 profileRouter.post("/invites", requireAuth, createInviteController);
 profileRouter.delete("/invites/:inviteId", requireAuth, revokeInviteController);
 profileRouter.get("/saved", requireAuth, savedStoriesController);
+profileRouter.post("/verification/request", requireAuth, requestVerificationController);
+profileRouter.get("/followers", requireAuth, listFollowersController);
+profileRouter.get("/following", requireAuth, listFollowingController);
 profileRouter.post("/follows/:username/toggle", requireAuth, toggleFollowController);
 
 export { profileRouter };

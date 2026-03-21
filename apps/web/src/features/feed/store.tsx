@@ -46,6 +46,11 @@ type RealtimeEventMessage =
         | {
             kind: "anonymous.public.created";
             [key: string]: unknown;
+          }
+        | {
+            kind: "notification.followed";
+            username: string;
+            fullName: string;
           };
     }
   | {
@@ -273,6 +278,27 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
         post.handle.replace(/^@/, "") === payload.username ? { ...post, following: payload.active } : post
       )
     );
+    return;
+  }
+
+  if (payload.kind === "notification.followed") {
+    if (typeof window !== "undefined") {
+      const body = `${payload.fullName} (@${payload.username}) followed your archive.`;
+      window.dispatchEvent(
+        new CustomEvent("histora-live-notification", {
+          detail: {
+            title: "New follower",
+            body
+          }
+        })
+      );
+
+      if ("Notification" in window && Notification.permission === "granted") {
+        void Promise.resolve().then(() => {
+          new Notification("New follower", { body });
+        });
+      }
+    }
   }
 };
 
@@ -298,7 +324,7 @@ async function loadFeedStore(accessToken: string, options?: { force?: boolean; s
 
   activeFeedLoad = Promise.all([
     apiRequest<ApiFeedStory[]>("/stories/feed", { accessToken }),
-    apiRequest<ApiStatus[]>("/statuses"),
+    apiRequest<ApiStatus[]>("/statuses", { accessToken }),
     apiRequest<ApiStatus[]>("/statuses/mine", { accessToken })
   ])
     .then(([stories, statuses, myStatuses]) => {

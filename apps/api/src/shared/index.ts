@@ -3,6 +3,15 @@ import { z } from "zod";
 export const visibilitySchema = z.enum(["private", "public", "selected"]);
 export const subscriptionTierSchema = z.enum(["free", "premium"]);
 export const chapterTypeSchema = z.enum(["memory", "reflection", "milestone", "anonymous"]);
+export const storyLinkSchema = z.object({
+  label: z.string().trim().min(2).max(80),
+  url: z
+    .string()
+    .trim()
+    .url()
+    .refine((value) => /^https?:\/\//i.test(value), "Use a valid http or https link."),
+  kind: z.enum(["website", "social", "drive", "photos"]).default("website")
+});
 const mediaReferenceSchema = z.string().refine(
   (value) => {
     try {
@@ -47,6 +56,7 @@ export const storySchema = z.object({
   anonymous: z.boolean().default(false),
   allowedViewerIds: z.array(z.string()).max(100).default([]),
   tags: z.array(z.string().min(2).max(24)).max(8).default([]),
+  links: z.array(storyLinkSchema).max(10).default([]),
   chapters: z.array(chapterSchema).min(1).max(50)
 });
 
@@ -234,6 +244,8 @@ export const contributorInviteSchema = z.object({
   storyId: z.string().min(1)
 });
 
+export const verificationRequestSchema = z.object({});
+
 export const deviceRenameSchema = z.object({
   label: z.string().trim().min(2).max(80)
 });
@@ -259,3 +271,4 @@ export type AnonymousHelpUnlockInput = z.infer<typeof anonymousHelpUnlockSchema>
 export type ProfileUpdateInput = z.infer<typeof profileUpdateSchema>;
 export type ContributorInviteInput = z.infer<typeof contributorInviteSchema>;
 export type DeviceRenameInput = z.infer<typeof deviceRenameSchema>;
+export type VerificationRequestInput = z.infer<typeof verificationRequestSchema>;

@@ -13,6 +13,11 @@ export interface StoryDocument extends mongoose.Document {
   anonymous: boolean;
   allowedViewerIds: mongoose.Types.ObjectId[];
   tags: string[];
+  links: Array<{
+    label: string;
+    url: string;
+    kind: "website" | "social" | "drive" | "photos";
+  }>;
   chapters: Array<{
     title: string;
     body: string;
@@ -62,6 +67,15 @@ const chapterSchema = new Schema(
   { _id: false }
 );
 
+const storyLinkSchema = new Schema(
+  {
+    label: { type: String, required: true, trim: true },
+    url: { type: String, required: true, trim: true },
+    kind: { type: String, enum: ["website", "social", "drive", "photos"], default: "website" }
+  },
+  { _id: false }
+);
+
 const storySchema = new Schema(
   {
     authorId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
@@ -76,6 +90,7 @@ const storySchema = new Schema(
     anonymous: { type: Boolean, default: false, index: true },
     allowedViewerIds: [{ type: Schema.Types.ObjectId, ref: "User" }],
     tags: [{ type: String }],
+    links: [storyLinkSchema],
     chapters: [chapterSchema],
     readCount: { type: Number, default: 0 },
     reactionsCount: { type: Number, default: 0 },

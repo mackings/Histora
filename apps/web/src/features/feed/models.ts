@@ -28,11 +28,17 @@ export type FeedStoryRecord = (typeof feedPreview)[number] & {
   slug: string;
   coverImageUrl?: string | null;
   anonymous: boolean;
+  authorVerified: boolean;
   shares: number;
   likes: number;
   liked: boolean;
   bookmarked: boolean;
   following: boolean;
+  links: Array<{
+    label: string;
+    url: string;
+    kind: "website" | "social" | "drive" | "photos";
+  }>;
   helpFee?: number;
   chapters: FeedStoryChapter[];
 };
@@ -80,11 +86,13 @@ export const toFeedStoryRecord = (story: ApiFeedStory): FeedStoryRecord => ({
   saves: String(story.bookmarksCount),
   slug: story.slug,
   anonymous: story.anonymous,
+  authorVerified: story.authorVerified,
   shares: story.sharesCount,
   likes: story.likesCount,
   liked: story.liked,
   bookmarked: story.bookmarked,
-  following: false,
+  following: story.following ?? false,
+  links: story.links ?? [],
   helpFee: story.anonymous ? 8 : undefined,
   chapters: story.chapters.map((chapter) => ({
     id: `${story.id}:${chapter.order}`,
@@ -116,11 +124,13 @@ export const buildFeedStories = (): FeedStoryRecord[] =>
     coverImageUrl: null,
     slug: slugifyStoryTitle(post.title),
     anonymous: post.visibility === "ANON",
+    authorVerified: false,
     shares: [48, 31, 66][index] ?? 12,
     likes: [428, 213, 689][index] ?? 120,
     liked: false,
     bookmarked: false,
     following: false,
+    links: [],
     helpFee: post.visibility === "ANON" ? 8 : undefined,
     chapters:
       index === 0

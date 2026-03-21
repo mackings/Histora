@@ -4,6 +4,7 @@ export type StatusEntry = {
   id: string;
   name: string;
   authorKey?: string;
+  verified?: boolean;
   meta: string;
   tone: "orange" | "ink" | "add" | "blue";
   label: string;
@@ -238,6 +239,7 @@ export const toStatusEntry = (status: ApiStatus, options?: { owned?: boolean }):
   id: status.id,
   name: status.anonymous ? "Anonymous" : `@${status.authorUsername}`,
   authorKey: status.anonymous ? undefined : status.authorUsername,
+  verified: status.anonymous ? false : Boolean(status.authorVerified),
   meta: formatAnonymousMeta(status.createdAt),
   tone: status.anonymous ? "ink" : "blue",
   label: status.anonymous ? "Advice status" : "Memory status",

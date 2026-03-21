@@ -109,12 +109,13 @@ async function revokeBrokenSubscription(endpoint: string) {
   await PushSubscriptionModel.updateOne({ endpoint, revokedAt: null }, { $set: { revokedAt: new Date() } });
 }
 
-export async function sendDeviceVerificationPush(
+async function sendUserPushNotification(
   userId: string,
   payload: {
-    email: string;
-    challengeId: string;
-    requestedDeviceName: string;
+    title: string;
+    body: string;
+    tag: string;
+    data?: Record<string, string>;
   }
 ) {
   if (!hasPushConfig()) {
@@ -132,17 +133,7 @@ export async function sendDeviceVerificationPush(
     return;
   }
 
-  const maskedEmail = payload.email.replace(/^(.{2}).+(@.+)$/, "$1***$2");
-  const body = JSON.stringify({
-    title: "Histora sign-in attempt",
-    body: `A new device wants access. The 5-digit code was sent to ${maskedEmail}.`,
-    tag: `histora-device-${payload.challengeId}`,
-    data: {
-      url: `/verify-device?email=${encodeURIComponent(payload.email)}&challengeId=${encodeURIComponent(payload.challengeId)}&deviceName=${encodeURIComponent(payload.requestedDeviceName)}`,
-      challengeId: payload.challengeId,
-      deviceName: payload.requestedDeviceName
-    }
-  });
+  const body = JSON.stringify(payload);
 
   await Promise.all(
     subscriptions.map(async (subscription) => {
@@ -158,7 +149,7 @@ export async function sendDeviceVerificationPush(
           },
           body,
           {
-            TTL: 60,
+            TTL: 120,
             urgency: "high"
           }
         );
@@ -170,4 +161,46 @@ export async function sendDeviceVerificationPush(
       }
     })
   );
+}
+
+export async function sendDeviceVerificationPush(
+  userId: string,
+  payload: {
+    email: string;
+    challengeId: string;
+    requestedDeviceName: string;
+  }
+) {
+  if (!hasPushConfig()) {
+    return;
+  }
+
+  const maskedEmail = payload.email.replace(/^(.{2}).+(@.+)$/, "$1***$2");
+  await sendUserPushNotification(userId, {
+    title: "Histora sign-in attempt",
+    body: `A new device wants access. The 5-digit code was sent to ${maskedEmail}.`,
+    tag: `histora-device-${payload.challengeId}`,
+    data: {
+      url: `/verify-device?email=${encodeURIComponent(payload.email)}&challengeId=${encodeURIComponent(payload.challengeId)}&deviceName=${encodeURIComponent(payload.requestedDeviceName)}`,
+      challengeId: payload.challengeId,
+      deviceName: payload.requestedDeviceName
+    }
+  });
+}
+
+export async function sendFollowNotificationPush(
+  userId: string,
+  payload: {
+    followerName: string;
+    followerUsername: string;
+  }
+) {
+  await sendUserPushNotification(userId, {
+    title: "New Histora follower",
+    body: `${payload.followerName} (@${payload.followerUsername}) followed your archive.`,
+    tag: `histora-follow-${payload.followerUsername}`,
+    data: {
+      url: "/profile"
+    }
+  });
 }

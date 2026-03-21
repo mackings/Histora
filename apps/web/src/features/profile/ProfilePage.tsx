@@ -2,7 +2,10 @@ import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 
 import { type ApiStory, apiRequest, type ProfileDashboard } from "../../lib/api-client";
+import { getErrorMessage } from "../../lib/browser-client";
 import { type FeedIconComponent, type FeedSectionLabelComponent } from "../feed/ui-types";
+
+type ProfileRelationship = ProfileDashboard["followersList"][number];
 
 export function ProfilePage({
   accessToken,
@@ -15,16 +18,36 @@ export function ProfilePage({
 }) {
   const [dashboard, setDashboard] = useState<ProfileDashboard | null>(null);
   const [savedStories, setSavedStories] = useState<ApiStory[]>([]);
+  const [followers, setFollowers] = useState<ProfileRelationship[]>([]);
+  const [following, setFollowing] = useState<ProfileRelationship[]>([]);
+  const [isLoadingRelationships, setIsLoadingRelationships] = useState(false);
+  const [isRequestingVerification, setIsRequestingVerification] = useState(false);
+  const [pendingRelationshipActions, setPendingRelationshipActions] = useState<Record<string, boolean>>({});
+  const [profileToast, setProfileToast] = useState("");
+
+  const loadDashboard = async () => {
+    const payload = await apiRequest<ProfileDashboard>("/profile/me", { accessToken });
+    setDashboard(payload);
+  };
+
+  const loadRelationships = async () => {
+    setIsLoadingRelationships(true);
+    try {
+      const [nextFollowers, nextFollowing] = await Promise.all([
+        apiRequest<ProfileRelationship[]>("/profile/followers", { accessToken }),
+        apiRequest<ProfileRelationship[]>("/profile/following", { accessToken })
+      ]);
+      setFollowers(nextFollowers);
+      setFollowing(nextFollowing);
+    } finally {
+      setIsLoadingRelationships(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
 
-    void apiRequest<ProfileDashboard>("/profile/me", { accessToken })
-      .then((payload) => {
-        if (!cancelled) {
-          setDashboard(payload);
-        }
-      })
+    void loadDashboard()
       .catch(() => {
         if (!cancelled) {
           setDashboard(null);
@@ -39,10 +62,77 @@ export function ProfilePage({
       })
       .catch(() => undefined);
 
+    void loadRelationships().catch(() => undefined);
+
     return () => {
       cancelled = true;
     };
   }, [accessToken]);
+
+  useEffect(() => {
+    if (!profileToast) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setProfileToast(""), 2600);
+    return () => window.clearTimeout(timer);
+  }, [profileToast]);
+
+  const requestVerification = () => {
+    if (isRequestingVerification || !dashboard) {
+      return;
+    }
+
+    setIsRequestingVerification(true);
+    void apiRequest<{ verificationStatus: "verified"; verifiedAt: string | null }>("/profile/verification/request", {
+      method: "POST",
+      accessToken,
+      body: {}
+    })
+      .then((result) => {
+        setDashboard((current) =>
+          current
+            ? {
+                ...current,
+                user: {
+                  ...current.user,
+                  verificationStatus: result.verificationStatus,
+                  verifiedAt: result.verifiedAt ?? current.user.verifiedAt ?? null
+                }
+              }
+            : current
+        );
+        setProfileToast("Blue tick activated on your account.");
+      })
+      .catch((error) => {
+        setProfileToast(getErrorMessage(error, "Could not request verification right now."));
+      })
+      .finally(() => {
+        setIsRequestingVerification(false);
+      });
+  };
+
+  const toggleRelationship = (username: string) => {
+    if (pendingRelationshipActions[username]) {
+      return;
+    }
+
+    setPendingRelationshipActions((current) => ({ ...current, [username]: true }));
+    void apiRequest<{ username: string; active: boolean }>(`/profile/follows/${username}/toggle`, {
+      method: "POST",
+      accessToken
+    })
+      .then(async (result) => {
+        await Promise.all([loadDashboard(), loadRelationships()]);
+        setProfileToast(result.active ? `You are now following @${result.username}.` : `You unfollowed @${result.username}.`);
+      })
+      .catch((error) => {
+        setProfileToast(getErrorMessage(error, "Could not update this follow relationship."));
+      })
+      .finally(() => {
+        setPendingRelationshipActions((current) => ({ ...current, [username]: false }));
+      });
+  };
 
   const profileStoriesData = dashboard?.stories ?? [];
   const profileActivityData = dashboard?.activity ?? [];
@@ -89,7 +179,7 @@ export function ProfilePage({
       <section className="topbar card profile-utility-bar">
         <div className="topbar-copy profile-topbar-copy">
           <strong>Profile archive</strong>
-          <span>Identity, privacy, and archive controls.</span>
+          <span>Identity, archive reach, followers, and story analytics.</span>
         </div>
         <div className="topbar-actions profile-topbar-actions">
           <NavLink className="ghost-action" to="/feed">
@@ -104,7 +194,10 @@ export function ProfilePage({
 
       <section className="profile-stage card">
         <div className="profile-stage-copy">
-          <h1>{profileUser?.fullName ?? "Loading profile..."}</h1>
+          <h1>
+            {profileUser?.fullName ?? "Loading profile..."}
+            {profileUser?.verificationStatus === "verified" ? <span className="verified-badge">Verified</span> : null}
+          </h1>
           <strong>{profileUser ? `@${profileUser.username}` : "@..."}</strong>
           <p>{profileUser?.bio || "Update your profile to describe your archive."}</p>
         </div>
@@ -119,6 +212,7 @@ export function ProfilePage({
             <div className="profile-header-meta">
               <span className="story-tag">{(profileUser?.profileVisibility ?? "public").toUpperCase()} PROFILE</span>
               <span className="story-tag">{(profileUser?.subscriptionTier ?? "free").toUpperCase()} PLAN</span>
+              {profileUser?.emailVerified ? <span className="story-tag">EMAIL VERIFIED</span> : <span className="story-tag">VERIFY EMAIL</span>}
             </div>
             <p>{profileUser?.location || "Add your location in profile settings."}</p>
           </div>
@@ -148,12 +242,12 @@ export function ProfilePage({
           <strong>{profileMetrics?.totalReads ?? 0}</strong>
         </article>
         <article className="profile-stat-card">
-          <span>Anonymous posts</span>
-          <strong>{profileMetrics?.anonymousPosts ?? 0}</strong>
-        </article>
-        <article className="profile-stat-card">
           <span>Followers</span>
           <strong>{profileMetrics?.followers ?? 0}</strong>
+        </article>
+        <article className="profile-stat-card">
+          <span>Following</span>
+          <strong>{profileMetrics?.following ?? 0}</strong>
         </article>
       </section>
 
@@ -162,13 +256,48 @@ export function ProfilePage({
           <article className="profile-panel card">
             <div className="profile-panel-body">
               <div className="profile-section-copy">
-                <SectionLabelComponent>PUBLISHED_STORIES</SectionLabelComponent>
-                <h2>Stories and chapter packs</h2>
+                <SectionLabelComponent>VERIFICATION_AND_REACH</SectionLabelComponent>
+                <h2>Blue tick and audience signals</h2>
+              </div>
+              <div className="profile-verification-card">
+                <strong>
+                  {profileUser?.verificationStatus === "verified"
+                    ? "Your profile is verified."
+                    : "Request an official Histora blue tick."}
+                </strong>
+                <p>
+                  {profileUser?.verificationStatus === "verified"
+                    ? "Your verified badge already shows across feed cards, story readers, and status surfaces."
+                    : profileUser?.emailVerified
+                      ? "Email verification is complete. Request the blue tick and it will show on your account immediately for now."
+                      : "Verify your email first, then request a blue tick from here."}
+                </p>
+                <button
+                  className={profileUser?.verificationStatus === "verified" ? "ghost-action" : "primary-action"}
+                  disabled={isRequestingVerification || profileUser?.verificationStatus === "verified" || !profileUser?.emailVerified}
+                  onClick={requestVerification}
+                  type="button"
+                >
+                  {profileUser?.verificationStatus === "verified"
+                    ? "BLUE TICK ACTIVE"
+                    : isRequestingVerification
+                      ? "REQUESTING..."
+                      : "REQUEST BLUE TICK"}
+                </button>
+              </div>
+            </div>
+          </article>
+
+          <article className="profile-panel card">
+            <div className="profile-panel-body">
+              <div className="profile-section-copy">
+                <SectionLabelComponent>STORY_ANALYTICS</SectionLabelComponent>
+                <h2>How each story is performing</h2>
               </div>
               <div className="profile-story-list">
                 {profileStoriesData.length ? (
                   profileStoriesData.map((story) => (
-                    <div className="profile-story-card" key={story.title}>
+                    <div className="profile-story-card" key={story.id}>
                       <div className="profile-story-head">
                         <div className="profile-story-copy">
                           <strong>{story.title}</strong>
@@ -176,14 +305,21 @@ export function ProfilePage({
                         </div>
                         <span className="story-tag">{story.visibility}</span>
                       </div>
-                      <small>{story.reads} // {story.status}</small>
+                      <div className="profile-story-metrics">
+                        <span>{story.readsCount} reads</span>
+                        <span>{story.likesCount} likes</span>
+                        <span>{story.bookmarksCount} bookmarks</span>
+                        <span>{story.sharesCount} shares</span>
+                        <span>{story.commentsCount} comments</span>
+                      </div>
+                      <small>{story.status} // updated {new Date(story.updatedAt).toLocaleDateString()}</small>
                     </div>
                   ))
                 ) : (
                   <div className="profile-story-card">
                     <div className="profile-story-copy">
-                      <strong>No published stories yet</strong>
-                      <span>Your published stories will appear here once they are live.</span>
+                      <strong>No stories yet</strong>
+                      <span>Your stories and analytics will appear here once your archive starts growing.</span>
                     </div>
                   </div>
                 )}
@@ -200,7 +336,7 @@ export function ProfilePage({
               <div className="profile-activity-list">
                 {profileActivityData.length ? (
                   profileActivityData.map((item) => (
-                    <div className="profile-activity-row" key={item.title}>
+                    <div className="profile-activity-row" key={`${item.title}-${item.detail}`}>
                       <strong>{item.title}</strong>
                       <span>{item.detail}</span>
                       <small>{item.time}</small>
@@ -209,7 +345,7 @@ export function ProfilePage({
                 ) : (
                   <div className="profile-activity-row">
                     <strong>No recent activity</strong>
-                    <span>Comments, reactions, and new archive updates will appear here.</span>
+                    <span>New followers, reactions, and archive updates will appear here.</span>
                     <small>Live</small>
                   </div>
                 )}
@@ -219,6 +355,87 @@ export function ProfilePage({
         </div>
 
         <div className="profile-secondary-column">
+          <article className="profile-panel card">
+            <div className="profile-panel-body">
+              <div className="profile-section-copy">
+                <SectionLabelComponent>FOLLOWERS</SectionLabelComponent>
+                <h2>People following your archive</h2>
+              </div>
+              <div className="profile-people-list">
+                {followers.length ? (
+                  followers.map((person) => (
+                    <div className="profile-person-row" key={`follower-${person.id}`}>
+                      <div className="profile-person-copy">
+                        <strong>
+                          {person.fullName}
+                          {person.verified ? <span className="verified-badge verified-badge-inline">Verified</span> : null}
+                        </strong>
+                        <span>@{person.username}</span>
+                        <small>Followed {new Date(person.followedAt).toLocaleDateString()}</small>
+                      </div>
+                      <button
+                        className={person.followingBack ? "ghost-action" : "primary-action"}
+                        disabled={pendingRelationshipActions[person.username]}
+                        onClick={() => toggleRelationship(person.username)}
+                        type="button"
+                      >
+                        {pendingRelationshipActions[person.username]
+                          ? "UPDATING..."
+                          : person.followingBack
+                            ? "FOLLOWING"
+                            : "FOLLOW BACK"}
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="profile-person-row profile-person-empty">
+                    <strong>No followers yet</strong>
+                    <span>When people follow you, they will appear here.</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </article>
+
+          <article className="profile-panel card">
+            <div className="profile-panel-body">
+              <div className="profile-section-copy">
+                <SectionLabelComponent>FOLLOWING</SectionLabelComponent>
+                <h2>People you are following</h2>
+              </div>
+              <div className="profile-people-list">
+                {following.length ? (
+                  following.map((person) => (
+                    <div className="profile-person-row" key={`following-${person.id}`}>
+                      <div className="profile-person-copy">
+                        <strong>
+                          {person.fullName}
+                          {person.verified ? <span className="verified-badge verified-badge-inline">Verified</span> : null}
+                        </strong>
+                        <span>@{person.username}</span>
+                        <small>Following since {new Date(person.followedAt).toLocaleDateString()}</small>
+                      </div>
+                      <button
+                        className="ghost-action"
+                        disabled={pendingRelationshipActions[person.username]}
+                        onClick={() => toggleRelationship(person.username)}
+                        type="button"
+                      >
+                        {pendingRelationshipActions[person.username] ? "UPDATING..." : "UNFOLLOW"}
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="profile-person-row profile-person-empty">
+                    <strong>You are not following anyone yet</strong>
+                    <span>Follow writers from the feed to see them here and receive their archive updates.</span>
+                  </div>
+                )}
+              </div>
+              {isLoadingRelationships ? <p className="status-feedback">Refreshing follow lists...</p> : null}
+            </div>
+          </article>
+
           <article className="profile-panel card">
             <div className="profile-panel-body">
               <div className="profile-section-copy">
@@ -232,28 +449,9 @@ export function ProfilePage({
                     <span>{item.detail}</span>
                   </div>
                 ))}
-              </div>
-            </div>
-          </article>
-
-          <article className="profile-panel card">
-            <div className="profile-panel-body">
-              <div className="profile-section-copy">
-                <SectionLabelComponent>ANON_AND_HELP</SectionLabelComponent>
-                <h2>Anonymous posts and help requests</h2>
-              </div>
-              <div className="profile-settings-list">
                 <div className="profile-setting-row">
-                  <strong>Anonymous advice posts</strong>
-                  <span>{profileMetrics?.anonymousPosts ?? 0} active anonymous messages tied to your account.</span>
-                </div>
-                <div className="profile-setting-row">
-                  <strong>Consent-fee requests</strong>
-                  <span>{profileUser?.allowHelpRequests ? "Help requests are enabled on your account." : "Help requests are disabled on your account."}</span>
-                </div>
-                <div className="profile-setting-row">
-                  <strong>Comment defaults</strong>
-                  <span>{profileUser?.allowCommentsByDefault ? "Comments are enabled by default for new stories." : "Comments are disabled by default for new stories."}</span>
+                  <strong>Follower alerts</strong>
+                  <span>Enable browser notifications on a trusted device to receive follow alerts when someone follows you.</span>
                 </div>
               </div>
             </div>
@@ -262,7 +460,7 @@ export function ProfilePage({
           <article className="profile-panel card">
             <div className="profile-panel-body">
               <div className="profile-section-copy">
-                <SectionLabelComponent>SAVED_AND_PREMIUM</SectionLabelComponent>
+                <SectionLabelComponent>SAVED_AND_PLAN</SectionLabelComponent>
                 <h2>Saved reading and plan status</h2>
               </div>
               <div className="profile-story-list">
@@ -293,6 +491,12 @@ export function ProfilePage({
           </article>
         </div>
       </section>
+
+      {profileToast ? (
+        <div className="bottom-toast" role="status">
+          {profileToast}
+        </div>
+      ) : null}
     </main>
   );
 }

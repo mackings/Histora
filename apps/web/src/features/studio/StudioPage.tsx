@@ -4,10 +4,24 @@ import { useNavigate } from "react-router-dom";
 import { type ApiStory, getEventsSocketUrl, type ProfileDashboard, type SignedReadResponse, apiRequest, uploadMediaAsset } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
 import type { FeedIconComponent, FeedSectionLabelComponent } from "../feed/ui-types";
-import { createEmptyTimelineEntry, createInitialStudioChapter, type StudioChapter, type StudioMediaAttachment, type StudioPreviewPayload, type StudioPublishPayload, type StudioTimelineEntry } from "./types";
+import {
+  createEmptyTimelineEntry,
+  createInitialStudioChapter,
+  type StudioChapter,
+  type StudioExternalLink,
+  type StudioMediaAttachment,
+  type StudioPreviewPayload,
+  type StudioPublishPayload,
+  type StudioTimelineEntry
+} from "./types";
 
 const isBlobUrl = (value: string) => value.startsWith("blob:");
 const isOwnedStorageObjectKey = (value: string) => /^users\/[^/]+\/.+/.test(value);
+const createEmptyStoryLink = (): StudioExternalLink => ({
+  label: "",
+  url: "",
+  kind: "website"
+});
 
 const getStudioAttachmentStorageUrl = (attachment: { url: string; objectKey?: string }) =>
   attachment.objectKey || (attachment.url && !isBlobUrl(attachment.url) ? attachment.url : "");
@@ -267,6 +281,7 @@ export function StudioPage({
   const [anonymous, setAnonymous] = useState(false);
   const [storyTitle, setStoryTitle] = useState("");
   const [storySummary, setStorySummary] = useState("");
+  const [storyLinks, setStoryLinks] = useState<StudioExternalLink[]>([]);
   const [chapterType, setChapterType] = useState("memory");
   const [allowComments, setAllowComments] = useState(true);
   const [chapters, setChapters] = useState<StudioChapter[]>(
@@ -279,6 +294,8 @@ export function StudioPage({
   const [chapterTitleDraft, setChapterTitleDraft] = useState("");
   const [draftHistory, setDraftHistory] = useState<string[]>(["Studio opened."]);
   const [studioNotice, setStudioNotice] = useState<null | { title: string; body: string }>(null);
+  const [storyLibrary, setStoryLibrary] = useState<ApiStory[]>([]);
+  const [isStoryLibraryLoading, setIsStoryLibraryLoading] = useState(false);
   const [timelineEntries, setTimelineEntries] = useState<StudioTimelineEntry[]>([]);
   const [activeFormats, setActiveFormats] = useState({
     bold: false,
@@ -367,6 +384,7 @@ export function StudioPage({
     allowComments,
     chapters,
     liveEditorBody,
+    storyLinks,
     storySummary,
     storyTitle,
     timelineEntries,
@@ -432,39 +450,104 @@ export function StudioPage({
     setTimelineEntries(activeChapterEntry?.timelineEntries?.length ? activeChapterEntry.timelineEntries : [createEmptyTimelineEntry()]);
   }, [activeChapterEntry]);
 
+  const loadStoryIntoStudio = (story: ApiStory, options?: { mergeRestoredDraft?: boolean }) => {
+    const fetchedChapters = story.chapters
+      .map((chapter) => normalizeFetchedStoryChapter(chapter, story.status))
+      .filter((chapter) => !isLegacySeedChapter(chapter));
+
+    const nextChapters =
+      options?.mergeRestoredDraft && restoredLocalDraftRef.current
+        ? mergeFetchedDraftChapters(chaptersRef.current, fetchedChapters)
+        : fetchedChapters;
+
+    setCurrentStoryId(story.id);
+    setStoryTitle(story.title);
+    setStorySummary(story.summary);
+    setStoryLinks(story.links ?? []);
+    setVisibility(story.visibility as "private" | "selected" | "public");
+    setAnonymous(story.anonymous);
+    setChapters(nextChapters.length ? nextChapters : [createInitialStudioChapter(0), createInitialStudioChapter(1)]);
+    setActiveChapter(nextChapters[0]?.title ?? "Chapter 1");
+    setStudioMessage(`Loaded ${story.title}.`);
+    setStudioNotice(null);
+    invalidatePreviewReview();
+    void hydrateStudioChaptersForMedia(accessToken, nextChapters)
+      .then((hydratedChapters) => {
+        setChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0), createInitialStudioChapter(1)]);
+      })
+      .catch(() => undefined);
+  };
+
+  const startFreshStory = () => {
+    const defaultVisibility =
+      currentUser.defaultStoryVisibility === "public" ||
+      currentUser.defaultStoryVisibility === "private" ||
+      currentUser.defaultStoryVisibility === "selected"
+        ? currentUser.defaultStoryVisibility
+        : "selected";
+
+    setCurrentStoryId(null);
+    setStoryTitle("");
+    setStorySummary("");
+    setStoryLinks([]);
+    setVisibility(defaultVisibility);
+    setAnonymous(currentUser.defaultStoryVisibility === "anonymous");
+    setChapterType("memory");
+    setAllowComments(currentUser.allowCommentsByDefault);
+    setChapters([createInitialStudioChapter(0), createInitialStudioChapter(1)]);
+    setActiveChapter("Chapter 1");
+    setDraftHistory((current) => ["New story started.", ...current].slice(0, 6));
+    setStudioMessage("New story ready.");
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(studioStorageKey);
+      window.sessionStorage.removeItem("histora-studio-preview");
+      window.sessionStorage.removeItem("histora-studio-publish-payload");
+      window.sessionStorage.removeItem("histora-studio-reviewed");
+    }
+    invalidatePreviewReview();
+  };
+
   useEffect(() => {
     let cancelled = false;
+    setIsStoryLibraryLoading(true);
 
     void apiRequest<ApiStory[]>("/stories/mine", { accessToken })
       .then((stories) => {
-        if (cancelled || stories.length === 0) {
+        if (cancelled) {
           return;
         }
 
-        const draft = stories.find((story) => story.status === "draft") ?? stories[0];
-        setCurrentStoryId(draft.id);
-        setStoryTitle(draft.title);
-        setStorySummary(draft.summary);
-        setVisibility(draft.visibility as "private" | "selected" | "public");
-        setAnonymous(draft.anonymous);
-        const fetchedChapters = draft.chapters
-          .map((chapter) => normalizeFetchedStoryChapter(chapter, draft.status))
-          .filter((chapter) => !isLegacySeedChapter(chapter));
+        setStoryLibrary(stories);
+        setIsStoryLibraryLoading(false);
+        if (stories.length === 0) {
+          return;
+        }
 
-        const nextChapters = restoredLocalDraftRef.current
-          ? mergeFetchedDraftChapters(chaptersRef.current, fetchedChapters)
-          : fetchedChapters;
+        let restoredStoryId: string | null = null;
+        if (typeof window !== "undefined") {
+          try {
+            const rawDraft = window.localStorage.getItem(studioStorageKey);
+            const parsedDraft = rawDraft ? JSON.parse(rawDraft) as { currentStoryId?: string | null } : null;
+            restoredStoryId = typeof parsedDraft?.currentStoryId === "string" ? parsedDraft.currentStoryId : null;
+          } catch {
+            restoredStoryId = null;
+          }
+        }
 
-        setChapters(nextChapters);
-        void hydrateStudioChaptersForMedia(accessToken, nextChapters)
-          .then((hydratedChapters) => {
-            if (!cancelled) {
-              setChapters(hydratedChapters);
-            }
-          })
-          .catch(() => undefined);
+        const selectedStory =
+          stories.find((story) => story.id === restoredStoryId) ??
+          stories.find((story) => story.status === "draft") ??
+          stories[0];
+
+        if (selectedStory) {
+          loadStoryIntoStudio(selectedStory, { mergeRestoredDraft: Boolean(restoredStoryId) });
+        }
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!cancelled) {
+          setIsStoryLibraryLoading(false);
+        }
+      });
 
     return () => {
       cancelled = true;
@@ -499,6 +582,7 @@ export function StudioPage({
         anonymous: boolean;
         storyTitle: string;
         storySummary: string;
+        storyLinks: StudioExternalLink[];
         chapterType: string;
         chapters: typeof chapters;
         timelineEntries: typeof timelineEntries;
@@ -527,6 +611,20 @@ export function StudioPage({
       }
       if (savedDraft.storySummary) {
         setStorySummary(savedDraft.storySummary);
+      }
+      if (Array.isArray(savedDraft.storyLinks)) {
+        setStoryLinks(
+          savedDraft.storyLinks.filter(
+            (link): link is StudioExternalLink =>
+              Boolean(
+                link &&
+                  typeof link === "object" &&
+                  typeof link.label === "string" &&
+                  typeof link.url === "string" &&
+                  (link.kind === "website" || link.kind === "social" || link.kind === "drive" || link.kind === "photos")
+              )
+          )
+        );
       }
       if (savedDraft.chapterType) {
         setChapterType(savedDraft.chapterType);
@@ -621,6 +719,7 @@ export function StudioPage({
       anonymous,
       storyTitle,
       storySummary,
+      storyLinks,
       chapterType,
       allowComments,
       chapters: serializableChapters,
@@ -642,6 +741,7 @@ export function StudioPage({
     liveEditorBody,
     storySummary,
     storyTitle,
+    storyLinks,
     timelineEntries,
     transcriptionLanguage,
     visibility,
@@ -1116,6 +1216,7 @@ export function StudioPage({
         anonymous,
         storyTitle,
         storySummary,
+        storyLinks,
         chapterType,
         allowComments,
         chapters: serializableChapters,
@@ -1931,38 +2032,39 @@ export function StudioPage({
   ): StudioPublishPayload["payload"] => {
     const persistedChapters = sourceChapters.filter((chapter) => isPersistableStudioChapter(chapter));
 
-    return ({
-    title: storyTitle,
-    summary: storySummary,
-    coverImageUrl: persistedChapters.flatMap((chapter) => chapter.imageAttachments)[0]?.objectKey,
-    visibility: anonymous ? "public" : visibility,
-    anonymous,
-    allowedViewerIds: [],
-    tags: [],
-    status,
-    chapters: persistedChapters.map((chapter, index) => ({
-      title: chapter.title,
-      body: chapter.body,
-      type:
-        chapter.type.toLowerCase() === "anon"
-          ? "anonymous"
-          : (chapter.type.toLowerCase() as "memory" | "reflection" | "milestone" | "anonymous"),
-      order: index + 1,
-      imageUrls: chapter.imageAttachments.map((attachment) => attachment.objectKey ?? attachment.url),
-      voiceNoteUrl: chapter.voiceNotes[0]?.objectKey ?? chapter.voiceNotes[0]?.url,
-      moments: chapter.timelineEntries
-        .filter((entry) => entry.title.trim() || entry.body.trim())
-        .map((entry) => ({
-          title: entry.title,
-          description: entry.body,
-          happenedAt: new Date(
-            `${entry.year || currentYear}-${entry.month || "01"}-${entry.day || "01"}T00:00:00.000Z`
-          ).toISOString(),
-          imageUrls: [],
-          voiceNoteUrl: undefined
-        }))
-    }))
-    });
+    return {
+      title: storyTitle,
+      summary: storySummary,
+      coverImageUrl: persistedChapters.flatMap((chapter) => chapter.imageAttachments)[0]?.objectKey,
+      visibility: anonymous ? "public" : visibility,
+      anonymous,
+      allowedViewerIds: [],
+      tags: [],
+      links: storyLinks.filter((link) => link.label.trim() && link.url.trim()),
+      status,
+      chapters: persistedChapters.map((chapter, index) => ({
+        title: chapter.title,
+        body: chapter.body,
+        type:
+          chapter.type.toLowerCase() === "anon"
+            ? "anonymous"
+            : (chapter.type.toLowerCase() as "memory" | "reflection" | "milestone" | "anonymous"),
+        order: index + 1,
+        imageUrls: chapter.imageAttachments.map((attachment) => attachment.objectKey ?? attachment.url),
+        voiceNoteUrl: chapter.voiceNotes[0]?.objectKey ?? chapter.voiceNotes[0]?.url,
+        moments: chapter.timelineEntries
+          .filter((entry) => entry.title.trim() || entry.body.trim())
+          .map((entry) => ({
+            title: entry.title,
+            description: entry.body,
+            happenedAt: new Date(
+              `${entry.year || currentYear}-${entry.month || "01"}-${entry.day || "01"}T00:00:00.000Z`
+            ).toISOString(),
+            imageUrls: [],
+            voiceNoteUrl: undefined
+          }))
+      }))
+    };
   };
 
   const validateStoryBeforePersist = () => {
@@ -2011,6 +2113,10 @@ export function StudioPage({
         });
 
     setCurrentStoryId(story.id);
+    setStoryLibrary((current) => {
+      const next = [story, ...current.filter((entry) => entry.id !== story.id)];
+      return next.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+    });
     setStudioMessage(successMessage);
     setDraftHistory((current) => [successMessage, ...current].slice(0, 6));
     return story;
@@ -2022,6 +2128,22 @@ export function StudioPage({
       updateActiveChapterMedia("timelineEntries", updated);
       return updated;
     });
+    invalidatePreviewReview();
+  };
+
+  const updateStoryLink = (index: number, field: keyof StudioExternalLink, value: string) => {
+    setStoryLinks((current) => current.map((link, linkIndex) => (linkIndex === index ? { ...link, [field]: value } : link)));
+    invalidatePreviewReview();
+  };
+
+  const addStoryLink = () => {
+    setStoryLinks((current) => [...current, createEmptyStoryLink()]);
+    setStudioMessage("Story link slot added.");
+  };
+
+  const removeStoryLink = (index: number) => {
+    setStoryLinks((current) => current.filter((_, linkIndex) => linkIndex !== index));
+    setStudioMessage("Story link removed.");
     invalidatePreviewReview();
   };
 
@@ -2091,6 +2213,7 @@ export function StudioPage({
         storyId: story.id,
         storyTitle,
         storySummary,
+        storyLinks,
         activeChapterNumberLabel,
         activeChapter: uploadedActiveChapter?.title || activeChapterLabel,
         chapterType,
@@ -2265,6 +2388,48 @@ export function StudioPage({
         <strong>{studioMessage}</strong>
         <span>{isAutoSavingDraft ? "Auto-saving..." : `${wordCount} words in active chapter`}</span>
       </section>
+      <section className="studio-panel card studio-library-panel">
+        <div className="section-head">
+          <div>
+            <SectionLabelComponent>YOUR_STORIES</SectionLabelComponent>
+            <h2>Open a story you are already writing</h2>
+          </div>
+          <button className="primary-action" onClick={startFreshStory} type="button">NEW STORY</button>
+        </div>
+        <div className="studio-library-list">
+          {isStoryLibraryLoading ? (
+            <div className="studio-library-card studio-library-empty">
+              <strong>Loading your story library...</strong>
+              <span>Checking drafts and published stories linked to this account.</span>
+            </div>
+          ) : storyLibrary.length ? (
+            storyLibrary.map((story) => (
+              <button
+                className={`studio-library-card${currentStoryId === story.id ? " studio-library-card-active" : ""}`}
+                key={story.id}
+                onClick={() => loadStoryIntoStudio(story)}
+                type="button"
+              >
+                <div className="studio-library-head">
+                  <strong>{story.title}</strong>
+                  <span className="story-tag">{story.status === "published" ? "LIVE" : "DRAFT"}</span>
+                </div>
+                <p>{story.summary}</p>
+                <div className="studio-library-meta">
+                  <span>{story.chapters.length} chapter{story.chapters.length === 1 ? "" : "s"}</span>
+                  <span>{story.visibility.toUpperCase()}</span>
+                  <span>{new Date(story.updatedAt).toLocaleDateString()}</span>
+                </div>
+              </button>
+            ))
+          ) : (
+            <div className="studio-library-card studio-library-empty">
+              <strong>No saved stories yet</strong>
+              <span>Start a new story here and it will stay available in your library once autosave begins.</span>
+            </div>
+          )}
+        </div>
+      </section>
       {studioNotice ? (
         <section className="studio-notice card studio-notice-live" role="status">
           <span className="studio-notice-badge" aria-hidden="true">
@@ -2335,6 +2500,64 @@ export function StudioPage({
                   invalidatePreviewReview();
                 }} value={storySummary} />
               </label>
+            </div>
+            <div className="studio-links-section">
+              <div className="section-head studio-links-head">
+                <div>
+                  <SectionLabelComponent>STORY_LINKS</SectionLabelComponent>
+                  <h3>Attach supporting links to this story</h3>
+                </div>
+                <button className="ghost-action" onClick={addStoryLink} type="button">ADD LINK</button>
+              </div>
+              <div className="studio-links-list">
+                {storyLinks.length ? (
+                  storyLinks.map((link, index) => (
+                    <article className="studio-link-row" key={`story-link-${index}`}>
+                      <label>
+                        Label
+                        <input
+                          onChange={(event) => updateStoryLink(index, "label", event.target.value)}
+                          placeholder="Google Drive folder"
+                          value={link.label}
+                        />
+                      </label>
+                      <label>
+                        Link type
+                        <select
+                          onChange={(event) => updateStoryLink(index, "kind", event.target.value)}
+                          value={link.kind}
+                        >
+                          <option value="website">Official site</option>
+                          <option value="social">Social account</option>
+                          <option value="drive">Drive link</option>
+                          <option value="photos">Google Photos</option>
+                        </select>
+                      </label>
+                      <label className="studio-link-url-field">
+                        URL
+                        <input
+                          onChange={(event) => updateStoryLink(index, "url", event.target.value)}
+                          placeholder="https://..."
+                          value={link.url}
+                        />
+                      </label>
+                      <button
+                        aria-label="Remove story link"
+                        className="icon-chip"
+                        onClick={() => removeStoryLink(index)}
+                        type="button"
+                      >
+                        <IconComponent className="button-icon" name="close" />
+                      </button>
+                    </article>
+                  ))
+                ) : (
+                  <div className="studio-link-row studio-link-empty">
+                    <strong>No story links yet</strong>
+                    <span>Add Google Photos, Drive folders, official websites, or social profile links readers should see beside the story.</span>
+                  </div>
+                )}
+              </div>
             </div>
           </article>
 

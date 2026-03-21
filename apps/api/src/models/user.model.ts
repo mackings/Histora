@@ -7,6 +7,9 @@ export interface UserDocument extends mongoose.Document {
   passwordHash: string;
   emailVerified: boolean;
   emailVerifiedAt?: Date | null;
+  verificationStatus: "none" | "pending" | "verified";
+  verificationRequestedAt?: Date | null;
+  verifiedAt?: Date | null;
   dateOfBirth?: Date;
   bio?: string;
   location?: string;
@@ -30,6 +33,9 @@ const userSchema = new Schema<UserDocument>(
     passwordHash: { type: String, required: true },
     emailVerified: { type: Boolean, default: false },
     emailVerifiedAt: { type: Date, default: null },
+    verificationStatus: { type: String, enum: ["none", "pending", "verified"], default: "none", index: true },
+    verificationRequestedAt: { type: Date, default: null },
+    verifiedAt: { type: Date, default: null },
     dateOfBirth: { type: Date },
     bio: { type: String, trim: true, default: "" },
     location: { type: String, trim: true, default: "" },

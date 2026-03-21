@@ -676,7 +676,10 @@ export function FeedStoryPage({
             <div className="story-reader-author-row">
               <span className="post-avatar">{story.author.slice(0, 1)}</span>
               <div>
-                <strong>{story.author}</strong>
+                <strong>
+                  {story.author}
+                  {story.authorVerified ? <span className="verified-badge verified-badge-inline">Verified</span> : null}
+                </strong>
                 <span>{story.handle}</span>
               </div>
             </div>
@@ -725,6 +728,23 @@ export function FeedStoryPage({
               </header>
 
               <div className="chapter-reader-body">
+                {story.links.length ? (
+                  <section className="chapter-content-section">
+                    <div className="chapter-section-head">
+                      <SectionLabelComponent>STORY_LINKS</SectionLabelComponent>
+                      <span>{story.links.length} attached</span>
+                    </div>
+                    <div className="feed-reader-link-grid">
+                      {story.links.map((link) => (
+                        <a className="story-link-chip" href={link.url} key={`${link.kind}-${link.url}`} rel="noreferrer" target="_blank">
+                          <span>{link.label}</span>
+                          <small>{link.kind}</small>
+                        </a>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
                 <div className="preview-rich-text chapter-reader-copy">
                   {activeChapter.body.split(/\n+/).map((paragraph, index) => (
                     <p key={`${activeChapter.id}-paragraph-${index}`}>{paragraph}</p>

@@ -11,8 +11,8 @@ import {
   toggleStatusReaction
 } from "../services/status.service.js";
 
-export const getStatusFeedController = asyncHandler(async (_request, response) => {
-  const statuses = await getStatusFeed();
+export const getStatusFeedController = asyncHandler(async (request, response) => {
+  const statuses = await getStatusFeed(request.auth?.userId);
   response.status(200).json(statuses);
 });
 

@@ -4,6 +4,7 @@ import { StatusModel } from "../models/status.model.js";
 import { StatusInteractionModel } from "../models/status-interaction.model.js";
 import { UserModel } from "../models/user.model.js";
 import { CommentModel } from "../models/comment.model.js";
+import { FollowModel } from "../models/follow.model.js";
 import { deleteCache, readJsonCache, writeJsonCache } from "./cache.service.js";
 import { enqueueCounterSync } from "./queue.service.js";
 import { AppError } from "../utils/app-error.js";
@@ -20,6 +21,7 @@ const toStatusResponse = (status: {
   body: string;
   anonymous: boolean;
   visibility: "public" | "followers" | "private";
+  authorVerified?: boolean;
   imageUrl?: string | null;
   shareSlug?: string | null;
   commentsCount: number;
@@ -34,6 +36,7 @@ const toStatusResponse = (status: {
   body: status.body,
   anonymous: status.anonymous,
   visibility: status.visibility,
+  authorVerified: status.authorVerified ?? false,
   imageUrl: status.imageUrl ?? null,
   shareSlug: status.shareSlug ?? null,
   commentsCount: status.commentsCount,
@@ -44,7 +47,7 @@ const toStatusResponse = (status: {
 });
 
 export async function createStatus(userId: string, payload: StatusCreateInput) {
-  const user = await UserModel.findById(userId).select("fullName username");
+  const user = await UserModel.findById(userId).select("fullName username verificationStatus");
 
   if (!user) {
     throw new AppError("User not found", 404);
@@ -71,13 +74,65 @@ export async function createStatus(userId: string, payload: StatusCreateInput) {
   // Broadcast a tiny event envelope so feeds can update without reloading.
   broadcastAppEvent("feed", {
     kind: "status.created",
-    status: toStatusResponse(status)
+    status: toStatusResponse({
+      ...status.toObject(),
+      authorVerified: user.verificationStatus === "verified"
+    })
   });
 
-  return toStatusResponse(status);
+  return toStatusResponse({
+    ...status.toObject(),
+    authorVerified: user.verificationStatus === "verified"
+  });
 }
 
-export async function getStatusFeed() {
+export async function getStatusFeed(viewerId?: string) {
+  if (viewerId) {
+    const followedUserIds = (
+      await FollowModel.find({ followerUserId: viewerId }).select("followeeUserId").lean()
+    ).map((follow) => follow.followeeUserId);
+
+    const feed = await StatusModel.find({
+      $and: [
+        {
+          $or: [
+            { visibility: "public" },
+            { authorId: viewerId },
+            { visibility: "followers", authorId: { $in: followedUserIds } }
+          ]
+        },
+        {
+          $or: [
+            { expiresAt: { $gt: new Date() } },
+            { createdAt: { $gt: new Date(Date.now() - statusLifetimeMs) } }
+          ]
+        }
+      ],
+    })
+      .sort({ createdAt: -1 })
+      .limit(40)
+      .select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+
+    const visibleUsernames = [...new Set(feed.filter((status) => !status.anonymous).map((status) => status.authorUsername))];
+    const verifiedUsernames = new Set(
+      (
+        await UserModel.find({
+          username: { $in: visibleUsernames },
+          verificationStatus: "verified"
+        })
+          .select("username")
+          .lean()
+      ).map((user) => user.username)
+    );
+
+    return feed.map((status) =>
+      toStatusResponse({
+        ...status.toObject(),
+        authorVerified: !status.anonymous && verifiedUsernames.has(status.authorUsername)
+      })
+    );
+  }
+
   const cachedFeed = await readJsonCache<Array<Record<string, unknown>>>("statuses:feed");
   if (cachedFeed) {
     return cachedFeed;
@@ -95,12 +150,30 @@ export async function getStatusFeed() {
     .limit(30)
     .select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
-  const response = feed.map((status) => toStatusResponse(status));
+  const visibleUsernames = [...new Set(feed.filter((status) => !status.anonymous).map((status) => status.authorUsername))];
+  const verifiedUsernames = new Set(
+    (
+      await UserModel.find({
+        username: { $in: visibleUsernames },
+        verificationStatus: "verified"
+      })
+        .select("username")
+        .lean()
+    ).map((user) => user.username)
+  );
+
+  const response = feed.map((status) =>
+    toStatusResponse({
+      ...status.toObject(),
+      authorVerified: !status.anonymous && verifiedUsernames.has(status.authorUsername)
+    })
+  );
   await writeJsonCache("statuses:feed", response, 30);
   return response;
 }
 
 export async function getMyStatuses(userId: string) {
+  const user = await UserModel.findById(userId).select("verificationStatus").lean();
   const statuses = await StatusModel.find({
     authorId: userId,
     $or: [
@@ -112,7 +185,12 @@ export async function getMyStatuses(userId: string) {
     .limit(50)
     .select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
-  return statuses.map((status) => toStatusResponse(status));
+  return statuses.map((status) =>
+    toStatusResponse({
+      ...status.toObject(),
+      authorVerified: user?.verificationStatus === "verified"
+    })
+  );
 }
 
 export async function getAnonymousStatusByShareSlug(shareSlug: string) {

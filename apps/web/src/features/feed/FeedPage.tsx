@@ -368,6 +368,7 @@ function StoryCirclesRow({
                 {group.count > 1 ? <span className="status-bubble-count">{group.count}</span> : null}
               </span>
               <strong>{circle.name}</strong>
+              {circle.verified ? <span className="verified-badge verified-badge-inline">Verified</span> : null}
               <span className="status-bubble-meta">{circle.meta}</span>
             </button>
           );})}
@@ -489,7 +490,10 @@ function StoryCirclesRow({
                   <span className="status-avatar">{activeStatus.tone === "add" ? "+" : activeStatus.name.slice(0, 1)}</span>
                 </span>
                 <div>
-                  <strong>{activeStatus.name}</strong>
+                  <strong>
+                    {activeStatus.name}
+                    {activeStatus.verified ? <span className="verified-badge verified-badge-inline">Verified</span> : null}
+                  </strong>
                   <span>{activeStatus.meta}</span>
                 </div>
               </div>
@@ -916,7 +920,10 @@ export function FeedPage({
                   <div className="post-author">
                     <span className="post-avatar">{post.author.slice(0, 1)}</span>
                     <div>
-                      <strong>{post.author}</strong>
+                      <strong>
+                        {post.author}
+                        {post.authorVerified ? <span className="verified-badge verified-badge-inline">Verified</span> : null}
+                      </strong>
                       <span>{post.handle}</span>
                     </div>
                   </div>

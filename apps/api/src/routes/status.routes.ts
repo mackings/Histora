@@ -8,13 +8,13 @@ import {
   getStatusFeedController,
   toggleStatusReactionController
 } from "../controllers/status.controller.js";
-import { requireAuth } from "../middleware/auth.middleware.js";
+import { optionalAuth, requireAuth } from "../middleware/auth.middleware.js";
 
 const statusRouter = Router();
 
 statusRouter.get("/mine", requireAuth, getMyStatusesController);
 statusRouter.get("/share/:shareSlug", getAnonymousStatusByShareSlugController);
-statusRouter.get("/", getStatusFeedController);
+statusRouter.get("/", optionalAuth, getStatusFeedController);
 statusRouter.post("/", requireAuth, createStatusController);
 statusRouter.post("/:statusId/reactions", requireAuth, toggleStatusReactionController);
 statusRouter.delete("/:statusId", requireAuth, deleteStatusController);

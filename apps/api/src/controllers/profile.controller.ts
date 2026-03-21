@@ -12,10 +12,13 @@ import {
   createContributorInvite,
   getProfileDashboard,
   listContributorInvites,
+  listFollowers,
   listSavedStories,
+  listFollowing,
   listTrustedDevices,
   listUserSessions,
   renameTrustedDevice,
+  requestVerificationBadge,
   revokeContributorInvite,
   revokeTrustedDevice,
   revokeUserSession,
@@ -117,8 +120,23 @@ export const savedStoriesController = asyncHandler(async (request, response) => 
   response.status(200).json({ stories });
 });
 
+export const requestVerificationController = asyncHandler(async (request, response) => {
+  const result = await requestVerificationBadge(request.auth!.userId);
+  response.status(200).json(result);
+});
+
 export const toggleFollowController = asyncHandler(async (request, response) => {
   const params = z.object({ username: z.string().min(1) }).parse(request.params);
   const result = await toggleFollowUser(request.auth!.userId, params.username);
   response.status(200).json(result);
+});
+
+export const listFollowersController = asyncHandler(async (request, response) => {
+  const followers = await listFollowers(request.auth!.userId);
+  response.status(200).json({ followers });
+});
+
+export const listFollowingController = asyncHandler(async (request, response) => {
+  const following = await listFollowing(request.auth!.userId);
+  response.status(200).json({ following });
 });

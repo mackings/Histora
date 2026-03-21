@@ -15,6 +15,12 @@ export type StudioTimelineEntry = {
   body: string;
 };
 
+export type StudioExternalLink = {
+  label: string;
+  url: string;
+  kind: "website" | "social" | "drive" | "photos";
+};
+
 export const createEmptyTimelineEntry = (): StudioTimelineEntry => ({
   year: "",
   month: "",
@@ -51,6 +57,7 @@ export type StudioPreviewPayload = {
   storyId?: string | null;
   storyTitle: string;
   storySummary: string;
+  storyLinks: StudioExternalLink[];
   activeChapterNumberLabel: string;
   activeChapter: string;
   chapterType: string;
@@ -78,6 +85,7 @@ export type StudioPublishPayload = {
     anonymous: boolean;
     allowedViewerIds: string[];
     tags: string[];
+    links: StudioExternalLink[];
     status: "draft" | "published";
     chapters: Array<{
       title: string;

@@ -11,6 +11,20 @@ import { AppError } from "../utils/app-error.js";
 import { listBookmarkedStories } from "./story.service.js";
 import { resolveStoredObjectUrl } from "./storage.service.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
+import { sendFollowNotificationPush } from "./push.service.js";
+
+type ProfileRelationshipUser = {
+  id: string;
+  fullName: string;
+  username: string;
+  avatarUrl: string | null;
+  verified: boolean;
+};
+
+type ProfileRelationshipEntry = ProfileRelationshipUser & {
+  followedAt: Date;
+  followingBack: boolean;
+};
 
 function formatSessionDevice(session: {
   userAgent?: string;
@@ -32,26 +46,100 @@ function formatSessionDevice(session: {
   };
 }
 
+async function buildRelationshipUserMap(userIds: string[]) {
+  if (!userIds.length) {
+    return new Map<string, ProfileRelationshipUser>();
+  }
+
+  const users = await UserModel.find({ _id: { $in: userIds } })
+    .select("fullName username avatarUrl verificationStatus")
+    .lean();
+
+  const entries = await Promise.all(
+    users.map(async (user) => {
+      const mappedUser: ProfileRelationshipUser = {
+        id: String(user._id),
+        fullName: user.fullName,
+        username: user.username,
+        avatarUrl: await resolveStoredObjectUrl(user.avatarUrl ?? null),
+        verified: user.verificationStatus === "verified"
+      };
+
+      return [mappedUser.id, mappedUser] as const;
+    })
+  );
+
+  return new Map<string, ProfileRelationshipUser>(entries);
+}
+
 export async function getProfileDashboard(userId: string) {
   const user = await UserModel.findById(userId).select(
-    "fullName username email bio location avatarUrl subscriptionTier profileVisibility defaultStoryVisibility allowCommentsByDefault allowHelpRequests hideReadCounts showAnonymousActivity"
+    "fullName username email bio location avatarUrl subscriptionTier profileVisibility defaultStoryVisibility allowCommentsByDefault allowHelpRequests hideReadCounts showAnonymousActivity verificationStatus verifiedAt emailVerified"
   );
   if (!user) {
     throw new AppError("User not found", 404);
   }
 
-  const [stories, anonymousInboxCount, anonymousSentCount, activeSessionCount, followerCount, followingCount] = await Promise.all([
+  const [
+    stories,
+    anonymousInboxCount,
+    anonymousSentCount,
+    activeSessionCount,
+    followerCount,
+    followingCount,
+    recentFollowers,
+    recentFollowing
+  ] = await Promise.all([
     StoryModel.find({ authorId: userId })
       .sort({ updatedAt: -1 })
-      .select("title visibility status readCount chapters updatedAt"),
+      .select("title visibility status readCount likesCount bookmarksCount sharesCount commentsCount chapters updatedAt"),
     AnonymousMessageModel.countDocuments({ recipientUserId: userId }),
     AnonymousMessageModel.countDocuments({ senderUserId: userId }),
     SessionModel.countDocuments({ userId, revokedAt: null, expiresAt: { $gt: new Date() } }),
     FollowModel.countDocuments({ followeeUserId: userId }),
-    FollowModel.countDocuments({ followerUserId: userId })
+    FollowModel.countDocuments({ followerUserId: userId }),
+    FollowModel.find({ followeeUserId: userId }).sort({ createdAt: -1 }).limit(12).select("followerUserId createdAt").lean(),
+    FollowModel.find({ followerUserId: userId }).sort({ createdAt: -1 }).limit(12).select("followeeUserId createdAt").lean()
   ]);
 
   const avatarUrl = await resolveStoredObjectUrl(user.avatarUrl ?? null);
+  const followerIds = recentFollowers.map((follow) => String(follow.followerUserId));
+  const followingIds = recentFollowing.map((follow) => String(follow.followeeUserId));
+  const relatedUserIds = [...new Set([...followerIds, ...followingIds])];
+  const relatedUsersById = await buildRelationshipUserMap(relatedUserIds);
+  const followingIdSet = new Set(followingIds);
+  const followersList = recentFollowers
+    .map((follow) => {
+      const follower = relatedUsersById.get(String(follow.followerUserId));
+      if (!follower) {
+        return null;
+      }
+
+      const entry: ProfileRelationshipEntry = {
+        ...follower,
+        followedAt: follow.createdAt,
+        followingBack: followingIdSet.has(follower.id)
+      };
+
+      return entry;
+    })
+    .filter((entry): entry is ProfileRelationshipEntry => entry !== null);
+  const followingList = recentFollowing
+    .map((follow) => {
+      const followee = relatedUsersById.get(String(follow.followeeUserId));
+      if (!followee) {
+        return null;
+      }
+
+      const entry: ProfileRelationshipEntry = {
+        ...followee,
+        followedAt: follow.createdAt,
+        followingBack: true
+      };
+
+      return entry;
+    })
+    .filter((entry): entry is ProfileRelationshipEntry => entry !== null);
 
   return {
     user: {
@@ -63,6 +151,9 @@ export async function getProfileDashboard(userId: string) {
       location: user.location ?? "",
       avatarUrl,
       subscriptionTier: user.subscriptionTier,
+      emailVerified: user.emailVerified,
+      verificationStatus: user.verificationStatus,
+      verifiedAt: user.verifiedAt ?? null,
       profileVisibility: user.profileVisibility,
       defaultStoryVisibility: user.defaultStoryVisibility,
       allowCommentsByDefault: user.allowCommentsByDefault,
@@ -83,11 +174,22 @@ export async function getProfileDashboard(userId: string) {
       title: story.title,
       visibility: story.visibility.toUpperCase(),
       chapters: `${story.chapters.length} chapter${story.chapters.length === 1 ? "" : "s"}`,
+      chapterCount: story.chapters.length,
       reads: `${story.readCount} reads`,
+      readsCount: story.readCount,
+      likesCount: story.likesCount,
+      bookmarksCount: story.bookmarksCount,
+      sharesCount: story.sharesCount,
+      commentsCount: story.commentsCount,
       status: story.status === "published" ? "Live" : "Draft",
       updatedAt: story.updatedAt
     })),
     activity: [
+      ...followersList.slice(0, 3).map((follower) => ({
+        title: "New follower",
+        detail: `${follower.fullName} (@${follower.username}) followed your archive.`,
+        time: "Live"
+      })),
       {
         title: "Anonymous inbox",
         detail: `${anonymousInboxCount} anonymous message${anonymousInboxCount === 1 ? "" : "s"} received.`,
@@ -103,7 +205,9 @@ export async function getProfileDashboard(userId: string) {
         detail: `${activeSessionCount} active session${activeSessionCount === 1 ? "" : "s"} on your account.`,
         time: "Live"
       }
-    ]
+    ],
+    followersList,
+    followingList
   };
 }
 
@@ -136,7 +240,7 @@ export async function updateProfile(userId: string, input: ProfileUpdateInput) {
     },
     { new: true }
   ).select(
-    "fullName username email bio location avatarUrl subscriptionTier profileVisibility defaultStoryVisibility allowCommentsByDefault allowHelpRequests hideReadCounts showAnonymousActivity"
+    "fullName username email bio location avatarUrl subscriptionTier profileVisibility defaultStoryVisibility allowCommentsByDefault allowHelpRequests hideReadCounts showAnonymousActivity emailVerified verificationStatus verifiedAt"
   );
 
   if (!user) {
@@ -164,12 +268,46 @@ export async function updateProfile(userId: string, input: ProfileUpdateInput) {
     location: user.location ?? "",
     avatarUrl,
     subscriptionTier: user.subscriptionTier,
+    emailVerified: user.emailVerified,
+    verificationStatus: user.verificationStatus,
+    verifiedAt: user.verifiedAt ?? null,
     profileVisibility: user.profileVisibility,
     defaultStoryVisibility: user.defaultStoryVisibility,
     allowCommentsByDefault: user.allowCommentsByDefault,
     allowHelpRequests: user.allowHelpRequests,
     hideReadCounts: user.hideReadCounts,
     showAnonymousActivity: user.showAnonymousActivity
+  };
+}
+
+export async function requestVerificationBadge(userId: string) {
+  const user = await UserModel.findById(userId).select(
+    "emailVerified verificationStatus verifiedAt fullName username"
+  );
+
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  if (!user.emailVerified) {
+    throw new AppError("Verify your email before requesting a blue tick.", 400);
+  }
+
+  if (user.verificationStatus === "verified") {
+    return {
+      verificationStatus: "verified" as const,
+      verifiedAt: user.verifiedAt ?? new Date()
+    };
+  }
+
+  user.verificationStatus = "verified";
+  user.verificationRequestedAt = new Date();
+  user.verifiedAt = new Date();
+  await user.save();
+
+  return {
+    verificationStatus: "verified" as const,
+    verifiedAt: user.verifiedAt
   };
 }
 
@@ -240,8 +378,14 @@ export async function listSavedStories(userId: string) {
 }
 
 export async function toggleFollowUser(followerUserId: string, username: string) {
-  const followee = await UserModel.findOne({ username: username.toLowerCase() }).select("_id username");
+  const [followee, follower] = await Promise.all([
+    UserModel.findOne({ username: username.toLowerCase() }).select("_id username fullName"),
+    UserModel.findById(followerUserId).select("username fullName")
+  ]);
   if (!followee) {
+    throw new AppError("User not found", 404);
+  }
+  if (!follower) {
     throw new AppError("User not found", 404);
   }
 
@@ -271,11 +415,89 @@ export async function toggleFollowUser(followerUserId: string, username: string)
     username: followee.username,
     active
   });
+  broadcastAppEvent(`user:${followee.id}`, {
+    kind: "followers.updated",
+    username: follower.username,
+    active
+  });
+
+  if (active) {
+    broadcastAppEvent(`user:${followee.id}`, {
+      kind: "notification.followed",
+      username: follower.username,
+      fullName: follower.fullName
+    });
+    void sendFollowNotificationPush(followee.id, {
+      followerName: follower.fullName,
+      followerUsername: follower.username
+    }).catch(() => undefined);
+  }
 
   return {
     username: followee.username,
     active
   };
+}
+
+export async function listFollowers(userId: string) {
+  const follows = await FollowModel.find({ followeeUserId: userId })
+    .sort({ createdAt: -1 })
+    .select("followerUserId createdAt")
+    .lean();
+
+  const followerIds = follows.map((follow) => String(follow.followerUserId));
+  const usersById = await buildRelationshipUserMap(followerIds);
+  const followingIds = new Set(
+    (
+      await FollowModel.find({ followerUserId: userId, followeeUserId: { $in: followerIds } })
+        .select("followeeUserId")
+        .lean()
+    ).map((follow) => String(follow.followeeUserId))
+  );
+
+  return follows
+    .map((follow) => {
+      const follower = usersById.get(String(follow.followerUserId));
+      if (!follower) {
+        return null;
+      }
+
+      const entry: ProfileRelationshipEntry = {
+        ...follower,
+        followedAt: follow.createdAt,
+        followingBack: followingIds.has(follower.id)
+      };
+
+      return entry;
+    })
+    .filter((entry): entry is ProfileRelationshipEntry => entry !== null);
+}
+
+export async function listFollowing(userId: string) {
+  const follows = await FollowModel.find({ followerUserId: userId })
+    .sort({ createdAt: -1 })
+    .select("followeeUserId createdAt")
+    .lean();
+
+  const followeeIds = follows.map((follow) => String(follow.followeeUserId));
+  const usersById = await buildRelationshipUserMap(followeeIds);
+
+  return follows
+    .map((follow) => {
+      const followee = usersById.get(String(follow.followeeUserId));
+      if (!followee) {
+        return null;
+      }
+
+      const entry: ProfileRelationshipEntry = {
+        ...followee,
+        followedAt: follow.createdAt,
+        followingBack: true
+      };
+
+      return entry;
+    })
+    .filter((entry): entry is ProfileRelationshipEntry => entry !== null);
 }
 
 export async function listUserSessions(userId: string) {
