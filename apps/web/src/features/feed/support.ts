@@ -12,6 +12,7 @@ export type StatusEntry = {
   contentBody: string;
   anonymous?: boolean;
   shareSlug?: string;
+  imageUrl?: string | null;
   owned?: boolean;
   comments?: Array<{ author: string; text: string }>;
   helpFee?: number;
@@ -40,6 +41,7 @@ export type AnonymousFeedSource = {
   slug: string;
   title: string;
   excerpt: string;
+  imageUrl?: string | null;
   meta: string;
   comments: Array<{ author: string; text: string }>;
   helpFee: number;
@@ -143,6 +145,7 @@ export const toAnonymousPublicFeedSource = (message: {
   slug: message.shareSlug,
   title: "Anonymous message",
   excerpt: message.body,
+  imageUrl: null,
   meta: formatAnonymousMeta(message.createdAt),
   comments: [],
   helpFee: 8,
@@ -221,6 +224,7 @@ export const storedAnonymousStatusToEntry = (entry: StoredAnonymousStatus): Stat
   contentBody: entry.body,
   anonymous: true,
   shareSlug: entry.shareSlug,
+  imageUrl: entry.imageUrl ?? null,
   comments: entry.comments,
   helpFee: entry.helpFee
 });
@@ -247,13 +251,13 @@ export const toStatusEntry = (status: ApiStatus, options?: { owned?: boolean }):
   contentBody: status.body,
   anonymous: status.anonymous,
   shareSlug: status.shareSlug ?? undefined,
+  imageUrl: status.imageUrl ?? null,
   owned: options?.owned ?? false,
   comments: [],
   helpFee: status.anonymous ? 8 : undefined
 });
 
 export const upsertStatusEntry = (entries: StatusEntry[], entry: StatusEntry) => {
-  const addEntry = entries.find((current) => current.tone === "add") ?? addStatusEntry;
   const existingEntry = entries.find((current) => current.id === entry.id);
   const nextEntry: StatusEntry = {
     ...existingEntry,
@@ -261,14 +265,12 @@ export const upsertStatusEntry = (entries: StatusEntry[], entry: StatusEntry) =>
     owned: entry.owned ?? existingEntry?.owned ?? false,
     comments: entry.comments ?? existingEntry?.comments ?? []
   };
-  const rest = entries.filter((current) => current.tone !== "add" && current.id !== entry.id);
-  return [addEntry, nextEntry, ...rest];
+  const rest = entries.filter((current) => current.id !== entry.id);
+  return [nextEntry, ...rest];
 };
 
 export const removeStatusEntry = (entries: StatusEntry[], statusId: string) => {
-  const addEntry = entries.find((current) => current.tone === "add") ?? addStatusEntry;
-  const rest = entries.filter((current) => current.tone !== "add" && current.id !== statusId);
-  return [addEntry, ...rest];
+  return entries.filter((current) => current.id !== statusId);
 };
 
 export type StatusBubbleGroup = {

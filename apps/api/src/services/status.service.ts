@@ -79,6 +79,13 @@ export async function createStatus(userId: string, payload: StatusCreateInput) {
       authorVerified: user.verificationStatus === "verified"
     })
   });
+  broadcastAppEvent(`user:${userId}`, {
+    kind: "status.created",
+    status: toStatusResponse({
+      ...status.toObject(),
+      authorVerified: user.verificationStatus === "verified"
+    })
+  });
 
   return toStatusResponse({
     ...status.toObject(),
@@ -286,6 +293,10 @@ export async function deleteStatus(statusId: string, userId: string) {
   });
 
   broadcastAppEvent("feed", {
+    kind: "status.deleted",
+    statusId: status.id
+  });
+  broadcastAppEvent(`user:${userId}`, {
     kind: "status.deleted",
     statusId: status.id
   });

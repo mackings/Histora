@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import feedStory from "../../assets/feed-story.svg";
-import { apiRequest, type ApiComment, type ApiStatus, prefetchStoryBySlug, updateCachedStoryCounts } from "../../lib/api-client";
+import { apiRequest, type ApiComment, type ApiStatus, prefetchStoryBySlug, updateCachedStoryCounts, uploadMediaAsset } from "../../lib/api-client";
 import { ShareSheet } from "./FeedStoryPage";
 import { buildFeedStories, type FeedStoryRecord, type ShareSheetPayload, toFeedStoryRecord } from "./models";
 import {
@@ -14,7 +14,6 @@ import {
   useFeedStore
 } from "./store";
 import {
-  addStatusEntry,
   type AnonymousFeedSource,
   bumpStorySaveCount,
   formatAnonymousMeta,
@@ -29,6 +28,16 @@ import {
   wrapCanvasText
 } from "./support";
 import { type FeedIconComponent, type FeedSectionLabelComponent } from "./ui-types";
+
+type StatusImageSelection = {
+  id: string;
+  previewUrl: string;
+  uploadedUrl: string | null;
+  fileName: string;
+  uploading: boolean;
+  uploadError: string;
+  objectUrl: string | null;
+};
 
 type RealtimeEventMessage =
   | {
@@ -97,6 +106,17 @@ const getStoryAudienceHelp = (visibility: string) => {
   return "Anyone who can see the feed can open this story.";
 };
 
+const isBlobUrl = (value: string | null | undefined) => Boolean(value?.startsWith("blob:"));
+
+const getStatusAvatarLabel = (entry: Pick<StatusEntry, "name" | "anonymous">, fallback = "S") => {
+  if (entry.anonymous) {
+    return "A";
+  }
+
+  const normalizedName = entry.name.replace(/^@/, "").trim();
+  return normalizedName.slice(0, 1).toUpperCase() || fallback;
+};
+
 function StoryCirclesRow({
   accessToken,
   statuses,
@@ -117,7 +137,6 @@ function StoryCirclesRow({
     { label: "Love", icon: "💛", emojis: ["❤️", "💙", "💜", "💞", "💫", "🌈", "✨", "🫶"] },
     { label: "Support", icon: "🙌", emojis: ["👏", "🙏", "🙌", "🤍", "💭", "🤝", "🌟", "🕊️"] }
   ];
-  const imageLibrary = ["Soft gradient card", "Journal page", "City window", "Memory board", "Polaroid frame", "Voice waveform"];
   const [activeStatusId, setActiveStatusId] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
@@ -127,40 +146,56 @@ function StoryCirclesRow({
   const [statusStyle, setStatusStyle] = useState<"plain" | "bold" | "italic">("plain");
   const [statusTone, setStatusTone] = useState<"sky" | "mint" | "peach">("sky");
   const [showEmojiLibrary, setShowEmojiLibrary] = useState(false);
-  const [showImageLibrary, setShowImageLibrary] = useState(false);
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [activeEmojiGroup, setActiveEmojiGroup] = useState("Recent");
   const [isAnonymousComposer, setIsAnonymousComposer] = useState(false);
   const [isPostingStatus, setIsPostingStatus] = useState(false);
-  const [statusItems, setStatusItems] = useState<StatusEntry[]>([addStatusEntry]);
+  const [statusItems, setStatusItems] = useState<StatusEntry[]>([]);
   const [shareFeedback, setShareFeedback] = useState("");
   const [helpRequestTarget, setHelpRequestTarget] = useState<StatusEntry | null>(null);
   const [consentAccepted, setConsentAccepted] = useState(false);
+  const [selectedStatusImage, setSelectedStatusImage] = useState<StatusImageSelection | null>(null);
+  const statusImageInputRef = useRef<HTMLInputElement | null>(null);
 
-  const statusBubbleGroups = useMemo(() => groupStatusEntries(statusItems), [statusItems]);
-  const viewableStatuses = useMemo(() => statusItems.filter((entry) => entry.tone !== "add"), [statusItems]);
+  const ownedStatusItems = useMemo(() => statusItems.filter((entry) => entry.owned), [statusItems]);
+  const otherStatusItems = useMemo(() => statusItems.filter((entry) => !entry.owned), [statusItems]);
+  const myStatusBubble = useMemo(
+    () =>
+      ownedStatusItems.length
+        ? {
+            primaryEntry: ownedStatusItems[0],
+            count: ownedStatusItems.length,
+            statusIds: ownedStatusItems.map((entry) => entry.id)
+          }
+        : null,
+    [ownedStatusItems]
+  );
+  const statusBubbleGroups = useMemo(() => groupStatusEntries(otherStatusItems), [otherStatusItems]);
+  const viewableStatuses = statusItems;
   const activeStatusIndex = activeStatusId ? viewableStatuses.findIndex((entry) => entry.id === activeStatusId) : -1;
   const activeStatus = activeStatusIndex >= 0 ? viewableStatuses[activeStatusIndex] : null;
 
   useEffect(() => {
     setStatusItems((current) => {
       const nextEntries = statuses.map((status) => toStatusEntry(status, { owned: myStatusIds.has(status.id) }));
-      const nextById = new Map(nextEntries.map((entry) => [entry.id, entry]));
       const preservedCommentMap = new Map(
         current
-          .filter((entry) => entry.tone !== "add")
           .map((entry) => [entry.id, entry.comments ?? []] as const)
       );
 
-      return [
-        addStatusEntry,
-        ...nextEntries.map((entry) => ({
+      return nextEntries.map((entry) => ({
           ...entry,
           comments: preservedCommentMap.get(entry.id) ?? entry.comments
-        }))
-      ];
+        }));
     });
   }, [myStatusIds, statuses]);
+
+  useEffect(() => {
+    return () => {
+      if (selectedStatusImage?.objectUrl && isBlobUrl(selectedStatusImage.objectUrl)) {
+        URL.revokeObjectURL(selectedStatusImage.objectUrl);
+      }
+    };
+  }, [selectedStatusImage]);
 
   useEffect(() => {
     if (!activeStatus) {
@@ -236,16 +271,27 @@ function StoryCirclesRow({
 
   const openStory = (entryId: string) => {
     const entry = statusItems.find((current) => current.id === entryId);
-    if (entry?.tone === "add") {
-      setIsComposerOpen(true);
-      setShowEmojiLibrary(false);
-      setShowImageLibrary(false);
-      setIsAnonymousComposer(false);
-      setShareFeedback("");
+    if (!entry) {
       return;
     }
     setActiveStatusId(entryId);
     setShareFeedback("");
+  };
+
+  const openComposer = () => {
+    setIsComposerOpen(true);
+    setShowEmojiLibrary(false);
+    setIsAnonymousComposer(false);
+    setShareFeedback("");
+  };
+
+  const openMyStatus = () => {
+    if (myStatusBubble?.primaryEntry) {
+      openStory(myStatusBubble.primaryEntry.id);
+      return;
+    }
+
+    openComposer();
   };
 
   const insertSnippet = (snippet: string) => {
@@ -305,15 +351,103 @@ function StoryCirclesRow({
     setShareFeedback("Anonymous status image saved to your device.");
   };
 
+  const clearSelectedStatusImage = () => {
+    setSelectedStatusImage((current) => {
+      if (current?.objectUrl && isBlobUrl(current.objectUrl)) {
+        URL.revokeObjectURL(current.objectUrl);
+      }
+      return null;
+    });
+  };
+
+  const handleStatusImageChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    const selectionId = `${Date.now()}-${file.name}`;
+    const objectUrl = URL.createObjectURL(file);
+    setShareFeedback("");
+    setSelectedStatusImage((current) => {
+      if (current?.objectUrl && isBlobUrl(current.objectUrl)) {
+        URL.revokeObjectURL(current.objectUrl);
+      }
+
+      return {
+        id: selectionId,
+        previewUrl: objectUrl,
+        uploadedUrl: null,
+        fileName: file.name,
+        uploading: true,
+        uploadError: "",
+        objectUrl
+      };
+    });
+
+    void uploadMediaAsset(accessToken, {
+      blob: file,
+      fileName: file.name,
+      contentType: file.type || "image/jpeg"
+    })
+      .then((uploaded) => {
+        setSelectedStatusImage((current) => {
+          if (!current || current.id !== selectionId) {
+            return current;
+          }
+
+          if (current.objectUrl && isBlobUrl(current.objectUrl)) {
+            URL.revokeObjectURL(current.objectUrl);
+          }
+
+          return {
+            ...current,
+            previewUrl: uploaded.readUrl,
+            uploadedUrl: uploaded.readUrl,
+            uploading: false,
+            uploadError: "",
+            objectUrl: null
+          };
+        });
+      })
+      .catch((error) => {
+        setSelectedStatusImage((current) => {
+          if (!current || current.id !== selectionId) {
+            return current;
+          }
+
+          return {
+            ...current,
+            uploading: false,
+            uploadError: getErrorMessage(error, "Could not upload the selected photo.")
+          };
+        });
+      });
+  };
+
   const postStatus = () => {
     if (isPostingStatus || !statusDraft.trim()) {
+      return;
+    }
+    if (selectedStatusImage?.uploading) {
+      setShareFeedback("Status photo is still uploading.");
+      return;
+    }
+    if (selectedStatusImage && !selectedStatusImage.uploadedUrl) {
+      setShareFeedback(selectedStatusImage.uploadError || "Status photo is not ready yet.");
       return;
     }
     setIsPostingStatus(true);
     void apiRequest<ApiStatus>("/statuses", {
       method: "POST",
       accessToken,
-      body: { body: statusDraft.trim(), anonymous: isAnonymousComposer, visibility: "public" }
+      body: {
+        body: statusDraft.trim(),
+        anonymous: isAnonymousComposer,
+        visibility: "public",
+        imageUrl: selectedStatusImage?.uploadedUrl ?? undefined
+      }
     })
       .then((createdStatus) => {
         const nextEntry = toStatusEntry(createdStatus, { owned: true });
@@ -322,7 +456,7 @@ function StoryCirclesRow({
           window.dispatchEvent(new CustomEvent(statusUpdateEvent, { detail: { type: "created", status: createdStatus } }));
         }
         setStatusDraft("Today I finally wrote the chapter I kept postponing.");
-        setSelectedImage(null);
+        clearSelectedStatusImage();
         setIsComposerOpen(false);
         setIsAnonymousComposer(false);
         setShareFeedback(createdStatus.anonymous ? "Anonymous status posted." : "Status posted.");
@@ -376,14 +510,45 @@ function StoryCirclesRow({
           <span aria-label="Scroll sideways" className="section-meta">↔</span>
         </div>
         <div className="status-scroll">
+          <div className="status-bubble-shell my-status-bubble-shell">
+            <button className={`status-bubble my-status-bubble ${myStatusBubble ? "" : "status-bubble-empty"}`} onClick={openMyStatus} type="button">
+              <span className="status-ring-shell">
+                <span className={`status-ring ${myStatusBubble ? `tone-${myStatusBubble.primaryEntry.tone}` : "tone-blue"} my-status-ring`}>
+                  {myStatusBubble?.primaryEntry.imageUrl ? (
+                    <img alt="" className="status-avatar-image" src={myStatusBubble.primaryEntry.imageUrl} />
+                  ) : (
+                    <span className="status-avatar">{myStatusBubble?.primaryEntry ? getStatusAvatarLabel(myStatusBubble.primaryEntry, "Y") : "Y"}</span>
+                  )}
+                </span>
+                {myStatusBubble && myStatusBubble.count > 1 ? <span className="status-bubble-count">{myStatusBubble.count}</span> : null}
+              </span>
+              <strong>My status</strong>
+              <span className="status-bubble-meta">{myStatusBubble?.primaryEntry.meta ?? "Tap to add status"}</span>
+            </button>
+            <button
+              aria-label="Add a new status"
+              className="status-bubble-add-button"
+              onClick={(event) => {
+                event.stopPropagation();
+                openComposer();
+              }}
+              type="button"
+            >
+              +
+            </button>
+          </div>
           {statusBubbleGroups.map((group) => {
             const circle = group.primaryEntry;
-            const isSeen = group.primaryEntry.tone !== "add" && group.statusIds.every((statusId) => seenStatusIds.includes(statusId));
+            const isSeen = group.statusIds.every((statusId) => seenStatusIds.includes(statusId));
             return (
             <button className={`status-bubble ${isSeen ? "status-bubble-seen" : ""}`} key={group.key} onClick={() => openStory(circle.id)} type="button">
               <span className="status-ring-shell">
                 <span className={`status-ring tone-${circle.tone}`}>
-                  <span className="status-avatar">{circle.tone === "add" ? "+" : circle.name.slice(0, 1)}</span>
+                  {circle.imageUrl ? (
+                    <img alt="" className="status-avatar-image" src={circle.imageUrl} />
+                  ) : (
+                    <span className="status-avatar">{getStatusAvatarLabel(circle)}</span>
+                  )}
                 </span>
                 {group.count > 1 ? <span className="status-bubble-count">{group.count}</span> : null}
               </span>
@@ -398,10 +563,11 @@ function StoryCirclesRow({
       {isComposerOpen ? (
         <div className="status-viewer-backdrop" onClick={() => setIsComposerOpen(false)} role="presentation">
           <article className="status-composer card" onClick={(event) => event.stopPropagation()}>
+            <input accept="image/png,image/jpeg,image/webp,image/gif" hidden onChange={handleStatusImageChange} ref={statusImageInputRef} type="file" />
             <div className="status-composer-top">
               <div>
                 <SectionLabelComponent>YOUR_STATUS</SectionLabelComponent>
-                <h3>Write a memory status</h3>
+                <h3>Post a WhatsApp-style memory status</h3>
               </div>
               <button aria-label="Close status composer" className="icon-chip" onClick={() => setIsComposerOpen(false)} type="button">
                 <IconComponent className="button-icon" name="close" />
@@ -412,7 +578,7 @@ function StoryCirclesRow({
               <button className={statusStyle === "italic" ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => setStatusStyle("italic")} type="button">I</button>
               <button className={statusStyle === "plain" ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => setStatusStyle("plain")} type="button">Aa</button>
               <button className={showEmojiLibrary ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => setShowEmojiLibrary((current) => !current)} type="button">Emoji</button>
-              <button className={showImageLibrary ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => setShowImageLibrary((current) => !current)} type="button">Photo</button>
+              <button className={selectedStatusImage ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => statusImageInputRef.current?.click()} type="button">Photo</button>
               <button className="composer-chip" onClick={() => insertSnippet("[Voice]")} type="button">Voice</button>
               <button className="composer-chip" onClick={() => insertSnippet("@closefriends")} type="button">Mention</button>
             </div>
@@ -448,26 +614,37 @@ function StoryCirclesRow({
                 </div>
               </div>
             ) : null}
-            {showImageLibrary ? (
+            {selectedStatusImage ? (
               <div className="picker-panel">
                 <div className="picker-panel-head">
-                  <strong>Image picker</strong>
-                  <span>Select a status background</span>
+                  <strong>Status photo</strong>
+                  <span>{selectedStatusImage.uploading ? "Uploading to Histora media..." : "Ready to post"}</span>
                 </div>
-                <div className="image-library">
-                  {imageLibrary.map((imageName, index) => (
-                    <button className={selectedImage === imageName ? "image-tile active-image-tile" : "image-tile"} key={imageName} onClick={() => setSelectedImage(imageName)} type="button">
-                      <span className={`image-tile-preview image-preview-${(index % 3) + 1}`} />
-                      <strong>{imageName}</strong>
-                    </button>
-                  ))}
+                <div className="status-photo-card">
+                  <img alt="Selected status" className="status-photo-preview" src={selectedStatusImage.previewUrl} />
+                  <div className="status-photo-meta">
+                    <strong>{selectedStatusImage.fileName}</strong>
+                    <span>{selectedStatusImage.uploadError || (selectedStatusImage.uploading ? "Optimizing and uploading..." : "Attached to this status")}</span>
+                  </div>
+                  <button className="ghost-action" onClick={clearSelectedStatusImage} type="button">Remove photo</button>
                 </div>
               </div>
             ) : null}
             <textarea className="status-compose-input" onChange={(event) => setStatusDraft(event.target.value)} placeholder="Write your status..." value={statusDraft} />
-            <div className={`status-compose-preview tone-preview-${statusTone} style-preview-${statusStyle}`}>
+            <div
+              className={`status-compose-preview tone-preview-${statusTone} style-preview-${statusStyle}${selectedStatusImage ? " status-compose-preview-with-image" : ""}`}
+              style={
+                selectedStatusImage
+                  ? {
+                      backgroundImage: `linear-gradient(180deg, rgba(15, 23, 42, 0.18), rgba(15, 23, 42, 0.72)), url(${selectedStatusImage.previewUrl})`,
+                      backgroundSize: "cover",
+                      backgroundPosition: "center"
+                    }
+                  : undefined
+              }
+            >
               <span className="story-tag">{isAnonymousComposer ? "Anonymous preview" : "Preview"}</span>
-              {selectedImage ? <span className="preview-asset-tag">Background: {selectedImage}</span> : null}
+              {selectedStatusImage ? <span className="preview-asset-tag">Photo status</span> : null}
               <p>{statusDraft}</p>
             </div>
             {isAnonymousComposer ? (
@@ -494,7 +671,7 @@ function StoryCirclesRow({
                 <IconComponent className="button-icon" name="close" />
               </button>
             </div>
-            <div className="story-progress-row">
+            <div className="story-progress-row" style={{ gridTemplateColumns: `repeat(${Math.max(viewableStatuses.length, 1)}, minmax(0, 1fr))` }}>
               {viewableStatuses.map((circle, index) => (
                 <span className="story-progress-track" key={circle.id}>
                   <span
@@ -507,11 +684,15 @@ function StoryCirclesRow({
             <div className="story-viewer-top">
               <div className="story-viewer-author">
                 <span className={`status-ring tone-${activeStatus.tone}`}>
-                  <span className="status-avatar">{activeStatus.tone === "add" ? "+" : activeStatus.name.slice(0, 1)}</span>
+                  {activeStatus.imageUrl ? (
+                    <img alt="" className="status-avatar-image" src={activeStatus.imageUrl} />
+                  ) : (
+                    <span className="status-avatar">{getStatusAvatarLabel(activeStatus)}</span>
+                  )}
                 </span>
                 <div>
                   <strong>
-                    {activeStatus.name}
+                    {activeStatus.owned ? "My status" : activeStatus.name}
                     {activeStatus.verified ? <span className="verified-badge verified-badge-inline">Verified</span> : null}
                   </strong>
                   <span>{activeStatus.meta}</span>
@@ -537,11 +718,16 @@ function StoryCirclesRow({
               <button aria-label="Previous story" className="story-nav-zone story-nav-left" onClick={goToPrevious} type="button" />
               <button aria-label="Next story" className="story-nav-zone story-nav-right" onClick={goToNext} type="button" />
               <div className="story-stage-card">
+                {activeStatus.imageUrl ? (
+                  <div className="status-stage-image-frame">
+                    <img alt="" className="status-stage-image" src={activeStatus.imageUrl} />
+                  </div>
+                ) : null}
                 <span className="story-tag">{activeStatus.label}</span>
                 <h3>{activeStatus.contentTitle}</h3>
                 <p>{activeStatus.contentBody}</p>
                 <div className="story-stage-metrics">
-                  <span>Memory status</span>
+                  <span>{activeStatus.imageUrl ? "Photo status" : "Memory status"}</span>
                   <strong>{activeStatus.meta}</strong>
                 </div>
                 <div className="story-react-row">
@@ -677,6 +863,7 @@ export function FeedPage({
       slug: status.shareSlug ?? status.id,
       title: "Anonymous status",
       excerpt: status.body,
+      imageUrl: status.imageUrl ?? null,
       meta: formatAnonymousMeta(status.createdAt),
       comments: [],
       helpFee: 8,
@@ -690,6 +877,7 @@ export function FeedPage({
       slug: post.slug,
       title: post.title,
       excerpt: post.excerpt,
+      imageUrl: post.coverImageUrl ?? null,
       meta: `${post.reads} reads`,
       comments: (post.chapters[0]?.comments ?? []).map((comment) => ({ author: comment.author, text: comment.text })),
       helpFee: post.helpFee ?? 8,
@@ -1053,6 +1241,11 @@ export function FeedPage({
               </div>
             </div>
             <div className="story-stage-card">
+              {activeAnonymousPost.imageUrl ? (
+                <div className="status-stage-image-frame">
+                  <img alt="" className="status-stage-image" src={activeAnonymousPost.imageUrl} />
+                </div>
+              ) : null}
               <span className="story-tag">Anonymous advice</span>
               <h3>{activeAnonymousPost.title}</h3>
               <p>{activeAnonymousPost.excerpt}</p>

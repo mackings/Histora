@@ -1,7 +1,10 @@
 const { chromium } = require("playwright");
 
 const baseUrl = process.env.HISTORA_WEB_URL || "http://localhost:3000";
-const usernameLabel = "@studioe2e";
+const imageBuffer = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnRkQAAAABJRU5ErkJggg==",
+  "base64"
+);
 
 async function signIn(page) {
   await page.goto(`${baseUrl}/signin`, { waitUntil: "networkidle" });
@@ -22,60 +25,70 @@ async function signIn(page) {
   await page.waitForLoadState("networkidle");
 }
 
-async function getUserStatusBubble(page) {
-  return page.locator(".status-scroll .status-bubble").filter({ hasText: usernameLabel }).first();
+function getMyStatusBubble(page) {
+  return page.locator(".my-status-bubble-shell .my-status-bubble").first();
 }
 
-async function getUserStatusBubbleCount(page) {
-  return page.locator(".status-scroll .status-bubble").filter({ hasText: usernameLabel }).count();
-}
-
-async function getUserStatusBadgeValue(page) {
-  const bubbleCount = await getUserStatusBubbleCount(page);
-  if (!bubbleCount) {
-    return 0;
-  }
-  const bubble = await getUserStatusBubble(page);
+async function getMyStatusBadgeValue(page) {
+  const bubble = getMyStatusBubble(page);
   const badge = bubble.locator(".status-bubble-count");
-  const badgeCount = await badge.count();
-  if (!badgeCount) {
-    return 1;
+  if (!(await badge.count())) {
+    return (await bubble.count()) ? 1 : 0;
   }
+
   const text = (await badge.first().innerText().catch(() => "")) || "";
   const value = Number(text);
   return Number.isFinite(value) && value > 0 ? value : 1;
 }
 
-async function waitForSingleBubbleWithCount(page, minimumCount, timeout = 7000) {
+async function getDuplicatedOwnBubbleCount(page) {
+  return page
+    .locator(".status-scroll > .status-bubble")
+    .filter({ hasText: "@studioe2e" })
+    .count();
+}
+
+async function waitForMyStatusCount(page, expectedMinimum, timeout = 9000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeout) {
-    const bubbleCount = await getUserStatusBubbleCount(page);
-    const badgeValue = await getUserStatusBadgeValue(page);
-    if (bubbleCount === 1 && badgeValue >= minimumCount) {
-      return { bubbleCount, badgeValue, latencyMs: Date.now() - startedAt };
+    const badgeValue = await getMyStatusBadgeValue(page);
+    const duplicateOwnBubbles = await getDuplicatedOwnBubbleCount(page);
+    if (badgeValue >= expectedMinimum && duplicateOwnBubbles === 0) {
+      return { badgeValue, duplicateOwnBubbles, latencyMs: Date.now() - startedAt };
     }
     await page.waitForTimeout(150);
   }
 
   return {
-    bubbleCount: await getUserStatusBubbleCount(page),
-    badgeValue: await getUserStatusBadgeValue(page),
+    badgeValue: await getMyStatusBadgeValue(page),
+    duplicateOwnBubbles: await getDuplicatedOwnBubbleCount(page),
     latencyMs: null
   };
 }
 
-async function postStatus(page, text) {
-  const addBubble = page.locator(".status-scroll .status-bubble").first();
-  await addBubble.waitFor({ state: "visible", timeout: 20000 });
-  await addBubble.click();
+async function postStatusWithImage(page, text) {
+  await getMyStatusBubble(page).waitFor({ state: "visible", timeout: 20000 });
+  await page.locator(".my-status-bubble-shell .status-bubble-add-button").click();
   await page.locator(".status-compose-input").fill(text);
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "status-photo.png",
+    mimeType: "image/png",
+    buffer: imageBuffer
+  });
+  await page.locator(".status-photo-preview").waitFor({ state: "visible", timeout: 10000 });
+  await page.getByText("Attached to this status").waitFor({ state: "visible", timeout: 20000 });
   await page.getByRole("button", { name: /^Post status$/i }).click();
-  await page.waitForTimeout(800);
-  const closeButton = page.locator(".story-viewer-close-row button").first();
-  if (await closeButton.count()) {
-    await closeButton.click().catch(() => undefined);
-    await page.waitForTimeout(300);
-  }
+  await page.locator(".status-stage-image").waitFor({ state: "visible", timeout: 20000 });
+}
+
+async function openMyStatusAndRead(page) {
+  await getMyStatusBubble(page).click();
+  await page.locator(".status-stage-image").waitFor({ state: "visible", timeout: 15000 });
+  return {
+    authorLabel: (await page.locator(".story-viewer-author strong").first().innerText()).trim(),
+    imageVisible: await page.locator(".status-stage-image").first().isVisible(),
+    stageTag: (await page.locator(".story-stage-card .story-tag").first().innerText()).trim()
+  };
 }
 
 async function run() {
@@ -89,31 +102,31 @@ async function run() {
 
   await pageA.goto(`${baseUrl}/feed`, { waitUntil: "networkidle" });
   await pageB.goto(`${baseUrl}/feed`, { waitUntil: "networkidle" });
-  await pageA.locator(".status-scroll .status-bubble").first().waitFor({ state: "visible", timeout: 20000 });
-  await pageB.locator(".status-scroll .status-bubble").first().waitFor({ state: "visible", timeout: 20000 });
-  await pageA.waitForTimeout(1200);
-  await pageB.waitForTimeout(1200);
+  await getMyStatusBubble(pageA).waitFor({ state: "visible", timeout: 20000 });
+  await getMyStatusBubble(pageB).waitFor({ state: "visible", timeout: 20000 });
 
-  const baselineBubbleCountA = await getUserStatusBubbleCount(pageA);
-  const baselineBadgeValueA = await getUserStatusBadgeValue(pageA);
-  const baselineBubbleCountB = await getUserStatusBubbleCount(pageB);
-  const baselineBadgeValueB = await getUserStatusBadgeValue(pageB);
+  const baselineBadgeValueA = await getMyStatusBadgeValue(pageA);
+  const baselineBadgeValueB = await getMyStatusBadgeValue(pageB);
+  const baselineDuplicatesA = await getDuplicatedOwnBubbleCount(pageA);
+  const baselineDuplicatesB = await getDuplicatedOwnBubbleCount(pageB);
 
-  const statusOne = `Realtime grouped status one ${Date.now()}`;
-  await postStatus(pageA, statusOne);
+  const statusText = `WhatsApp style status image regression ${Date.now()}`;
+  await postStatusWithImage(pageA, statusText);
 
-  const pageAResult = await waitForSingleBubbleWithCount(pageA, baselineBadgeValueA + 1);
-  const pageBResult = await waitForSingleBubbleWithCount(pageB, baselineBadgeValueB + 1);
+  const pageAResult = await waitForMyStatusCount(pageA, baselineBadgeValueA + 1);
+  const pageBResult = await waitForMyStatusCount(pageB, baselineBadgeValueB + 1);
+  const pageBViewer = await openMyStatusAndRead(pageB);
 
   console.log(
     JSON.stringify(
       {
-        baselineBubbleCountA,
         baselineBadgeValueA,
-        baselineBubbleCountB,
         baselineBadgeValueB,
+        baselineDuplicatesA,
+        baselineDuplicatesB,
         pageAResult,
-        pageBResult
+        pageBResult,
+        pageBViewer
       },
       null,
       2

@@ -224,17 +224,22 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
       const next = current.filter((status) => status.id !== statusEvent.id);
       return [statusEvent, ...next];
     });
+    if (message.channel === `user:${currentUserId}`) {
+      updateMyStatusIds((current) => new Set([...current, statusEvent.id]));
+    }
     return;
   }
 
   if (payload.kind === "status.deleted") {
     const statusId = (payload as { kind: "status.deleted"; statusId: string }).statusId;
     updateFeedStatuses((current) => current.filter((status) => status.id !== statusId));
-    updateMyStatusIds((current) => {
-      const next = new Set(current);
-      next.delete(statusId);
-      return next;
-    });
+    if (message.channel === `user:${currentUserId}`) {
+      updateMyStatusIds((current) => {
+        const next = new Set(current);
+        next.delete(statusId);
+        return next;
+      });
+    }
     return;
   }
 
