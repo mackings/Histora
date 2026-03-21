@@ -55,6 +55,26 @@ const getErrorMessage = (error: unknown, fallback: string) =>
 const bumpStorySaveCount = (value: string, delta: number) =>
   String(Math.max(0, Number.parseInt(value, 10) + delta || 0));
 
+const getStoryAudienceLabel = (visibility: string) => {
+  if (visibility === "PRIVATE") {
+    return "ONLY YOU";
+  }
+  if (visibility === "SELECTED") {
+    return "SELECTED READERS";
+  }
+  return visibility;
+};
+
+const getStoryAudienceHelp = (visibility: string) => {
+  if (visibility === "PRIVATE") {
+    return "Only you can open this story.";
+  }
+  if (visibility === "SELECTED") {
+    return "Only selected readers and you can open this story.";
+  }
+  return "This story is open to the public feed.";
+};
+
 export function ShareSheet({
   share,
   onClose,
@@ -694,7 +714,7 @@ export function FeedStoryPage({
             </div>
             <div className="story-reader-meta-list">
               <span>{`Chapter ${activeChapterNumber} of ${story.chapters.length}`}</span>
-              <span>{story.visibility}</span>
+              <span>{getStoryAudienceLabel(story.visibility)}</span>
               <span>{story.reads} reads</span>
             </div>
           </div>
@@ -732,8 +752,9 @@ export function FeedStoryPage({
                   <SectionLabelComponent>{`CHAPTER_${activeChapterNumber}`}</SectionLabelComponent>
                   <h2>{activeChapter.title}</h2>
                   <p className="chapter-reader-summary">{activeChapter.summary}</p>
+                  <p className="section-meta">{getStoryAudienceHelp(story.visibility)}</p>
                 </div>
-                <span className="story-tag">{story.visibility}</span>
+                <span className="story-tag">{getStoryAudienceLabel(story.visibility)}</span>
               </header>
 
               <div className="chapter-reader-body">
@@ -893,7 +914,7 @@ export function FeedStoryPage({
             <div className="rail-stack">
               <div className="rail-row">
                 <strong>Visibility</strong>
-                <span>{story.visibility}</span>
+                <span>{getStoryAudienceLabel(story.visibility)}</span>
               </div>
               <div className="rail-row">
                 <strong>Published chapters</strong>

@@ -385,22 +385,78 @@ export async function getStoryBySlug(shareSlug: string, viewerId?: string) {
     return await attachStoryAuthorState(await attachViewerStoryState(cachedStory, viewerId), viewerId);
   }
 
-  const story = await StoryModel.findOne({ slug: shareSlug, status: "published", visibility: "public" });
+  const story = await StoryModel.findOne({ slug: shareSlug, status: "published" });
   if (!story) {
     throw new AppError("Story not found", 404);
   }
 
-  story.readCount += 1;
-  await story.save();
+  const viewerCanAccessNonPublicStory =
+    Boolean(viewerId) &&
+    (
+      story.authorId.toString() === viewerId ||
+      (story.visibility === "selected" &&
+        story.allowedViewerIds.some((allowedViewerId) => String(allowedViewerId) === viewerId))
+    );
+
+  if (story.visibility !== "public" && !viewerCanAccessNonPublicStory) {
+    throw new AppError("Story not found", 404);
+  }
+
+  if (story.visibility === "public") {
+    story.readCount += 1;
+    await story.save();
+  }
+
   const payload = await serializeStory(story);
-  await writeJsonCache(`stories:public:${shareSlug}`, payload, 30);
+  if (story.visibility === "public") {
+    await writeJsonCache(`stories:public:${shareSlug}`, payload, 30);
+  }
   return await attachStoryAuthorState(await attachViewerStoryState(payload, viewerId), viewerId);
+}
+
+async function includeOwnPublishedStoriesInFeed(feedStories: PublicFeedStory[], viewerId?: string) {
+  if (!viewerId) {
+    return feedStories;
+  }
+
+  const ownStories = await StoryModel.find({ authorId: viewerId, status: "published" })
+    .sort({ createdAt: -1 })
+    .select(
+      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+    );
+
+  const publicStoryIdSet = new Set(feedStories.map((story) => story.id));
+  const ownStoriesMissingFromPublicFeed = ownStories.filter((story) => !publicStoryIdSet.has(story.id));
+  const ownStoryCommentCounts = await Promise.all(
+    ownStoriesMissingFromPublicFeed.map(async (story) => {
+      const commentsCount = await CommentModel.countDocuments({
+        targetType: "storyChapter",
+        targetId: { $regex: `^${story.id}:` }
+      });
+
+      return [story.id, commentsCount] as const;
+    })
+  );
+
+  const ownCommentMap = new Map(ownStoryCommentCounts);
+  const ownPayload = await Promise.all(
+    ownStoriesMissingFromPublicFeed.map(async (story) => ({
+      ...(await serializeStory(story)),
+      commentCount: ownCommentMap.get(story.id) ?? 0,
+      chapterCount: story.chapters.length
+    }))
+  );
+
+  return [...ownPayload, ...feedStories].sort(
+    (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+  );
 }
 
 export async function getPublicFeed(viewerId?: string) {
   const cachedFeed = await readJsonCache<PublicFeedStory[]>("stories:feed");
   if (cachedFeed) {
-    return await attachStoryAuthorStateList(await attachViewerStoryStateList(cachedFeed, viewerId), viewerId);
+    const combinedFeed = await includeOwnPublishedStoriesInFeed(cachedFeed, viewerId);
+    return await attachStoryAuthorStateList(await attachViewerStoryStateList(combinedFeed, viewerId), viewerId);
   }
 
   const stories = await StoryModel.find({ visibility: "public", status: "published" })
@@ -428,7 +484,8 @@ export async function getPublicFeed(viewerId?: string) {
     chapterCount: story.chapters.length
   })));
   await writeJsonCache("stories:feed", payload, 30);
-  return await attachStoryAuthorStateList(await attachViewerStoryStateList(payload, viewerId), viewerId);
+  const combinedFeed = await includeOwnPublishedStoriesInFeed(payload, viewerId);
+  return await attachStoryAuthorStateList(await attachViewerStoryStateList(combinedFeed, viewerId), viewerId);
 }
 
 export async function toggleStoryReaction(storyId: string, userId: string, action: "like" | "bookmark") {

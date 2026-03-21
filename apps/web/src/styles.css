@@ -386,6 +386,13 @@ textarea {
   min-width: 0;
 }
 
+.chapter-heading-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+}
+
 .chapter-title-input {
   min-width: 0;
   width: min(100%, 420px);
@@ -4889,6 +4896,10 @@ textarea {
   display: block;
   margin-top: 0.55rem;
   color: #667085;
+}
+
+.studio-live-story-note {
+  margin-top: 1rem;
 }
 
 .profile-verification-card {

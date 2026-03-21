@@ -5,6 +5,19 @@ import { type ApiStory, apiRequest } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
 import type { StudioPreviewPayload, StudioPublishPayload } from "./types";
 
+const getStoryAudienceLabel = (visibility: string) => {
+  if (visibility === "private" || visibility === "PRIVATE") {
+    return "Only you";
+  }
+  if (visibility === "selected" || visibility === "SELECTED") {
+    return "Selected readers";
+  }
+  if (visibility === "public" || visibility === "PUBLIC") {
+    return "Public";
+  }
+  return visibility;
+};
+
 function LinkIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" viewBox="0 0 24 24">
@@ -99,7 +112,7 @@ export function StudioPreviewPage({
       {previewError ? <p className="status-feedback">{previewError}</p> : null}
 
       <article className="studio-preview-reader card">
-        <span className="story-tag">{preview?.visibility ?? "draft"}</span>
+        <span className="story-tag">{getStoryAudienceLabel(preview?.visibility ?? "draft")}</span>
         <h1>{preview?.storyTitle ?? "Preview unavailable"}</h1>
         <p className="preview-summary">{preview?.storySummary ?? "Open preview from the studio to see the reader view."}</p>
 

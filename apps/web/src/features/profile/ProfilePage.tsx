@@ -7,6 +7,16 @@ import { type FeedIconComponent, type FeedSectionLabelComponent } from "../feed/
 
 type ProfileRelationship = ProfileDashboard["followersList"][number];
 
+const getStoryAudienceLabel = (visibility: string) => {
+  if (visibility === "private" || visibility === "PRIVATE") {
+    return "Only you";
+  }
+  if (visibility === "selected" || visibility === "SELECTED") {
+    return "Selected readers";
+  }
+  return "Public";
+};
+
 export function ProfilePage({
   accessToken,
   IconComponent,
@@ -292,7 +302,7 @@ export function ProfilePage({
                           <strong>{story.title}</strong>
                           <span>{story.chapters}</span>
                         </div>
-                        <span className="story-tag">{story.visibility}</span>
+                        <span className="story-tag">{getStoryAudienceLabel(story.visibility)}</span>
                       </div>
                       <div className="profile-story-metrics">
                         <span>{story.readsCount} reads</span>

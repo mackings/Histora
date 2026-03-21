@@ -77,6 +77,26 @@ type RealtimeEventMessage =
 const getErrorMessage = (error: unknown, fallback: string) =>
   error instanceof Error && error.message.trim() ? error.message : fallback;
 
+const getStoryAudienceLabel = (visibility: string) => {
+  if (visibility === "PRIVATE") {
+    return "ONLY YOU";
+  }
+  if (visibility === "SELECTED") {
+    return "SELECTED READERS";
+  }
+  return visibility;
+};
+
+const getStoryAudienceHelp = (visibility: string) => {
+  if (visibility === "PRIVATE") {
+    return "Only you can open this story.";
+  }
+  if (visibility === "SELECTED") {
+    return "Only selected readers and you can open this story.";
+  }
+  return "Anyone who can see the feed can open this story.";
+};
+
 function StoryCirclesRow({
   accessToken,
   statuses,
@@ -927,7 +947,7 @@ export function FeedPage({
                       <span>{post.handle}</span>
                     </div>
                   </div>
-                  <span className="story-tag">{post.visibility}</span>
+                  <span className="story-tag">{getStoryAudienceLabel(post.visibility)}</span>
                 </div>
                 <div className="image-frame">
                   <img alt={post.title} className="post-image" decoding="async" fetchPriority={index === 0 ? "high" : "auto"} loading={index < 2 ? "eager" : "lazy"} src={post.coverImageUrl || post.chapters[0]?.images[0]?.src || feedStory} />
@@ -940,6 +960,7 @@ export function FeedPage({
                   </div>
                   <h2>{post.title}</h2>
                   <p>{post.excerpt}</p>
+                  {post.visibility !== "PUBLIC" ? <p className="section-meta">{getStoryAudienceHelp(post.visibility)}</p> : null}
                   <div className="post-actions feed-card-actions">
                     <button className={post.liked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} onClick={(event) => { event.stopPropagation(); toggleFeedLike(post.slug); }} disabled={pendingFeedActions[`${post.slug}:like`]} type="button">
                       <IconComponent className="inline-icon" name="heart" />

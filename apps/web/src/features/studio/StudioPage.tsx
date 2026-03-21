@@ -103,6 +103,27 @@ const playStudioNoticeTone = (audioContextRef: { current: AudioContext | null })
     pulse(0.2, 620, 0.22);
   }).catch(() => undefined);
 };
+
+const getStoryAudienceLabel = (visibility: "private" | "selected" | "public") => {
+  if (visibility === "private") {
+    return "Only you";
+  }
+  if (visibility === "selected") {
+    return "Selected readers";
+  }
+  return "Public";
+};
+
+const getStoryAudienceHelp = (visibility: "private" | "selected" | "public") => {
+  if (visibility === "private") {
+    return "Only you can open this story.";
+  }
+  if (visibility === "selected") {
+    return "Only selected readers and you can open this story.";
+  }
+  return "Anyone can discover and open this story.";
+};
+
 export function StudioPage({
   accessToken,
   currentUser,
@@ -291,6 +312,8 @@ export function StudioPage({
   );
   const [studioMessage, setStudioMessage] = useState("Studio ready.");
   const [currentStoryId, setCurrentStoryId] = useState<string | null>(null);
+  const [currentStoryStatus, setCurrentStoryStatus] = useState<"draft" | "published">("draft");
+  const [liveChapterIndexes, setLiveChapterIndexes] = useState<number[]>([]);
   const [hasReviewedPreview, setHasReviewedPreview] = useState(false);
   const [isEditingChapterTitle, setIsEditingChapterTitle] = useState(false);
   const [chapterTitleDraft, setChapterTitleDraft] = useState("");
@@ -348,6 +371,8 @@ export function StudioPage({
   const lastAutoSavedSignatureRef = useRef("");
   const restoredLocalDraftRef = useRef(false);
   const chaptersRef = useRef<StudioChapter[]>([]);
+  const currentStoryIdRef = useRef<string | null>(null);
+  const persistStoryQueueRef = useRef<Promise<ApiStory | null>>(Promise.resolve(null));
 
   const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
   const studioStorageKey = "histora-studio-local-draft-v1";
@@ -372,6 +397,7 @@ export function StudioPage({
   const summaryWordCount = storySummary.trim().split(/\s+/).filter(Boolean).length;
   const summaryWordsRemaining = Math.max(20 - summaryWordCount, 0);
   const bodyWordsRemaining = Math.max(chapterCompletionThreshold - wordCount, 0);
+  const isEditingPublishedStory = currentStoryStatus === "published";
   const chapterMetrics = chapters.map((chapter) => ({
     ...chapter,
     words: getChapterWordCount(chapter.body),
@@ -382,6 +408,8 @@ export function StudioPage({
   const activeChapterReady = chapterMetrics[activeChapterIndex >= 0 ? activeChapterIndex : 0];
   const activeChapterNumber = Math.max(activeChapterIndex + 1, 1);
   const activeChapterNumberLabel = `Chapter ${activeChapterNumber}`;
+  const liveChapterIndexSet = new Set(liveChapterIndexes);
+  const activeChapterIsLive = liveChapterIndexSet.has(activeChapterIndex >= 0 ? activeChapterIndex : 0);
   const autoSaveSignature = JSON.stringify({
     activeChapter,
     anonymous,
@@ -394,7 +422,9 @@ export function StudioPage({
     storyTitle,
     timelineEntries,
     transcriptionLanguage,
-    visibility
+    visibility,
+    currentStoryStatus,
+    liveChapterIndexes
   });
 
   const updateActiveChapterMedia = (
@@ -427,6 +457,17 @@ export function StudioPage({
 
     return { ...chapter, isLocked, chapterLabel };
   });
+  const getChapterStatusLabel = (chapterIndex: number, fallbackStatus?: string) => {
+    if (liveChapterIndexSet.has(chapterIndex)) {
+      return "LIVE";
+    }
+
+    if (fallbackStatus === "Published") {
+      return "LIVE";
+    }
+
+    return "DRAFT";
+  };
 
   useEffect(() => {
     const timer = window.setTimeout(() => setIsEnteringStudio(false), 1200);
@@ -449,6 +490,10 @@ export function StudioPage({
   }, [chapters]);
 
   useEffect(() => {
+    currentStoryIdRef.current = currentStoryId;
+  }, [currentStoryId]);
+
+  useEffect(() => {
     setImageAttachments(activeChapterEntry?.imageAttachments ?? []);
     setVoiceNotes(activeChapterEntry?.voiceNotes ?? []);
     setTimelineEntries(activeChapterEntry?.timelineEntries?.length ? activeChapterEntry.timelineEntries : [createEmptyTimelineEntry()]);
@@ -465,6 +510,8 @@ export function StudioPage({
         : fetchedChapters;
 
     setCurrentStoryId(story.id);
+    setCurrentStoryStatus(story.status);
+    setLiveChapterIndexes(story.status === "published" ? fetchedChapters.map((_, index) => index) : []);
     setStoryTitle(story.title);
     setStorySummary(story.summary);
     setStoryLinks(story.links ?? []);
@@ -492,6 +539,8 @@ export function StudioPage({
         : "selected";
 
     setCurrentStoryId(null);
+    setCurrentStoryStatus("draft");
+    setLiveChapterIndexes([]);
     setStoryTitle("");
     setStorySummary("");
     setStoryLinks([]);
@@ -560,6 +609,8 @@ export function StudioPage({
       const savedDraft = JSON.parse(rawDraft) as Partial<{
         activeChapter: string;
         currentStoryId: string | null;
+        currentStoryStatus: "draft" | "published";
+        liveChapterIndexes: number[];
         isPremium: boolean;
         visibility: string;
         anonymous: boolean;
@@ -579,6 +630,12 @@ export function StudioPage({
       }
       if (savedDraft.currentStoryId) {
         setCurrentStoryId(savedDraft.currentStoryId);
+      }
+      if (savedDraft.currentStoryStatus === "draft" || savedDraft.currentStoryStatus === "published") {
+        setCurrentStoryStatus(savedDraft.currentStoryStatus);
+      }
+      if (Array.isArray(savedDraft.liveChapterIndexes)) {
+        setLiveChapterIndexes(savedDraft.liveChapterIndexes.filter((value) => Number.isInteger(value) && value >= 0));
       }
       if (typeof savedDraft.isPremium === "boolean") {
         setIsPremium(savedDraft.isPremium);
@@ -696,6 +753,8 @@ export function StudioPage({
 
     const draftPayload = {
       currentStoryId,
+      currentStoryStatus,
+      liveChapterIndexes,
       activeChapter,
       isPremium,
       visibility,
@@ -718,9 +777,11 @@ export function StudioPage({
     chapterType,
     allowComments,
     chapters,
+    currentStoryStatus,
     draftHistory,
     isPremium,
     currentStoryId,
+    liveChapterIndexes,
     liveEditorBody,
     storySummary,
     storyTitle,
@@ -749,7 +810,7 @@ export function StudioPage({
     if (editor && editor.innerHTML !== chapterBody) {
       editor.innerHTML = chapterBody;
     }
-  }, [chapterBody, activeChapter, isEnteringStudio]);
+  }, [chapterBody, activeChapter, isEnteringStudio, isStudioEditorOpen]);
 
   useEffect(() => {
     return () => {
@@ -1193,6 +1254,8 @@ export function StudioPage({
       }));
       const draftPayload = {
         currentStoryId,
+        currentStoryStatus,
+        liveChapterIndexes,
         activeChapter,
         isPremium,
         visibility,
@@ -1785,7 +1848,7 @@ export function StudioPage({
       )
     );
 
-    if (canPersistStoryRemotely(snapshot)) {
+    if (currentStoryStatus !== "published" && canPersistStoryRemotely(snapshot)) {
       void ensureStoryMediaUploaded(snapshot)
         .then((uploadedChapters) => persistStory(buildStoryPayload("draft", uploadedChapters), "Autosaved."))
         .catch((error) => {
@@ -1794,7 +1857,11 @@ export function StudioPage({
     }
 
     if (quiet) {
-      setStudioMessage("All studio changes auto-saved.");
+      setStudioMessage(
+        currentStoryStatus === "published"
+          ? "Live story changes saved locally. Preview and republish to update the live version."
+          : "All studio changes auto-saved."
+      );
       return;
     }
     if (currentChapterRequiredItems.length > 0 || currentChapterOptionalItems.length > 0) {
@@ -1812,8 +1879,17 @@ export function StudioPage({
       return;
     }
 
-    setStudioMessage(`${activeChapterNumberLabel} is saved and ready for preview.`);
-    setDraftHistory((current) => [`${activeChapterNumberLabel} saved as draft.`, ...current].slice(0, 6));
+    setStudioMessage(
+      currentStoryStatus === "published"
+        ? `${activeChapterNumberLabel} changes are saved locally. Preview and republish to update the live story.`
+        : `${activeChapterNumberLabel} is saved and ready for preview.`
+    );
+    setDraftHistory((current) => [
+      currentStoryStatus === "published"
+        ? `${activeChapterNumberLabel} changes saved locally for the live story.`
+        : `${activeChapterNumberLabel} saved as draft.`,
+      ...current
+    ].slice(0, 6));
   };
 
   useEffect(() => {
@@ -2073,36 +2149,52 @@ export function StudioPage({
   };
 
   const persistStory = async (payload: ReturnType<typeof buildStoryPayload>, successMessage: string) => {
-    console.info("[studio] persist story payload", {
-      currentStoryId,
-      title: payload.title,
-      status: payload.status,
-      chapterCount: payload.chapters.length,
-      imageCount: payload.chapters.reduce((sum, chapter) => sum + chapter.imageUrls.length, 0),
-      voiceCount: payload.chapters.reduce((sum, chapter) => sum + (chapter.voiceNoteUrl ? 1 : 0), 0),
-      chapterTitles: payload.chapters.map((chapter) => chapter.title)
-    });
+    const nextPersist = persistStoryQueueRef.current
+      .catch(() => null)
+      .then(async () => {
+        const targetStoryId = currentStoryIdRef.current;
 
-    const story = currentStoryId
-      ? await apiRequest<ApiStory>(`/stories/${currentStoryId}`, {
-          method: "PATCH",
-          accessToken,
-          body: payload
-        })
-      : await apiRequest<ApiStory>("/stories", {
-          method: "POST",
-          accessToken,
-          body: payload
+        console.info("[studio] persist story payload", {
+          currentStoryId: targetStoryId,
+          title: payload.title,
+          status: payload.status,
+          chapterCount: payload.chapters.length,
+          imageCount: payload.chapters.reduce((sum, chapter) => sum + chapter.imageUrls.length, 0),
+          voiceCount: payload.chapters.reduce((sum, chapter) => sum + (chapter.voiceNoteUrl ? 1 : 0), 0),
+          chapterTitles: payload.chapters.map((chapter) => chapter.title)
         });
 
-    setCurrentStoryId(story.id);
-    setStoryLibrary((current) => {
-      const next = [story, ...current.filter((entry) => entry.id !== story.id)];
-      return next.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
-    });
-    setStudioMessage(successMessage);
-    setDraftHistory((current) => [successMessage, ...current].slice(0, 6));
-    return story;
+        const story = targetStoryId
+          ? await apiRequest<ApiStory>(`/stories/${targetStoryId}`, {
+              method: "PATCH",
+              accessToken,
+              body: payload
+            })
+          : await apiRequest<ApiStory>("/stories", {
+              method: "POST",
+              accessToken,
+              body: payload
+            });
+
+        currentStoryIdRef.current = story.id;
+        setCurrentStoryId(story.id);
+        setCurrentStoryStatus(story.status);
+        setLiveChapterIndexes(
+          story.status === "published"
+            ? story.chapters.map((_, index) => index)
+            : []
+        );
+        setStoryLibrary((current) => {
+          const next = [story, ...current.filter((entry) => entry.id !== story.id)];
+          return next.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime());
+        });
+        setStudioMessage(successMessage);
+        setDraftHistory((current) => [successMessage, ...current].slice(0, 6));
+        return story;
+      });
+
+    persistStoryQueueRef.current = nextPersist;
+    return await nextPersist;
   };
 
   const updateTimelineEntry = (index: number, field: "title" | "body", value: string) => {
@@ -2208,11 +2300,14 @@ export function StudioPage({
       const snapshot = buildChaptersSnapshot();
       const uploadedChapters = await ensureStoryMediaUploaded(snapshot);
       const previewChapters = sanitizePreviewChaptersForCurrentPlan(uploadedChapters);
-      const draftPayload = buildStoryPayload("draft", previewChapters);
-      const story = await persistStory(draftPayload, "Autosaved.");
+      let previewStoryId = currentStoryId;
+      if (currentStoryStatus !== "published" && canPersistStoryRemotely(previewChapters)) {
+        const previewStory = await persistStory(buildStoryPayload("draft", previewChapters), "Autosaved.");
+        previewStoryId = previewStory.id;
+      }
       const uploadedActiveChapter = previewChapters[activeChapterIndex >= 0 ? activeChapterIndex : 0];
       const previewPayload: StudioPreviewPayload = {
-        storyId: story.id,
+        storyId: previewStoryId,
         storyTitle,
         storySummary,
         storyLinks,
@@ -2228,7 +2323,7 @@ export function StudioPage({
           (entry) => entry.title.trim().length > 0 || entry.body.trim().length > 0 || entry.year || entry.month || entry.day
         ),
         allowComments,
-        chapterStatus: uploadedActiveChapter?.status ?? "Draft saved",
+        chapterStatus: activeChapterIsLive ? "Live now" : uploadedActiveChapter?.status ?? "Draft saved",
         chapterChecklist: {
           required: currentChapterRequiredItems,
           optional: currentChapterOptionalItems
@@ -2236,7 +2331,7 @@ export function StudioPage({
       };
 
       const publishPayload: StudioPublishPayload = {
-        storyId: story.id,
+        storyId: previewStoryId,
         payload: buildStoryPayload("published", previewChapters)
       };
 
@@ -2244,7 +2339,11 @@ export function StudioPage({
       window.sessionStorage.setItem("histora-studio-publish-payload", JSON.stringify(publishPayload));
       window.sessionStorage.setItem("histora-studio-reviewed", "true");
       setHasReviewedPreview(true);
-      setStudioMessage(`Preview opened for ${uploadedActiveChapter?.title || activeChapterLabel}. Review it before publishing.`);
+      setStudioMessage(
+        currentStoryStatus === "published"
+          ? `Preview opened for ${uploadedActiveChapter?.title || activeChapterLabel}. Review the update, then republish the live story.`
+          : `Preview opened for ${uploadedActiveChapter?.title || activeChapterLabel}. Review it before publishing.`
+      );
       navigate("/studio/preview");
     } catch (error) {
       const message = getErrorMessage(error, "Could not open preview.");
@@ -2299,22 +2398,50 @@ export function StudioPage({
   const publishPanel = (
     <article className="studio-panel card">
       <SectionLabelComponent>PUBLISH_CONTROL</SectionLabelComponent>
+      {isEditingPublishedStory ? (
+        <div className="editor-preview studio-live-story-note">
+          <h3>Live story update</h3>
+          <p>Chapters tagged LIVE are already published. Edits stay local here until you preview and republish the story.</p>
+        </div>
+      ) : null}
       <div className="publish-stack">
         <div className="publish-row">
           <strong>Current mode</strong>
-          <span>{anonymous ? "Anonymous advice" : visibility}</span>
+          <span>{anonymous ? "Anonymous advice" : getStoryAudienceLabel(visibility)}</span>
+        </div>
+        {!anonymous ? (
+          <div className="publish-row">
+            <strong>Who can open it</strong>
+            <span>{getStoryAudienceHelp(visibility)}</span>
+          </div>
+        ) : null}
+        <div className="publish-row">
+          <strong>Live status</strong>
+          <span>{isEditingPublishedStory ? "Already live" : "Not live yet"}</span>
         </div>
         <div className="publish-row">
           <strong>Active chapter</strong>
-          <span>{activeChapterReady?.isComplete ? "Ready to publish" : `Needs ${chapterCompletionThreshold} words`}</span>
+          <span>
+            {activeChapterIsLive
+              ? "Live now, update with republish"
+              : activeChapterReady?.isComplete
+                ? "Ready to publish"
+                : `Needs ${chapterCompletionThreshold} words`}
+          </span>
         </div>
         <div className="publish-row">
           <strong>Story readiness</strong>
-          <span>{readyChapters.length > 0 ? "Ready chapters can go live" : "No finished chapters yet"}</span>
+          <span>
+            {readyChapters.length > 0
+              ? isEditingPublishedStory
+                ? "Ready chapters can update the live story"
+                : "Ready chapters can go live"
+              : "No finished chapters yet"}
+          </span>
         </div>
       </div>
       <div className="publish-summary-block">
-        <strong>Chapters going live</strong>
+        <strong>{isEditingPublishedStory ? "Chapters included in the live update" : "Chapters going live"}</strong>
         {readyChapters.length ? (
           <div className="publish-chip-list">
             {readyChapters.map((chapter) => (
@@ -2327,7 +2454,7 @@ export function StudioPage({
       </div>
       {startedIncompleteChapters.length ? (
         <div className="publish-summary-block publish-warning-block">
-          <strong>Stays in draft for now</strong>
+          <strong>{isEditingPublishedStory ? "Needs more work before you republish confidently" : "Needs more work before publish"}</strong>
           <div className="publish-chip-list">
             {startedIncompleteChapters.map((chapter) => (
               <span className="publish-chip publish-chip-warning" key={chapter.title}>{chapter.title}</span>
@@ -2414,7 +2541,7 @@ export function StudioPage({
               <p>{story.summary}</p>
               <div className="studio-library-meta">
                 <span>{story.chapters.length} chapter{story.chapters.length === 1 ? "" : "s"}</span>
-                <span>{story.visibility.toUpperCase()}</span>
+                <span>{getStoryAudienceLabel(story.visibility)}</span>
                 <span>{new Date(story.updatedAt).toLocaleDateString()}</span>
               </div>
             </button>
@@ -2500,11 +2627,24 @@ export function StudioPage({
                 >
                   <small>{chapter.chapterLabel}</small>
                   <strong>{chapter.title}</strong>
-                  <span>{chapter.isLocked ? "PREMIUM" : chapters.find((entry) => entry.title === chapter.title)?.status ?? chapter.status}</span>
+                  <span>
+                    {chapter.isLocked
+                      ? "PREMIUM"
+                      : getChapterStatusLabel(
+                          chapters.findIndex((entry) => entry.title === chapter.title),
+                          chapters.find((entry) => entry.title === chapter.title)?.status ?? chapter.status
+                        )}
+                  </span>
                 </button>
               ))}
             </div>
             {!isPremium ? <span className="section-meta">Free users can write in the first 2 chapters only.</span> : null}
+            {isEditingPublishedStory ? (
+              <div className="editor-preview studio-live-story-note">
+                <h3>This story is already live</h3>
+                <p>Open any LIVE chapter to update it, then preview and republish when the changes are ready to replace the current version.</p>
+              </div>
+            ) : null}
           </article>
 
           <article className="studio-panel card" ref={mediaSectionRef}>
@@ -2576,7 +2716,10 @@ export function StudioPage({
                   </button>
                 </div>
               </div>
-              <span className="story-tag">{wordCount}_WORDS</span>
+              <div className="chapter-heading-statuses">
+                <span className="story-tag">{activeChapterIsLive ? "LIVE_CHAPTER" : "DRAFT_CHAPTER"}</span>
+                <span className="story-tag">{wordCount}_WORDS</span>
+              </div>
             </div>
             <div className="form-grid">
               <label>
