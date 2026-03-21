@@ -5,6 +5,8 @@ import { type ApiStory, apiRequest } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
 import type { StudioPreviewPayload, StudioPublishPayload } from "./types";
 
+const studioStorageKey = "histora-studio-local-draft-v1";
+
 const getStoryAudienceLabel = (visibility: string) => {
   if (visibility === "private" || visibility === "PRIVATE") {
     return "Only you";
@@ -91,6 +93,7 @@ export function StudioPreviewPage({
                     body: publishPayload.payload
                   }))
                 .then((story) => {
+                  window.localStorage.removeItem(studioStorageKey);
                   window.sessionStorage.removeItem("histora-studio-preview");
                   window.sessionStorage.removeItem("histora-studio-publish-payload");
                   window.sessionStorage.removeItem("histora-studio-reviewed");

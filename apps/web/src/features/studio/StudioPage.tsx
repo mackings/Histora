@@ -1841,6 +1841,12 @@ export function StudioPage({
 
   const saveCurrentDraft = (options?: { quiet?: boolean }) => {
     const quiet = options?.quiet ?? false;
+    if (!isStudioEditorOpen) {
+      if (!quiet) {
+        setStudioMessage("Story library ready.");
+      }
+      return;
+    }
     const snapshot = buildChaptersSnapshot();
     setChapters((current) =>
       current.map((chapter) =>
@@ -1893,7 +1899,7 @@ export function StudioPage({
   };
 
   useEffect(() => {
-    if (!hasLoadedStudioDraftRef.current) {
+    if (!hasLoadedStudioDraftRef.current || !isStudioEditorOpen) {
       return;
     }
 
@@ -1922,7 +1928,8 @@ export function StudioPage({
     timelineEntries,
     transcriptionLanguage,
     visibility,
-    autoSaveSignature
+    autoSaveSignature,
+    isStudioEditorOpen
   ]);
 
   const publishWholeStory = () => {
