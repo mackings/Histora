@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import feedStory from "../../assets/feed-story.svg";
@@ -10,11 +10,14 @@ import {
   type AnonymousFeedSource,
   bumpStorySaveCount,
   formatAnonymousMeta,
+  groupStatusEntries,
+  removeStatusEntry,
   roundRect,
   statusUpdateEvent,
   type StatusEntry,
   toAnonymousPublicFeedSource,
   toStatusEntry,
+  upsertStatusEntry,
   wrapCanvasText
 } from "./support";
 import { type FeedIconComponent, type FeedSectionLabelComponent } from "./ui-types";
@@ -83,10 +86,10 @@ function StoryCirclesRow({
     { label: "Support", icon: "🙌", emojis: ["👏", "🙏", "🙌", "🤍", "💭", "🤝", "🌟", "🕊️"] }
   ];
   const imageLibrary = ["Soft gradient card", "Journal page", "City window", "Memory board", "Polaroid frame", "Voice waveform"];
-  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [activeStatusId, setActiveStatusId] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
-  const [seenStories, setSeenStories] = useState<number[]>([]);
+  const [seenStatusIds, setSeenStatusIds] = useState<string[]>([]);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
   const [statusDraft, setStatusDraft] = useState("Today I finally wrote the chapter I kept postponing.");
   const [statusStyle, setStatusStyle] = useState<"plain" | "bold" | "italic">("plain");
@@ -102,7 +105,10 @@ function StoryCirclesRow({
   const [helpRequestTarget, setHelpRequestTarget] = useState<StatusEntry | null>(null);
   const [consentAccepted, setConsentAccepted] = useState(false);
 
-  const activeStatus = activeIndex === null ? null : statusItems[activeIndex];
+  const statusBubbleGroups = useMemo(() => groupStatusEntries(statusItems), [statusItems]);
+  const viewableStatuses = useMemo(() => statusItems.filter((entry) => entry.tone !== "add"), [statusItems]);
+  const activeStatusIndex = activeStatusId ? viewableStatuses.findIndex((entry) => entry.id === activeStatusId) : -1;
+  const activeStatus = activeStatusIndex >= 0 ? viewableStatuses[activeStatusIndex] : null;
 
   useEffect(() => {
     let cancelled = false;
@@ -137,12 +143,12 @@ function StoryCirclesRow({
         const payload = message.payload;
         if (payload.kind === "status.created") {
           const statusEvent = (payload as { kind: "status.created"; status: ApiStatus }).status;
-          setStatusItems((current) => [current[0], toStatusEntry(statusEvent), ...current.slice(1).filter((entry) => entry.id !== statusEvent.id)]);
+          setStatusItems((current) => upsertStatusEntry(current, toStatusEntry(statusEvent)));
           return;
         }
         if (payload.kind === "status.deleted") {
           const statusId = (payload as { kind: "status.deleted"; statusId: string }).statusId;
-          setStatusItems((current) => current.filter((entry) => entry.id !== statusId));
+          setStatusItems((current) => removeStatusEntry(current, statusId));
           return;
         }
         if (payload.kind === "comment.created" && payload.comment.targetType === "status") {
@@ -165,17 +171,17 @@ function StoryCirclesRow({
   }, [accessToken]);
 
   useEffect(() => {
-    if (activeIndex === null) {
+    if (!activeStatus) {
       setProgress(0);
       setIsPaused(false);
       return;
     }
-    setSeenStories((current) => (current.includes(activeIndex) ? current : [...current, activeIndex]));
+    setSeenStatusIds((current) => (current.includes(activeStatus.id) ? current : [...current, activeStatus.id]));
     setProgress(0);
-  }, [activeIndex]);
+  }, [activeStatus]);
 
   useEffect(() => {
-    if (activeIndex === null || isPaused) {
+    if (!activeStatus || isPaused) {
       return;
     }
     const timer = window.setInterval(() => {
@@ -184,37 +190,61 @@ function StoryCirclesRow({
         if (nextProgress < 100) {
           return nextProgress;
         }
-        setActiveIndex((currentIndex) => (currentIndex === null ? null : currentIndex < statusItems.length - 1 ? currentIndex + 1 : null));
+        setActiveStatusId(
+          activeStatusIndex >= 0 && activeStatusIndex < viewableStatuses.length - 1
+            ? viewableStatuses[activeStatusIndex + 1].id
+            : null
+        );
         return 100;
       });
     }, 160);
     return () => window.clearInterval(timer);
-  }, [activeIndex, isPaused, statusItems.length]);
+  }, [activeStatus, activeStatusIndex, isPaused, viewableStatuses]);
 
   useEffect(() => {
-    if (activeIndex === null) {
+    if (!activeStatus) {
       return;
     }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "ArrowRight") {
-        setActiveIndex((current) => (current === null ? 0 : Math.min(current + 1, statusItems.length - 1)));
+        setActiveStatusId(
+          activeStatusIndex < viewableStatuses.length - 1
+            ? viewableStatuses[activeStatusIndex + 1].id
+            : viewableStatuses[activeStatusIndex]?.id ?? null
+        );
       }
       if (event.key === "ArrowLeft") {
-        setActiveIndex((current) => (current === null ? 0 : Math.max(current - 1, 0)));
+        setActiveStatusId(
+          activeStatusIndex > 0 ? viewableStatuses[activeStatusIndex - 1].id : viewableStatuses[0]?.id ?? null
+        );
       }
       if (event.key === "Escape") {
-        setActiveIndex(null);
+        setActiveStatusId(null);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeIndex, statusItems.length]);
+  }, [activeStatus, activeStatusIndex, viewableStatuses]);
 
-  const goToPrevious = () => setActiveIndex((current) => (current === null ? 0 : Math.max(current - 1, 0)));
-  const goToNext = () => setActiveIndex((current) => (current === null ? 0 : current < statusItems.length - 1 ? current + 1 : null));
+  const goToPrevious = () => {
+    if (activeStatusIndex <= 0) {
+      setActiveStatusId(viewableStatuses[0]?.id ?? null);
+      return;
+    }
+    setActiveStatusId(viewableStatuses[activeStatusIndex - 1].id);
+  };
 
-  const openStory = (index: number) => {
-    if (statusItems[index]?.tone === "add") {
+  const goToNext = () => {
+    if (activeStatusIndex < 0 || activeStatusIndex >= viewableStatuses.length - 1) {
+      setActiveStatusId(null);
+      return;
+    }
+    setActiveStatusId(viewableStatuses[activeStatusIndex + 1].id);
+  };
+
+  const openStory = (entryId: string) => {
+    const entry = statusItems.find((current) => current.id === entryId);
+    if (entry?.tone === "add") {
       setIsComposerOpen(true);
       setShowEmojiLibrary(false);
       setShowImageLibrary(false);
@@ -222,7 +252,7 @@ function StoryCirclesRow({
       setShareFeedback("");
       return;
     }
-    setActiveIndex(index);
+    setActiveStatusId(entryId);
     setShareFeedback("");
   };
 
@@ -294,7 +324,8 @@ function StoryCirclesRow({
       body: { body: statusDraft.trim(), anonymous: isAnonymousComposer, visibility: "public" }
     })
       .then((createdStatus) => {
-        setStatusItems((current) => [current[0], toStatusEntry(createdStatus, { owned: true }), ...current.slice(1)]);
+        const nextEntry = toStatusEntry(createdStatus, { owned: true });
+        setStatusItems((current) => upsertStatusEntry(current, nextEntry));
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent(statusUpdateEvent, { detail: { type: "created", status: createdStatus } }));
         }
@@ -303,7 +334,7 @@ function StoryCirclesRow({
         setIsComposerOpen(false);
         setIsAnonymousComposer(false);
         setShareFeedback(createdStatus.anonymous ? "Anonymous status posted." : "Status posted.");
-        setActiveIndex(1);
+        setActiveStatusId(nextEntry.id);
       })
       .catch((error) => {
         setShareFeedback(getErrorMessage(error, "Could not post status."));
@@ -319,11 +350,11 @@ function StoryCirclesRow({
     }
     void apiRequest<{ ok: boolean }>(`/statuses/${activeStatus.id}`, { method: "DELETE", accessToken })
       .then(() => {
-        setStatusItems((current) => current.filter((entry) => entry.id !== activeStatus.id));
+        setStatusItems((current) => removeStatusEntry(current, activeStatus.id));
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent(statusUpdateEvent, { detail: { type: "deleted", statusId: activeStatus.id } }));
         }
-        setActiveIndex(null);
+        setActiveStatusId(null);
         setShareFeedback(activeStatus.anonymous ? "Anonymous status deleted." : "Status deleted.");
       })
       .catch((error) => {
@@ -353,15 +384,21 @@ function StoryCirclesRow({
           <span aria-label="Scroll sideways" className="section-meta">↔</span>
         </div>
         <div className="status-scroll">
-          {statusItems.map((circle, index) => (
-            <button className={`status-bubble ${seenStories.includes(index) ? "status-bubble-seen" : ""}`} key={circle.name} onClick={() => openStory(index)} type="button">
-              <span className={`status-ring tone-${circle.tone}`}>
-                <span className="status-avatar">{circle.tone === "add" ? "+" : circle.name.slice(0, 1)}</span>
+          {statusBubbleGroups.map((group) => {
+            const circle = group.primaryEntry;
+            const isSeen = group.primaryEntry.tone !== "add" && group.statusIds.every((statusId) => seenStatusIds.includes(statusId));
+            return (
+            <button className={`status-bubble ${isSeen ? "status-bubble-seen" : ""}`} key={group.key} onClick={() => openStory(circle.id)} type="button">
+              <span className="status-ring-shell">
+                <span className={`status-ring tone-${circle.tone}`}>
+                  <span className="status-avatar">{circle.tone === "add" ? "+" : circle.name.slice(0, 1)}</span>
+                </span>
+                {group.count > 1 ? <span className="status-bubble-count">{group.count}</span> : null}
               </span>
               <strong>{circle.name}</strong>
               <span className="status-bubble-meta">{circle.meta}</span>
             </button>
-          ))}
+          );})}
         </div>
       </section>
 
@@ -457,19 +494,19 @@ function StoryCirclesRow({
       ) : null}
 
       {activeStatus ? (
-        <div className="status-viewer-backdrop" onClick={() => setActiveIndex(null)} role="presentation">
+        <div className="status-viewer-backdrop" onClick={() => setActiveStatusId(null)} role="presentation">
           <article className={`status-story-viewer tone-${activeStatus.tone}`} onClick={(event) => event.stopPropagation()}>
             <div className="story-viewer-close-row">
-              <button aria-label="Close story viewer" className="icon-chip" onClick={() => setActiveIndex(null)} type="button">
+              <button aria-label="Close story viewer" className="icon-chip" onClick={() => setActiveStatusId(null)} type="button">
                 <IconComponent className="button-icon" name="close" />
               </button>
             </div>
             <div className="story-progress-row">
-              {statusItems.map((circle, index) => (
-                <span className="story-progress-track" key={circle.name}>
+              {viewableStatuses.map((circle, index) => (
+                <span className="story-progress-track" key={circle.id}>
                   <span
                     className="story-progress-fill"
-                    style={{ width: index < (activeIndex ?? -1) ? "100%" : index === (activeIndex ?? -1) ? `${progress}%` : "0%" }}
+                    style={{ width: index < activeStatusIndex ? "100%" : index === activeStatusIndex ? `${progress}%` : "0%" }}
                   />
                 </span>
               ))}
@@ -527,8 +564,8 @@ function StoryCirclesRow({
               </div>
             </div>
             <div className="story-footer-row">
-              <button className="ghost-action" disabled={activeIndex === 0} onClick={goToPrevious} type="button">Previous</button>
-              <button className="ghost-action" onClick={goToNext} type="button">{activeIndex === statusItems.length - 1 ? "Finish" : "Next"}</button>
+              <button className="ghost-action" disabled={activeStatusIndex === 0} onClick={goToPrevious} type="button">Previous</button>
+              <button className="ghost-action" onClick={goToNext} type="button">{activeStatusIndex === viewableStatuses.length - 1 ? "Finish" : "Next"}</button>
             </div>
           </article>
         </div>

@@ -1,8 +1,9 @@
 import type { ApiAnonymousMessage, ApiStatus } from "../../lib/api-client";
 
 export type StatusEntry = {
-  id?: string;
+  id: string;
   name: string;
+  authorKey?: string;
   meta: string;
   tone: "orange" | "ink" | "add" | "blue";
   label: string;
@@ -210,6 +211,7 @@ export const writeStoredAnonymousStatuses = (entries: StoredAnonymousStatus[]) =
 };
 
 export const storedAnonymousStatusToEntry = (entry: StoredAnonymousStatus): StatusEntry => ({
+  id: entry.id,
   name: "Anonymous",
   meta: entry.meta,
   tone: "ink",
@@ -223,6 +225,7 @@ export const storedAnonymousStatusToEntry = (entry: StoredAnonymousStatus): Stat
 });
 
 export const addStatusEntry: StatusEntry = {
+  id: "add-status",
   name: "Add",
   meta: "New",
   tone: "add",
@@ -234,6 +237,7 @@ export const addStatusEntry: StatusEntry = {
 export const toStatusEntry = (status: ApiStatus, options?: { owned?: boolean }): StatusEntry => ({
   id: status.id,
   name: status.anonymous ? "Anonymous" : `@${status.authorUsername}`,
+  authorKey: status.anonymous ? undefined : status.authorUsername,
   meta: formatAnonymousMeta(status.createdAt),
   tone: status.anonymous ? "ink" : "blue",
   label: status.anonymous ? "Advice status" : "Memory status",
@@ -245,6 +249,69 @@ export const toStatusEntry = (status: ApiStatus, options?: { owned?: boolean }):
   comments: [],
   helpFee: status.anonymous ? 8 : undefined
 });
+
+export const upsertStatusEntry = (entries: StatusEntry[], entry: StatusEntry) => {
+  const addEntry = entries.find((current) => current.tone === "add") ?? addStatusEntry;
+  const existingEntry = entries.find((current) => current.id === entry.id);
+  const nextEntry: StatusEntry = {
+    ...existingEntry,
+    ...entry,
+    owned: entry.owned ?? existingEntry?.owned ?? false,
+    comments: entry.comments ?? existingEntry?.comments ?? []
+  };
+  const rest = entries.filter((current) => current.tone !== "add" && current.id !== entry.id);
+  return [addEntry, nextEntry, ...rest];
+};
+
+export const removeStatusEntry = (entries: StatusEntry[], statusId: string) => {
+  const addEntry = entries.find((current) => current.tone === "add") ?? addStatusEntry;
+  const rest = entries.filter((current) => current.tone !== "add" && current.id !== statusId);
+  return [addEntry, ...rest];
+};
+
+export type StatusBubbleGroup = {
+  key: string;
+  primaryEntry: StatusEntry;
+  count: number;
+  statusIds: string[];
+};
+
+export const groupStatusEntries = (entries: StatusEntry[]): StatusBubbleGroup[] => {
+  const groups: StatusBubbleGroup[] = [];
+  const grouped = new Map<string, StatusBubbleGroup>();
+
+  for (const entry of entries) {
+    if (entry.tone === "add") {
+      groups.push({
+        key: entry.id,
+        primaryEntry: entry,
+        count: 0,
+        statusIds: [entry.id]
+      });
+      continue;
+    }
+
+    const groupKey = entry.anonymous ? `status:${entry.id}` : `user:${entry.authorKey ?? entry.name}`;
+    const existingGroup = grouped.get(groupKey);
+
+    if (existingGroup) {
+      existingGroup.count += 1;
+      existingGroup.statusIds.push(entry.id);
+      continue;
+    }
+
+    const nextGroup: StatusBubbleGroup = {
+      key: groupKey,
+      primaryEntry: entry,
+      count: 1,
+      statusIds: [entry.id]
+    };
+    grouped.set(groupKey, nextGroup);
+    groups.push(nextGroup);
+  }
+
+  return groups;
+};
 
 export const roundRect = (
   context: CanvasRenderingContext2D,

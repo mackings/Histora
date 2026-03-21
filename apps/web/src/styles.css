@@ -564,6 +564,11 @@ textarea {
   touch-action: pan-x;
 }
 
+.status-ring-shell {
+  position: relative;
+  display: grid;
+}
+
 .status-bubble:hover .status-ring {
   transform: translateY(-2px);
 }
@@ -665,6 +670,26 @@ textarea {
 .status-bubble-meta {
   font-size: 0.72rem;
   font-weight: 600;
+}
+
+.status-bubble-count {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #111827;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+  border: 2px solid #fff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18);
 }
 
 .hero-layout,
