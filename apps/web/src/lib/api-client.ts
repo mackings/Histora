@@ -84,7 +84,10 @@ export type ApiStory = {
   reactionsCount: number;
   likesCount: number;
   bookmarksCount: number;
+  sharesCount: number;
   commentsCount: number;
+  liked: boolean;
+  bookmarked: boolean;
   chapters: Array<{
     title: string;
     body: string;
@@ -323,7 +326,7 @@ export async function apiRequest<T>(
   return (await response.json()) as T;
 }
 
-export async function prefetchStoryBySlug(slug: string) {
+export async function prefetchStoryBySlug(slug: string, accessToken?: string | null) {
   const cachedStory = storyPrefetchCache.get(slug);
   if (cachedStory) {
     return cachedStory;
@@ -334,7 +337,7 @@ export async function prefetchStoryBySlug(slug: string) {
     return inflightRequest;
   }
 
-  const request = apiRequest<ApiStory>(`/stories/public/${slug}`)
+  const request = apiRequest<ApiStory>(`/stories/public/${slug}`, { accessToken })
     .then((story) => {
       storyPrefetchCache.set(slug, story);
       storyPrefetchInflight.delete(slug);

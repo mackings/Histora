@@ -32,3 +32,24 @@ export function requireAuth(request: Request, _response: Response, next: NextFun
     next(new AppError("Invalid or expired token", 401));
   }
 }
+
+export function optionalAuth(request: Request, _response: Response, next: NextFunction) {
+  const token = request.headers.authorization?.replace("Bearer ", "");
+
+  if (!token) {
+    next();
+    return;
+  }
+
+  try {
+    const payload = jwt.verify(token, env.JWT_SECRET) as { sub: string; typ?: string };
+    if (payload.typ !== "access" || !payload.sub) {
+      throw new Error("Invalid token type");
+    }
+
+    request.auth = { userId: payload.sub };
+    next();
+  } catch {
+    next(new AppError("Invalid or expired token", 401));
+  }
+}

@@ -32,6 +32,7 @@ export interface StoryDocument extends mongoose.Document {
   reactionsCount: number;
   likesCount: number;
   bookmarksCount: number;
+  sharesCount: number;
   commentsCount: number;
   createdAt: Date;
   updatedAt: Date;
@@ -80,6 +81,7 @@ const storySchema = new Schema(
     reactionsCount: { type: Number, default: 0 },
     likesCount: { type: Number, default: 0 },
     bookmarksCount: { type: Number, default: 0 },
+    sharesCount: { type: Number, default: 0 },
     commentsCount: { type: Number, default: 0 }
   },
   { timestamps: true }

@@ -9,6 +9,7 @@ import {
   getPublicFeed,
   getStoryBySlug,
   saveStory,
+  trackStoryShare,
   toggleStoryReaction
 } from "../services/story.service.js";
 
@@ -34,14 +35,14 @@ export const myStoryController = asyncHandler(async (request, response) => {
   response.status(200).json(story);
 });
 
-export const publicFeedController = asyncHandler(async (_request, response) => {
-  const feed = await getPublicFeed();
+export const publicFeedController = asyncHandler(async (request, response) => {
+  const feed = await getPublicFeed(request.auth?.userId);
   response.status(200).json(feed);
 });
 
 export const publicStoryController = asyncHandler(async (request, response) => {
   const params = z.object({ slug: z.string().min(1) }).parse(request.params);
-  const story = await getStoryBySlug(params.slug);
+  const story = await getStoryBySlug(params.slug, request.auth?.userId);
   response.status(200).json(story);
 });
 
@@ -49,5 +50,11 @@ export const toggleStoryReactionController = asyncHandler(async (request, respon
   const params = z.object({ storyId: z.string().min(1) }).parse(request.params);
   const body = storyReactionSchema.parse(request.body);
   const result = await toggleStoryReaction(params.storyId, request.auth!.userId, body.action);
+  response.status(200).json(result);
+});
+
+export const trackStoryShareController = asyncHandler(async (request, response) => {
+  const params = z.object({ storyId: z.string().min(1) }).parse(request.params);
+  const result = await trackStoryShare(params.storyId);
   response.status(200).json(result);
 });

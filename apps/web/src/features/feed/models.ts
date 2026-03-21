@@ -38,6 +38,7 @@ export type FeedStoryRecord = (typeof feedPreview)[number] & {
 };
 
 export type ShareSheetPayload = {
+  storyId?: string;
   title: string;
   text: string;
   url: string;
@@ -79,10 +80,10 @@ export const toFeedStoryRecord = (story: ApiFeedStory): FeedStoryRecord => ({
   saves: String(story.bookmarksCount),
   slug: story.slug,
   anonymous: story.anonymous,
-  shares: 0,
+  shares: story.sharesCount,
   likes: story.likesCount,
-  liked: false,
-  bookmarked: false,
+  liked: story.liked,
+  bookmarked: story.bookmarked,
   following: false,
   helpFee: story.anonymous ? 8 : undefined,
   chapters: story.chapters.map((chapter) => ({

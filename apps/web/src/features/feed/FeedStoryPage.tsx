@@ -34,6 +34,11 @@ type RealtimeEventMessage =
             kind: "follow.updated";
             username: string;
             active: boolean;
+          }
+        | {
+            kind: "story.share.updated";
+            storyId: string;
+            sharesCount: number;
           };
     }
   | {
@@ -53,12 +58,14 @@ export function ShareSheet({
   share,
   onClose,
   onFeedback,
+  onShared,
   IconComponent,
   SectionLabelComponent
 }: {
   share: ShareSheetPayload;
   onClose: () => void;
   onFeedback: (message: string) => void;
+  onShared?: () => Promise<void> | void;
   IconComponent: FeedIconComponent;
   SectionLabelComponent: FeedSectionLabelComponent;
 }) {
@@ -70,6 +77,7 @@ export function ShareSheet({
     if (target === "copy") {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(share.url);
+        await onShared?.();
         onFeedback("Share link copied.");
       } else {
         onFeedback("Copy is not available in this browser.");
@@ -81,6 +89,7 @@ export function ShareSheet({
     if (target === "more") {
       if (navigator.share) {
         await navigator.share({ title: share.title, text: share.text, url: share.url });
+        await onShared?.();
         onFeedback("Shared successfully.");
       } else {
         onFeedback("More apps sharing is not available in this browser.");
@@ -97,6 +106,7 @@ export function ShareSheet({
         : `mailto:?subject=${encodedTitle}&body=${encodedText}`;
 
     window.open(targetUrl, "_blank", "noopener,noreferrer");
+    await onShared?.();
     onFeedback(target === "whatsapp" ? "Opening WhatsApp share..." : "Opening email share...");
     onClose();
   };
@@ -187,7 +197,7 @@ export function FeedStoryPage({
       setIsStoryLoading(false);
     }
 
-    void prefetchStoryBySlug(storySlug)
+    void prefetchStoryBySlug(storySlug, accessToken)
       .then(async (storyPayload) => {
         const nextStory = toFeedStoryRecord({
           ...storyPayload,
@@ -234,7 +244,7 @@ export function FeedStoryPage({
     return () => {
       cancelled = true;
     };
-  }, [prefetchedStory, storySlug]);
+  }, [accessToken, prefetchedStory, storySlug]);
 
   useEffect(() => {
     if (!story) {
@@ -279,7 +289,13 @@ export function FeedStoryPage({
             ...nextStory,
             likesCount: payload.likesCount,
             bookmarksCount: payload.bookmarksCount,
-            reactionsCount: payload.likesCount + payload.bookmarksCount
+            reactionsCount: payload.likesCount + payload.bookmarksCount,
+            ...(message.channel === `user:${currentUserId}` && payload.action
+              ? {
+                  liked: payload.action === "like" ? !!payload.active : nextStory.liked,
+                  bookmarked: payload.action === "bookmark" ? !!payload.active : nextStory.bookmarked
+                }
+              : {})
           }));
           updateStory((current) =>
             current.id === payload.storyId
@@ -293,6 +309,22 @@ export function FeedStoryPage({
                         bookmarked: payload.action === "bookmark" ? !!payload.active : current.bookmarked
                       }
                     : {})
+                }
+              : current
+          );
+          return;
+        }
+
+        if (payload.kind === "story.share.updated") {
+          updateCachedStoryCounts(payload.storyId, (nextStory) => ({
+            ...nextStory,
+            sharesCount: payload.sharesCount
+          }));
+          updateStory((current) =>
+            current.id === payload.storyId
+              ? {
+                  ...current,
+                  shares: payload.sharesCount
                 }
               : current
           );
@@ -354,6 +386,26 @@ export function FeedStoryPage({
     setStories((current) => current.map((entry) => (entry.slug === story.slug ? updater(entry) : entry)));
   };
 
+  const recordStoryShare = async (storyId: string) => {
+    const result = await apiRequest<{ storyId: string; sharesCount: number }>(`/stories/${storyId}/share`, {
+      method: "POST",
+      accessToken
+    });
+
+    updateCachedStoryCounts(result.storyId, (nextStory) => ({
+      ...nextStory,
+      sharesCount: result.sharesCount
+    }));
+    updateStory((current) =>
+      current.id === result.storyId
+        ? {
+            ...current,
+            shares: result.sharesCount
+          }
+        : current
+    );
+  };
+
   const toggleFollow = () => {
     if (!story || pendingStoryActions.follow) {
       return;
@@ -400,6 +452,13 @@ export function FeedStoryPage({
       }
     )
       .then((result) => {
+        updateCachedStoryCounts(story.id, (nextStory) => ({
+          ...nextStory,
+          liked: result.active,
+          likesCount: result.likesCount,
+          bookmarksCount: result.bookmarksCount,
+          reactionsCount: result.reactionsCount
+        }));
         updateStory((current) => ({
           ...current,
           liked: result.active,
@@ -437,6 +496,13 @@ export function FeedStoryPage({
       }
     )
       .then((result) => {
+        updateCachedStoryCounts(story.id, (nextStory) => ({
+          ...nextStory,
+          bookmarked: result.active,
+          likesCount: result.likesCount,
+          bookmarksCount: result.bookmarksCount,
+          reactionsCount: result.reactionsCount
+        }));
         updateStory((current) => ({
           ...current,
           bookmarked: result.active,
@@ -458,6 +524,7 @@ export function FeedStoryPage({
     }
     const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
     setShareSheet({
+      storyId: story.id,
       title: story.title,
       text: `${story.title} by ${story.author}`,
       url: `${baseUrl}/feed/story/${story.slug}`
@@ -633,7 +700,7 @@ export function FeedStoryPage({
             </button>
             <button className={story.bookmarked ? "feed-action-pill active-feed-action-pill" : "feed-action-pill"} disabled={pendingStoryActions.bookmark} onClick={toggleStoryBookmark} type="button">
               <IconComponent className="inline-icon" name="bookmark" />
-              {story.bookmarked ? "Saved" : story.saves}
+              {story.saves}
             </button>
             <button className="feed-action-pill" onClick={() => void shareStory()} type="button">
               <IconComponent className="inline-icon" name="share" />
@@ -859,6 +926,7 @@ export function FeedStoryPage({
           SectionLabelComponent={SectionLabelComponent}
           onClose={() => setShareSheet(null)}
           onFeedback={setShareFeedback}
+          onShared={shareSheet.storyId ? () => recordStoryShare(shareSheet.storyId!) : undefined}
           share={shareSheet}
         />
       ) : null}

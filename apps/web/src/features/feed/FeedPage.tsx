@@ -43,6 +43,11 @@ type RealtimeEventMessage =
             active: boolean;
           }
         | {
+            kind: "story.share.updated";
+            storyId: string;
+            sharesCount: number;
+          }
+        | {
             kind: "status.created" | "status.deleted" | "status.reaction.updated";
             [key: string]: unknown;
           }
@@ -587,11 +592,12 @@ export function FeedPage({
 
   const openStory = (story: FeedStoryRecord) => navigate(`/feed/story/${story.slug}`, { state: { prefetchedStory: story } });
   const warmStory = (slug: string) => {
-    void prefetchStoryBySlug(slug).catch(() => undefined);
+    void prefetchStoryBySlug(slug, accessToken).catch(() => undefined);
   };
   const openShareSheet = (post: FeedStoryRecord) => {
     const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
     setShareSheet({
+      storyId: post.id,
       title: post.title,
       text: `${post.title} by ${post.author}`,
       url: `${baseUrl}/feed/story/${post.slug}`
@@ -601,7 +607,7 @@ export function FeedPage({
   useEffect(() => {
     let cancelled = false;
     void Promise.all([
-      apiRequest<ApiFeedStory[]>("/stories/feed"),
+      apiRequest<ApiFeedStory[]>("/stories/feed", { accessToken }),
       apiRequest<ApiStatus[]>("/statuses"),
       apiRequest<ApiStatus[]>("/statuses/mine", { accessToken })
     ])
@@ -694,7 +700,13 @@ export function FeedPage({
             ...story,
             likesCount: payload.likesCount,
             bookmarksCount: payload.bookmarksCount,
-            reactionsCount: payload.likesCount + payload.bookmarksCount
+            reactionsCount: payload.likesCount + payload.bookmarksCount,
+            ...(message.channel === `user:${currentUserId}` && payload.action
+              ? {
+                  liked: payload.action === "like" ? !!payload.active : story.liked,
+                  bookmarked: payload.action === "bookmark" ? !!payload.active : story.bookmarked
+                }
+              : {})
           }));
           setFeedPosts((current) =>
             current.map((post) =>
@@ -709,6 +721,23 @@ export function FeedPage({
                           bookmarked: payload.action === "bookmark" ? !!payload.active : post.bookmarked
                         }
                       : {})
+                  }
+                : post
+            )
+          );
+          return;
+        }
+        if (payload.kind === "story.share.updated") {
+          updateCachedStoryCounts(payload.storyId, (story) => ({
+            ...story,
+            sharesCount: payload.sharesCount
+          }));
+          setFeedPosts((current) =>
+            current.map((post) =>
+              post.id === payload.storyId
+                ? {
+                    ...post,
+                    shares: payload.sharesCount
                   }
                 : post
             )
@@ -825,7 +854,13 @@ export function FeedPage({
       { method: "POST", accessToken, body: { action: "like" } }
     )
       .then((result) => {
-        updateCachedStoryCounts(targetPost.id, (story) => ({ ...story, likesCount: result.likesCount, bookmarksCount: result.bookmarksCount, reactionsCount: result.reactionsCount }));
+        updateCachedStoryCounts(targetPost.id, (story) => ({
+          ...story,
+          liked: result.active,
+          likesCount: result.likesCount,
+          bookmarksCount: result.bookmarksCount,
+          reactionsCount: result.reactionsCount
+        }));
         setFeedPosts((current) =>
           current.map((post) =>
             post.slug === slug ? { ...post, liked: result.active, likes: result.likesCount, saves: String(result.bookmarksCount) } : post
@@ -853,7 +888,13 @@ export function FeedPage({
       { method: "POST", accessToken, body: { action: "bookmark" } }
     )
       .then((result) => {
-        updateCachedStoryCounts(targetPost.id, (story) => ({ ...story, likesCount: result.likesCount, bookmarksCount: result.bookmarksCount, reactionsCount: result.reactionsCount }));
+        updateCachedStoryCounts(targetPost.id, (story) => ({
+          ...story,
+          bookmarked: result.active,
+          likesCount: result.likesCount,
+          bookmarksCount: result.bookmarksCount,
+          reactionsCount: result.reactionsCount
+        }));
         setFeedPosts((current) =>
           current.map((post) =>
             post.slug === slug ? { ...post, bookmarked: result.active, likes: result.likesCount, saves: String(result.bookmarksCount) } : post
@@ -866,6 +907,28 @@ export function FeedPage({
         setPendingFeedActions((current) => ({ ...current, [`${slug}:bookmark`]: false }));
         setShareFeedback(getErrorMessage(error, "Could not update bookmark."));
       });
+  };
+
+  const recordStoryShare = async (storyId: string) => {
+    const result = await apiRequest<{ storyId: string; sharesCount: number }>(`/stories/${storyId}/share`, {
+      method: "POST",
+      accessToken
+    });
+
+    updateCachedStoryCounts(result.storyId, (story) => ({
+      ...story,
+      sharesCount: result.sharesCount
+    }));
+    setFeedPosts((current) =>
+      current.map((post) =>
+        post.id === result.storyId
+          ? {
+              ...post,
+              shares: result.sharesCount
+            }
+          : post
+      )
+    );
   };
 
   const submitAnonymousReply = () => {
@@ -1069,7 +1132,16 @@ export function FeedPage({
           ))}
         </div>
       </section>
-      {shareSheet ? <ShareSheet IconComponent={IconComponent} SectionLabelComponent={SectionLabelComponent} onClose={() => setShareSheet(null)} onFeedback={setShareFeedback} share={shareSheet} /> : null}
+      {shareSheet ? (
+        <ShareSheet
+          IconComponent={IconComponent}
+          SectionLabelComponent={SectionLabelComponent}
+          onClose={() => setShareSheet(null)}
+          onFeedback={setShareFeedback}
+          onShared={shareSheet.storyId ? () => recordStoryShare(shareSheet.storyId!) : undefined}
+          share={shareSheet}
+        />
+      ) : null}
       {activeAnonymousPost ? (
         <div className="status-viewer-backdrop" onClick={() => setActiveAnonymousIndex(null)} role="presentation">
           <article className="status-story-viewer tone-ink anonymous-feed-viewer" onClick={(event) => event.stopPropagation()}>

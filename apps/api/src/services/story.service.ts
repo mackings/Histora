@@ -10,6 +10,11 @@ import { enqueueCounterSync } from "./queue.service.js";
 import { resolveStoredObjectUrl } from "./storage.service.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
 
+type StoryViewerState = {
+  liked: boolean;
+  bookmarked: boolean;
+};
+
 function enforcePremiumLimits(input: StorySaveInput, tier: "free" | "premium") {
   const totalImages = input.chapters.reduce<number>((sum, chapter) => sum + chapter.imageUrls.length, 0);
   const totalVoiceNotes = input.chapters.reduce<number>(
@@ -94,11 +99,94 @@ async function serializeStory(story: StoryDocument | null) {
     reactionsCount: story.reactionsCount,
     likesCount: story.likesCount,
     bookmarksCount: story.bookmarksCount,
+    sharesCount: story.sharesCount,
     commentsCount: story.commentsCount,
+    liked: false,
+    bookmarked: false,
     chapters,
     createdAt: story.createdAt,
     updatedAt: story.updatedAt
   };
+}
+
+type SerializedStory = Awaited<ReturnType<typeof serializeStory>>;
+type PublicFeedStory = SerializedStory & {
+  commentCount: number;
+  chapterCount: number;
+};
+
+async function getViewerStoryStates(storyIds: string[], viewerId?: string) {
+  const viewerStateByStoryId = new Map<string, StoryViewerState>();
+
+  if (!viewerId || storyIds.length === 0) {
+    return viewerStateByStoryId;
+  }
+
+  const interactions = await StoryInteractionModel.find({
+    userId: viewerId,
+    storyId: { $in: storyIds },
+    kind: { $in: ["like", "bookmark"] }
+  }).select("storyId kind");
+
+  for (const interaction of interactions) {
+    const storyId = interaction.storyId.toString();
+    const currentState = viewerStateByStoryId.get(storyId) ?? {
+      liked: false,
+      bookmarked: false
+    };
+
+    if (interaction.kind === "like") {
+      currentState.liked = true;
+    }
+
+    if (interaction.kind === "bookmark") {
+      currentState.bookmarked = true;
+    }
+
+    viewerStateByStoryId.set(storyId, currentState);
+  }
+
+  return viewerStateByStoryId;
+}
+
+async function attachViewerStoryState<T extends { id: string; liked?: boolean; bookmarked?: boolean }>(
+  storyPayload: T,
+  viewerId?: string
+) {
+  const viewerStateByStoryId = await getViewerStoryStates([storyPayload.id], viewerId);
+  const viewerState = viewerStateByStoryId.get(storyPayload.id) ?? {
+    liked: false,
+    bookmarked: false
+  };
+
+  return {
+    ...storyPayload,
+    liked: viewerState.liked,
+    bookmarked: viewerState.bookmarked
+  };
+}
+
+async function attachViewerStoryStateList<T extends { id: string; liked?: boolean; bookmarked?: boolean }>(
+  storyPayloads: T[],
+  viewerId?: string
+) {
+  const viewerStateByStoryId = await getViewerStoryStates(
+    storyPayloads.map((story) => story.id),
+    viewerId
+  );
+
+  return storyPayloads.map((story) => {
+    const viewerState = viewerStateByStoryId.get(story.id) ?? {
+      liked: false,
+      bookmarked: false
+    };
+
+    return {
+      ...story,
+      liked: viewerState.liked,
+      bookmarked: viewerState.bookmarked
+    };
+  });
 }
 
 export async function saveStory(authorId: string, input: StorySaveInput, storyId?: string) {
@@ -151,7 +239,7 @@ export async function saveStory(authorId: string, input: StorySaveInput, storyId
 
 export async function getMyStories(authorId: string) {
   const cacheKey = `stories:mine:${authorId}`;
-  const cachedStories = await readJsonCache<ReturnType<typeof serializeStory>[]>(cacheKey);
+  const cachedStories = await readJsonCache<SerializedStory[]>(cacheKey);
   if (cachedStories) {
     return cachedStories;
   }
@@ -159,7 +247,7 @@ export async function getMyStories(authorId: string) {
   const stories = await StoryModel.find({ authorId })
     .sort({ updatedAt: -1 })
     .select(
-      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount likesCount bookmarksCount commentsCount chapters createdAt updatedAt"
+      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
     );
 
   const payload = await Promise.all(stories.map((story) => serializeStory(story)));
@@ -172,11 +260,11 @@ export async function getMyStory(authorId: string, storyId: string) {
   return await serializeStory(story);
 }
 
-export async function getStoryBySlug(shareSlug: string) {
-  const cachedStory = await readJsonCache<ReturnType<typeof serializeStory>>(`stories:public:${shareSlug}`);
+export async function getStoryBySlug(shareSlug: string, viewerId?: string) {
+  const cachedStory = await readJsonCache<SerializedStory>(`stories:public:${shareSlug}`);
   if (cachedStory) {
     await StoryModel.findOneAndUpdate({ slug: shareSlug, status: "published", visibility: "public" }, { $inc: { readCount: 1 } });
-    return cachedStory;
+    return await attachViewerStoryState(cachedStory, viewerId);
   }
 
   const story = await StoryModel.findOne({ slug: shareSlug, status: "published", visibility: "public" });
@@ -188,20 +276,20 @@ export async function getStoryBySlug(shareSlug: string) {
   await story.save();
   const payload = await serializeStory(story);
   await writeJsonCache(`stories:public:${shareSlug}`, payload, 30);
-  return payload;
+  return await attachViewerStoryState(payload, viewerId);
 }
 
-export async function getPublicFeed() {
-  const cachedFeed = await readJsonCache<Array<ReturnType<typeof serializeStory> & { commentCount: number; chapterCount: number }>>("stories:feed");
+export async function getPublicFeed(viewerId?: string) {
+  const cachedFeed = await readJsonCache<PublicFeedStory[]>("stories:feed");
   if (cachedFeed) {
-    return cachedFeed;
+    return await attachViewerStoryStateList(cachedFeed, viewerId);
   }
 
   const stories = await StoryModel.find({ visibility: "public", status: "published" })
     .sort({ createdAt: -1 })
     .limit(20)
     .select(
-      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount likesCount bookmarksCount commentsCount chapters createdAt updatedAt"
+      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
     );
 
   const chapterCommentCounts = await Promise.all(
@@ -222,7 +310,7 @@ export async function getPublicFeed() {
     chapterCount: story.chapters.length
   })));
   await writeJsonCache("stories:feed", payload, 30);
-  return payload;
+  return await attachViewerStoryStateList(payload, viewerId);
 }
 
 export async function toggleStoryReaction(storyId: string, userId: string, action: "like" | "bookmark") {
@@ -292,6 +380,31 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
   };
 }
 
+export async function trackStoryShare(storyId: string) {
+  const story = await StoryModel.findById(storyId);
+  if (!story) {
+    throw new AppError("Story not found", 404);
+  }
+
+  story.sharesCount += 1;
+  await story.save();
+
+  await deleteCache("stories:feed");
+  await deleteCache(`stories:public:${story.slug}`);
+  await deleteCacheByPrefix(`stories:mine:${story.authorId.toString()}`);
+
+  broadcastAppEvent("feed", {
+    kind: "story.share.updated",
+    storyId: story.id,
+    sharesCount: story.sharesCount
+  });
+
+  return {
+    storyId: story.id,
+    sharesCount: story.sharesCount
+  };
+}
+
 export async function listBookmarkedStories(userId: string) {
   const bookmarks = await StoryInteractionModel.find({
     userId,
@@ -300,7 +413,7 @@ export async function listBookmarkedStories(userId: string) {
 
   const storyIds = bookmarks.map((bookmark) => bookmark.storyId);
   const stories = await StoryModel.find({ _id: { $in: storyIds } }).select(
-    "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount likesCount bookmarksCount commentsCount chapters createdAt updatedAt"
+    "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
   );
 
   const storiesById = new Map(stories.map((story) => [story.id, story]));
