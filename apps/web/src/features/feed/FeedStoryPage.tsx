@@ -7,6 +7,7 @@ import {
   getCachedStory,
   prefetchStoryBySlug,
   subscribeToAppEvents,
+  updateCachedStoriesByAuthorUsername,
   updateCachedStoryCounts
 } from "../../lib/api-client";
 import { type FeedStoryRecord, type FeedThreadComment, type ShareSheetPayload, toFeedStoryRecord } from "./models";
@@ -359,6 +360,10 @@ export function FeedStoryPage({
         }
 
         if (payload.kind === "follow.updated" && story?.handle.replace(/^@/, "") === payload.username) {
+          updateCachedStoriesByAuthorUsername(payload.username, (current) => ({
+            ...current,
+            following: payload.active
+          }));
           updateStory((current) => ({ ...current, following: payload.active }));
         }
       } catch {
@@ -413,6 +418,10 @@ export function FeedStoryPage({
       { method: "POST", accessToken }
     )
       .then((result) => {
+        updateCachedStoriesByAuthorUsername(result.username, (current) => ({
+          ...current,
+          following: result.active
+        }));
         updateStory((current) => ({ ...current, following: result.active }));
         setPendingStoryActions((current) => ({ ...current, follow: false }));
       })

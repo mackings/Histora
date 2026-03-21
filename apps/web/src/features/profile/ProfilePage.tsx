@@ -34,11 +34,11 @@ export function ProfilePage({
     setIsLoadingRelationships(true);
     try {
       const [nextFollowers, nextFollowing] = await Promise.all([
-        apiRequest<ProfileRelationship[]>("/profile/followers", { accessToken }),
-        apiRequest<ProfileRelationship[]>("/profile/following", { accessToken })
+        apiRequest<{ followers: ProfileRelationship[] }>("/profile/followers", { accessToken }),
+        apiRequest<{ following: ProfileRelationship[] }>("/profile/following", { accessToken })
       ]);
-      setFollowers(nextFollowers);
-      setFollowing(nextFollowing);
+      setFollowers(nextFollowers.followers);
+      setFollowing(nextFollowing.following);
     } finally {
       setIsLoadingRelationships(false);
     }
@@ -89,19 +89,8 @@ export function ProfilePage({
       accessToken,
       body: {}
     })
-      .then((result) => {
-        setDashboard((current) =>
-          current
-            ? {
-                ...current,
-                user: {
-                  ...current.user,
-                  verificationStatus: result.verificationStatus,
-                  verifiedAt: result.verifiedAt ?? current.user.verifiedAt ?? null
-                }
-              }
-            : current
-        );
+      .then(async () => {
+        await loadDashboard();
         setProfileToast("Blue tick activated on your account.");
       })
       .catch((error) => {

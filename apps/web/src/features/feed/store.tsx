@@ -6,6 +6,7 @@ import {
   type ApiFeedStory,
   type ApiStatus,
   subscribeToAppEvents,
+  updateCachedStoriesByAuthorUsername,
   updateCachedStoryCounts
 } from "../../lib/api-client";
 import { type FeedStoryRecord, toFeedStoryRecord } from "./models";
@@ -273,6 +274,10 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
   }
 
   if (payload.kind === "follow.updated") {
+    updateCachedStoriesByAuthorUsername(payload.username, (story) => ({
+      ...story,
+      following: payload.active
+    }));
     updateFeedPosts((current) =>
       current.map((post) =>
         post.handle.replace(/^@/, "") === payload.username ? { ...post, following: payload.active } : post

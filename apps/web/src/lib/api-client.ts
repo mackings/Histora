@@ -328,6 +328,22 @@ export const updateCachedStoryCounts = (
   }
 };
 
+export const updateCachedStoriesByAuthorUsername = (
+  username: string,
+  updater: (story: ApiStory) => ApiStory
+) => {
+  const normalizedUsername = username.trim().toLowerCase();
+  if (!normalizedUsername) {
+    return;
+  }
+
+  for (const [slug, story] of storyPrefetchCache.entries()) {
+    if (story.authorUsername.trim().toLowerCase() === normalizedUsername) {
+      storyPrefetchCache.set(slug, updater(story));
+    }
+  }
+};
+
 export async function apiRequest<T>(
   path: string,
   options?: {
