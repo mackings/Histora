@@ -55,8 +55,7 @@ export const sanitizeStudioRichText = (html: string) => {
   if (typeof document === "undefined") {
     return html
       .replace(/<\s*(script|style|iframe|object|embed|svg|math)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi, "")
-      .replace(/<[^>]+>/g, "")
-      .trim();
+      .replace(/<[^>]+>/g, "");
   }
 
   const wrapper = document.createElement("div");
@@ -69,9 +68,7 @@ export const sanitizeStudioRichText = (html: string) => {
   }
 
   return sanitizedRoot.innerHTML
-    .replace(/&nbsp;/g, " ")
-    .replace(/\s+<\/p>/g, "</p>")
-    .trim();
+    .replace(/\s+<\/p>/g, "</p>");
 };
 
 export const sanitizeStudioPreviewHtml = (html: string) => sanitizeStudioRichText(html);
