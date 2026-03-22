@@ -71,3 +71,16 @@ export function buildEncryptedTextFields(value: string) {
 export function resolveDecryptedText(body: string, bodyEncrypted?: string | null) {
   return decryptSensitiveValue(bodyEncrypted) ?? body;
 }
+
+export function encryptJsonValue<T>(value: T) {
+  return encryptSensitiveValue(JSON.stringify(value));
+}
+
+export function decryptJsonValue<T>(payload?: string | null) {
+  const decrypted = decryptSensitiveValue(payload);
+  if (!decrypted) {
+    return null;
+  }
+
+  return JSON.parse(decrypted) as T;
+}

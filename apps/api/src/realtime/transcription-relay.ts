@@ -1,9 +1,9 @@
 import type { Server as HttpServer, IncomingMessage } from "http";
-import jwt from "jsonwebtoken";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { isTrustedBrowserOrigin } from "../config/cors.js";
 import { env } from "../config/env.js";
+import { authenticateAccessToken } from "../services/session-auth.service.js";
 
 const ASSEMBLYAI_STREAMING_URL = "wss://streaming.assemblyai.com/v3/ws";
 
@@ -57,7 +57,7 @@ const isUpgradeRequestForRelay = (request: IncomingMessage) => {
   return requestUrl.pathname === "/ws/transcription";
 };
 
-const getUserIdFromToken = (request: IncomingMessage) => {
+const getUserIdFromToken = async (request: IncomingMessage) => {
   const host = request.headers.host;
 
   if (!host || !request.url) {
@@ -72,12 +72,8 @@ const getUserIdFromToken = (request: IncomingMessage) => {
       return undefined;
     }
 
-    const payload = jwt.verify(token, env.JWT_SECRET) as { sub: string; typ?: string };
-    if (payload.typ !== "access" || !payload.sub) {
-      return undefined;
-    }
-
-    return payload.sub;
+    const auth = await authenticateAccessToken(token);
+    return auth.userId;
   } catch {
     return undefined;
   }
@@ -91,14 +87,25 @@ export function registerTranscriptionRelay(server: HttpServer) {
       return;
     }
 
-    if (!request.headers.origin || !isTrustedBrowserOrigin(request.headers.origin) || !getUserIdFromToken(request)) {
+    if (!request.headers.origin || !isTrustedBrowserOrigin(request.headers.origin)) {
       socket.destroy();
       return;
     }
 
-    relayServer.handleUpgrade(request, socket, head, (clientSocket) => {
-      relayServer.emit("connection", clientSocket, request);
-    });
+    void getUserIdFromToken(request)
+      .then((userId) => {
+        if (!userId) {
+          socket.destroy();
+          return;
+        }
+
+        relayServer.handleUpgrade(request, socket, head, (clientSocket) => {
+          relayServer.emit("connection", clientSocket, request);
+        });
+      })
+      .catch(() => {
+        socket.destroy();
+      });
   });
 
   relayServer.on("connection", (clientSocket, request) => {

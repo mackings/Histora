@@ -470,14 +470,36 @@ export async function uploadMediaAsset(
   asset: { blob: Blob; fileName: string; contentType: string }
 ) {
   const normalizedContentType = asset.contentType.split(";")[0]?.trim().toLowerCase() || asset.contentType;
-  const signedUpload = await apiRequest<SignedUploadResponse>("/media/signed-upload", {
-    method: "POST",
-    accessToken,
-    body: {
-      fileName: asset.fileName,
-      contentType: normalizedContentType
+  let signedUpload: SignedUploadResponse | null = null;
+
+  try {
+    signedUpload = await apiRequest<SignedUploadResponse>("/media/signed-upload", {
+      method: "POST",
+      accessToken,
+      body: {
+        fileName: asset.fileName,
+        contentType: normalizedContentType
+      }
+    });
+  } catch (error) {
+    if (!(error instanceof ApiRequestError) || error.code !== "MEDIA_SCAN_REQUIRED") {
+      throw error;
     }
-  });
+  }
+
+  if (!signedUpload) {
+    return apiRequest<SignedReadResponse & { objectKey: string }>(
+      `/media/upload?fileName=${encodeURIComponent(asset.fileName)}&contentType=${encodeURIComponent(normalizedContentType)}`,
+      {
+        method: "POST",
+        accessToken,
+        headers: {
+          "Content-Type": normalizedContentType
+        },
+        rawBody: asset.blob
+      }
+    );
+  }
 
   try {
     const uploadResponse = await fetch(signedUpload.uploadUrl, {

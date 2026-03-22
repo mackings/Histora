@@ -97,7 +97,7 @@ export async function createStatus(userId: string, payload: StatusCreateInput) {
     authorId: userId,
     authorName: payload.anonymous ? "Anonymous" : user.fullName,
     authorUsername: payload.anonymous ? "anonymous" : user.username,
-    ...(payload.anonymous ? buildEncryptedTextFields(payload.body) : { body: payload.body }),
+    ...buildEncryptedTextFields(payload.body),
     anonymous: payload.anonymous,
     visibility: payload.visibility,
     imageUrl: payload.imageUrl,

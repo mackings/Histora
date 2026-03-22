@@ -47,6 +47,9 @@ const envSchema = z.object({
   R2_SECRET_ACCESS_KEY: optionalString(),
   R2_BUCKET_NAME: optionalString(),
   R2_PUBLIC_BASE_URL: optionalUrl(),
+  CLAMAV_HOST: optionalString(),
+  CLAMAV_PORT: z.coerce.number().int().positive().default(3310),
+  CLAMAV_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
   TURNSTILE_SECRET_KEY: optionalString(),
   DATA_ENCRYPTION_KEY: optionalString(),
   CLIENT_ORIGIN: optionalUrl(),
@@ -56,6 +59,73 @@ const envSchema = z.object({
     .optional()
     .transform((value) => value === "true"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development")
+}).superRefine((value, context) => {
+  if (value.NODE_ENV === "production") {
+    if (!value.JWT_REFRESH_SECRET) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["JWT_REFRESH_SECRET"],
+        message: "JWT_REFRESH_SECRET is required in production."
+      });
+    }
+
+    if (value.JWT_REFRESH_SECRET && value.JWT_REFRESH_SECRET === value.JWT_SECRET) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["JWT_REFRESH_SECRET"],
+        message: "JWT_REFRESH_SECRET must differ from JWT_SECRET in production."
+      });
+    }
+
+    if (!value.DATA_ENCRYPTION_KEY) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["DATA_ENCRYPTION_KEY"],
+        message: "DATA_ENCRYPTION_KEY is required in production."
+      });
+    }
+
+    if (!value.CLIENT_ORIGIN && !value.CLIENT_ORIGINS) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["CLIENT_ORIGIN"],
+        message: "At least one trusted client origin is required in production."
+      });
+    }
+  }
+
+  const r2Values = [
+    value.R2_ACCOUNT_ID,
+    value.R2_ACCESS_KEY_ID,
+    value.R2_SECRET_ACCESS_KEY,
+    value.R2_BUCKET_NAME
+  ];
+  const someR2Configured = r2Values.some(Boolean);
+  const allR2Configured = r2Values.every(Boolean);
+  if (someR2Configured && !allR2Configured) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["R2_ACCOUNT_ID"],
+      message: "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET_NAME must be configured together."
+    });
+  }
+
+  const someVapidConfigured = Boolean(value.VAPID_PUBLIC_KEY || value.VAPID_PRIVATE_KEY);
+  if (someVapidConfigured && !(value.VAPID_PUBLIC_KEY && value.VAPID_PRIVATE_KEY)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["VAPID_PUBLIC_KEY"],
+      message: "VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must both be configured."
+    });
+  }
+
+  if (!value.CLAMAV_HOST && "CLAMAV_PORT" in value && process.env.CLAMAV_PORT) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["CLAMAV_HOST"],
+      message: "CLAMAV_HOST must be configured when CLAMAV_PORT is set."
+    });
+  }
 });
 
 export const env = envSchema.parse(process.env);

@@ -11,6 +11,7 @@ import { enqueueCounterSync } from "./queue.service.js";
 import { resolveStoredObjectUrl } from "./storage.service.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
 import { sendGenericNotificationPush } from "./push.service.js";
+import { buildStoredStoryContent, resolveStoryTextContent } from "./story-content.service.js";
 
 type StoryViewerState = {
   liked: boolean;
@@ -64,11 +65,12 @@ async function serializeStory(story: StoryDocument | null) {
     throw new AppError("Story not found", 404);
   }
 
+  const storyText = resolveStoryTextContent(story);
   const coverImageUrl = await resolveStoredObjectUrl(story.coverImageUrl ?? null);
   const chapters = await Promise.all(
-    story.chapters.map(async (chapter) => ({
-      title: chapter.title,
-      body: chapter.body,
+    story.chapters.map(async (chapter, chapterIndex) => ({
+      title: storyText.chapters[chapterIndex]?.title ?? chapter.title,
+      body: storyText.chapters[chapterIndex]?.body ?? chapter.body,
       type: chapter.type,
       order: chapter.order,
       imageUrls: (await Promise.all(chapter.imageUrls.map((imageUrl) => resolveStoredObjectUrl(imageUrl)))).filter(Boolean) as string[],
@@ -76,9 +78,9 @@ async function serializeStory(story: StoryDocument | null) {
       voiceNoteUrl: await resolveStoredObjectUrl(chapter.voiceNoteUrl ?? null),
       voiceNoteKey: chapter.voiceNoteUrl ?? null,
       moments: await Promise.all(
-        chapter.moments.map(async (moment) => ({
-          title: moment.title,
-          description: moment.description,
+        chapter.moments.map(async (moment, momentIndex) => ({
+          title: storyText.chapters[chapterIndex]?.moments[momentIndex]?.title ?? moment.title,
+          description: storyText.chapters[chapterIndex]?.moments[momentIndex]?.description ?? moment.description,
           happenedAt: moment.happenedAt,
           imageUrls: (await Promise.all(moment.imageUrls.map((imageUrl) => resolveStoredObjectUrl(imageUrl)))).filter(Boolean) as string[],
           imageKeys: moment.imageUrls,
@@ -93,8 +95,8 @@ async function serializeStory(story: StoryDocument | null) {
     id: story.id,
     slug: story.slug,
     status: story.status,
-    title: story.title,
-    summary: story.summary,
+    title: storyText.title,
+    summary: storyText.summary,
     coverImageUrl,
     coverImageKey: story.coverImageUrl ?? null,
     visibility: story.visibility,
@@ -102,8 +104,8 @@ async function serializeStory(story: StoryDocument | null) {
     authorName: story.authorName,
     authorUsername: story.authorUsername,
     authorVerified: false,
-    tags: story.tags,
-    links: story.links.map((link) => ({
+    tags: storyText.tags,
+    links: storyText.links.map((link) => ({
       label: link.label,
       url: link.url,
       kind: link.kind
@@ -185,7 +187,7 @@ type PublicFeedStory = SerializedStory & {
 
 export async function assertStoryViewerAccess(storyId: string, viewerId?: string) {
   const story = await StoryModel.findById(storyId).select(
-    "authorId slug status visibility allowedViewerIds anonymous title"
+    "authorId slug status visibility allowedViewerIds anonymous title contentEncrypted sharesCount"
   );
 
   if (!story || story.status !== "published") {
@@ -409,10 +411,12 @@ export async function saveStory(authorId: string, input: StorySaveInput, storyId
 
   enforcePremiumLimits(input, user.subscriptionTier);
   const slug = await buildUniqueStorySlug(input.title, storyId);
+  const storedStoryContent = buildStoredStoryContent(input);
 
   if (!storyId) {
     const story = await StoryModel.create({
       ...input,
+      ...storedStoryContent,
       slug,
       authorId,
       authorName: input.anonymous ? "Anonymous" : user.fullName,
@@ -428,15 +432,16 @@ export async function saveStory(authorId: string, input: StorySaveInput, storyId
     throw new AppError("Story not found", 404);
   }
 
-  story.title = input.title;
-  story.summary = input.summary;
+  story.title = storedStoryContent.title;
+  story.summary = storedStoryContent.summary;
+  story.contentEncrypted = storedStoryContent.contentEncrypted;
   story.coverImageUrl = input.coverImageUrl;
   story.visibility = input.visibility;
   story.anonymous = input.anonymous;
   story.allowedViewerIds = input.allowedViewerIds.map((viewerId) => viewerId as never);
-  story.tags = input.tags;
-  story.links = input.links as never;
-  story.chapters = input.chapters as never;
+  story.tags = storedStoryContent.tags;
+  story.links = storedStoryContent.links as never;
+  story.chapters = storedStoryContent.chapters as never;
   story.status = input.status;
   story.slug = slug;
   story.authorName = input.anonymous ? "Anonymous" : user.fullName;
@@ -459,7 +464,7 @@ export async function getMyStories(authorId: string) {
   const stories = await StoryModel.find({ authorId })
     .sort({ updatedAt: -1 })
     .select(
-      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+      "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
     );
 
   const payload = await Promise.all(stories.map((story) => serializeStory(story)));
@@ -519,7 +524,7 @@ async function includeOwnPublishedStoriesInFeed(feedStories: PublicFeedStory[], 
   const ownStories = await StoryModel.find({ authorId: viewerId, status: "published" })
     .sort({ createdAt: -1 })
     .select(
-      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+      "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
     );
 
   const publicStoryIdSet = new Set(feedStories.map((story) => story.id));
@@ -563,7 +568,7 @@ export async function getPublicFeed(viewerId?: string) {
     .sort({ createdAt: -1 })
     .limit(20)
     .select(
-      "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+      "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
     );
 
   const chapterCommentCounts = await Promise.all(
@@ -653,7 +658,8 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
   });
 
   if (action === "like" && active && actor && String(story.authorId) !== userId) {
-    const body = `${actor.fullName} (@${actor.username}) liked your ${story.anonymous ? "anonymous post" : "post"} "${story.title}".`;
+    const storyTitle = resolveStoryTextContent(story).title;
+    const body = `${actor.fullName} (@${actor.username}) liked your ${story.anonymous ? "anonymous post" : "post"} "${storyTitle}".`;
     broadcastAppEvent(`user:${String(story.authorId)}`, {
       kind: "notification.generic",
       title: "New post like",
@@ -695,7 +701,8 @@ export async function trackStoryShare(storyId: string, userId: string) {
   });
 
   if (actor && String(story.authorId) !== userId) {
-    const body = `${actor.fullName} (@${actor.username}) shared your ${story.anonymous ? "anonymous post" : "post"} "${story.title}".`;
+    const storyTitle = resolveStoryTextContent(story).title;
+    const body = `${actor.fullName} (@${actor.username}) shared your ${story.anonymous ? "anonymous post" : "post"} "${storyTitle}".`;
     broadcastAppEvent(`user:${String(story.authorId)}`, {
       kind: "notification.generic",
       title: "New post share",
@@ -723,7 +730,7 @@ export async function listBookmarkedStories(userId: string) {
 
   const storyIds = bookmarks.map((bookmark) => bookmark.storyId);
   const stories = await StoryModel.find({ _id: { $in: storyIds } }).select(
-    "slug status title summary coverImageUrl visibility anonymous authorName authorUsername tags readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+    "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
   );
 
   const storiesById = new Map(stories.map((story) => [story.id, story]));

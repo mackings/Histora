@@ -8,10 +8,11 @@ import { StoryModel } from "../models/story.model.js";
 import { UserModel } from "../models/user.model.js";
 import type { ContributorInviteInput, DeviceRenameInput, ProfileUpdateInput } from "../shared/index.js";
 import { AppError } from "../utils/app-error.js";
-import { listBookmarkedStories } from "./story.service.js";
+import { assertStoryViewerAccess, listBookmarkedStories } from "./story.service.js";
 import { resolveStoredObjectUrl } from "./storage.service.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
 import { sendFollowNotificationPush } from "./push.service.js";
+import { resolveStoryTextContent } from "./story-content.service.js";
 
 type ProfileRelationshipUser = {
   id: string;
@@ -92,7 +93,7 @@ export async function getProfileDashboard(userId: string) {
   ] = await Promise.all([
     StoryModel.find({ authorId: userId })
       .sort({ updatedAt: -1 })
-      .select("title visibility status readCount likesCount bookmarksCount sharesCount commentsCount chapters updatedAt"),
+      .select("title contentEncrypted visibility status readCount likesCount bookmarksCount sharesCount commentsCount chapters updatedAt"),
     AnonymousMessageModel.countDocuments({ recipientUserId: userId }),
     AnonymousMessageModel.countDocuments({ senderUserId: userId }),
     SessionModel.countDocuments({ userId, revokedAt: null, expiresAt: { $gt: new Date() } }),
@@ -171,7 +172,7 @@ export async function getProfileDashboard(userId: string) {
     },
     stories: stories.map((story) => ({
       id: story.id,
-      title: story.title,
+      title: resolveStoryTextContent(story).title,
       visibility: story.visibility.toUpperCase(),
       chapters: `${story.chapters.length} chapter${story.chapters.length === 1 ? "" : "s"}`,
       chapterCount: story.chapters.length,
@@ -328,7 +329,7 @@ export async function listContributorInvites(userId: string) {
 }
 
 export async function createContributorInvite(userId: string, input: ContributorInviteInput) {
-  const story = await StoryModel.findOne({ _id: input.storyId, authorId: userId }).select("title");
+  const story = await StoryModel.findOne({ _id: input.storyId, authorId: userId }).select("title contentEncrypted");
   if (!story) {
     throw new AppError("Story not found", 404);
   }
@@ -338,7 +339,7 @@ export async function createContributorInvite(userId: string, input: Contributor
     email: input.email.toLowerCase(),
     circle: input.circle,
     storyId: input.storyId,
-    storyTitle: story.title,
+    storyTitle: resolveStoryTextContent(story).title,
     status: "pending"
   });
 
@@ -449,11 +450,7 @@ export async function toggleFollowUser(followerUserId: string, username: string)
 }
 
 export async function toggleFollowStoryAuthor(followerUserId: string, storyId: string) {
-  const story = await StoryModel.findById(storyId).select("authorId");
-  if (!story) {
-    throw new AppError("Story not found", 404);
-  }
-
+  const story = await assertStoryViewerAccess(storyId, followerUserId);
   return toggleFollowTarget(followerUserId, String(story.authorId));
 }
 

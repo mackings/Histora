@@ -17,10 +17,42 @@ services:
         sync: false
       - key: JWT_SECRET
         sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+      - key: DATA_ENCRYPTION_KEY
+        sync: false
       - key: ASSEMBLYAI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
         sync: false
       - key: TRANSCRIPTION_PROVIDER
         value: assemblyai
+      - key: REDIS_URL
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
+      - key: R2_PUBLIC_BASE_URL
+        sync: false
+      - key: CLAMAV_HOST
+        sync: false
+      - key: CLAMAV_PORT
+        sync: false
+      - key: CLAMAV_TIMEOUT_MS
+        sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
+      - key: TURNSTILE_SECRET_KEY
+        sync: false
       - key: CLIENT_ORIGIN
         sync: false
       - key: CLIENT_ORIGINS

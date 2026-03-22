@@ -8,6 +8,7 @@ export interface StoryDocument extends mongoose.Document {
   status: "draft" | "published";
   title: string;
   summary: string;
+  contentEncrypted?: string | null;
   coverImageUrl?: string;
   visibility: "private" | "public" | "selected";
   anonymous: boolean;
@@ -85,6 +86,7 @@ const storySchema = new Schema(
     status: { type: String, enum: ["draft", "published"], default: "draft", index: true },
     title: { type: String, required: true, trim: true },
     summary: { type: String, required: true, trim: true },
+    contentEncrypted: { type: String, default: null },
     coverImageUrl: { type: String },
     visibility: { type: String, enum: ["private", "public", "selected"], default: "private", index: true },
     anonymous: { type: Boolean, default: false, index: true },

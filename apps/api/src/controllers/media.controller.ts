@@ -6,12 +6,14 @@ import { signedUploadSchema } from "../shared/index.js";
 import { asyncHandler } from "../utils/async-handler.js";
 import { recordAuditEvent } from "../services/audit.service.js";
 import { AppError } from "../utils/app-error.js";
+import { env } from "../config/env.js";
 import {
   assertOwnedObjectKey,
   createSignedReadUrl,
   createSignedUploadUrl,
   uploadObjectDirect
 } from "../services/storage.service.js";
+import { scanMediaBuffer } from "../services/media-scan.service.js";
 
 const sanitizeFileName = (name: string) =>
   name
@@ -119,6 +121,14 @@ const getRawRequestBody = (request: Request) => {
 };
 
 export const createSignedUploadController = asyncHandler(async (request, response) => {
+  if (env.CLAMAV_HOST) {
+    throw new AppError(
+      "Signed uploads are disabled while malware scanning is enforced.",
+      409,
+      "MEDIA_SCAN_REQUIRED"
+    );
+  }
+
   const payload = signedUploadSchema.parse(request.body);
   const extension = extensionByContentType[payload.contentType] ?? (path.extname(payload.fileName) || ".bin");
   const baseName = sanitizeFileName(path.basename(payload.fileName, extension)) || "upload";
@@ -165,6 +175,7 @@ export const uploadMediaDirectController = asyncHandler(async (request, response
   const objectKey = `users/${request.auth!.userId}/${Date.now()}-${baseName}${extension}`;
   const binaryBody = getRawRequestBody(request);
   assertUploadPayloadMatchesContentType(binaryBody, payload.contentType, request.header("content-type") ?? undefined);
+  await scanMediaBuffer(binaryBody);
 
   const result = await uploadObjectDirect({
     objectKey,

@@ -432,6 +432,22 @@ export function StudioPage({
   const liveChapterIndexSet = new Set(liveChapterIndexes);
   const activeChapterIsLive = liveChapterIndexSet.has(activeChapterIndex >= 0 ? activeChapterIndex : 0);
   const storySetupComplete = storyTitle.trim().length >= 3 && summaryWordCount >= 20;
+  const hasUnsavedLocalDraft =
+    !currentStoryId &&
+    (
+      storyTitle.trim().length > 0 ||
+      storySummary.trim().length > 0 ||
+      storyLinks.some((link) => link.label.trim().length > 0 || link.url.trim().length > 0) ||
+      chapters.some((chapter, index) =>
+        chapter.title.trim() !== `Chapter ${index + 1}` ||
+        getPlainTextFromHtml(chapter.body).trim().length > 0 ||
+        chapter.imageAttachments.length > 0 ||
+        chapter.voiceNotes.length > 0 ||
+        chapter.timelineEntries.some(
+          (entry) => entry.title.trim().length > 0 || entry.body.trim().length > 0 || entry.year || entry.month || entry.day
+        )
+      )
+    );
   const chapterStepComplete = readyChapters.length > 0;
   const mediaStepComplete = imageAttachments.length > 0 || voiceNotes.length > 0;
   const timelineStepComplete = hasTimelineContent(timelineEntries);
@@ -521,6 +537,74 @@ export function StudioPage({
         index === (activeChapterIndex >= 0 ? activeChapterIndex : 0) ? { ...chapter, [field]: value } : chapter
       )
     );
+  };
+
+  const getEditorSelectionCharacterOffset = (root: HTMLElement) => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return null;
+    }
+
+    const range = selection.getRangeAt(0);
+    if (!root.contains(range.startContainer)) {
+      return null;
+    }
+
+    const preRange = range.cloneRange();
+    preRange.selectNodeContents(root);
+    preRange.setEnd(range.startContainer, range.startOffset);
+    return preRange.toString().length;
+  };
+
+  const restoreEditorSelectionCharacterOffset = (root: HTMLElement, offset: number) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const selection = window.getSelection();
+    if (!selection) {
+      return;
+    }
+
+    const range = document.createRange();
+    let remaining = offset;
+    let foundNode: Node | null = null;
+    let foundOffset = 0;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const textLength = node.textContent?.length ?? 0;
+
+      if (remaining <= textLength) {
+        foundNode = node;
+        foundOffset = remaining;
+        break;
+      }
+
+      remaining -= textLength;
+    }
+
+    if (!foundNode) {
+      range.selectNodeContents(root);
+      range.collapse(false);
+    } else {
+      range.setStart(foundNode, Math.min(foundOffset, foundNode.textContent?.length ?? 0));
+      range.collapse(true);
+    }
+
+    selection.removeAllRanges();
+    selection.addRange(range);
+  };
+
+  const openUnsavedLocalDraft = () => {
+    setIsStudioEditorOpen(true);
+    setStudioMessage("Local draft reopened.");
+    setStudioNotice(null);
   };
   const currentChapterRequiredItems = [
     activeChapterLabel.trim().length > 0 ? null : "add a chapter title",
@@ -1317,8 +1401,12 @@ export function StudioPage({
 
     const nextHtml = editor.innerHTML;
     const sanitizedHtml = sanitizeStudioRichText(nextHtml);
+    const selectionOffset = sanitizedHtml !== nextHtml ? getEditorSelectionCharacterOffset(editor) : null;
     if (editor.innerHTML !== sanitizedHtml) {
       editor.innerHTML = sanitizedHtml;
+      if (selectionOffset !== null) {
+        restoreEditorSelectionCharacterOffset(editor, selectionOffset);
+      }
     }
     const nextText = getPlainTextFromHtml(sanitizedHtml);
     setHasReviewedPreview(false);
@@ -2669,34 +2757,55 @@ export function StudioPage({
             <strong>Loading your story library...</strong>
             <span>Checking drafts and published stories linked to this account.</span>
           </div>
-        ) : storyLibrary.length ? (
-          storyLibrary.map((story) => (
-            <button
-              className={`studio-library-card${currentStoryId === story.id ? " studio-library-card-active" : ""}`}
-              key={story.id}
-              onClick={() =>
-                loadStoryIntoStudio(story, {
-                  mergeRestoredDraft: restoredLocalDraftRef.current && currentStoryId === story.id
-                })
-              }
-              type="button"
-            >
-              <div className="studio-library-head">
-                <strong>{story.title}</strong>
-                <span className="story-tag">{story.status === "published" ? "LIVE" : "DRAFT"}</span>
-              </div>
-              <p>{story.summary}</p>
-              {story.status === "published" ? (
-                <span className="studio-library-action-chip">CONTINUE STORY</span>
-              ) : null}
-              <div className="studio-library-meta">
-                <span>{story.chapters.length} chapter{story.chapters.length === 1 ? "" : "s"}</span>
-                <span>{story.status === "published" ? "Live now" : "Not published yet"}</span>
-                <span>{getStoryAudienceLabel(story.visibility)}</span>
-                <span>{new Date(story.updatedAt).toLocaleDateString()}</span>
-              </div>
-            </button>
-          ))
+        ) : storyLibrary.length || hasUnsavedLocalDraft ? (
+          <>
+            {hasUnsavedLocalDraft ? (
+              <button
+                className={`studio-library-card${currentStoryId === null ? " studio-library-card-active" : ""}`}
+                onClick={openUnsavedLocalDraft}
+                type="button"
+              >
+                <div className="studio-library-head">
+                  <strong>{storyTitle.trim() || "Untitled local draft"}</strong>
+                  <span className="story-tag">DRAFT</span>
+                </div>
+                <p>{storySummary.trim() || "This draft is saved locally on this device. Reopen it here and continue writing before you publish."}</p>
+                <div className="studio-library-meta">
+                  <span>{chapters.length} chapter{chapters.length === 1 ? "" : "s"}</span>
+                  <span>Saved on this device</span>
+                  <span>{anonymous ? "Anonymous" : getStoryAudienceLabel(visibility)}</span>
+                  <span>Continue locally</span>
+                </div>
+              </button>
+            ) : null}
+            {storyLibrary.map((story) => (
+              <button
+                className={`studio-library-card${currentStoryId === story.id ? " studio-library-card-active" : ""}`}
+                key={story.id}
+                onClick={() =>
+                  loadStoryIntoStudio(story, {
+                    mergeRestoredDraft: restoredLocalDraftRef.current && currentStoryId === story.id
+                  })
+                }
+                type="button"
+              >
+                <div className="studio-library-head">
+                  <strong>{story.title}</strong>
+                  <span className="story-tag">{story.status === "published" ? "LIVE" : "DRAFT"}</span>
+                </div>
+                <p>{story.summary}</p>
+                {story.status === "published" ? (
+                  <span className="studio-library-action-chip">CONTINUE STORY</span>
+                ) : null}
+                <div className="studio-library-meta">
+                  <span>{story.chapters.length} chapter{story.chapters.length === 1 ? "" : "s"}</span>
+                  <span>{story.status === "published" ? "Live now" : "Not published yet"}</span>
+                  <span>{getStoryAudienceLabel(story.visibility)}</span>
+                  <span>{new Date(story.updatedAt).toLocaleDateString()}</span>
+                </div>
+              </button>
+            ))}
+          </>
         ) : (
           <div className="studio-library-card studio-library-empty">
             <strong>No saved stories yet</strong>

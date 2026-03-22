@@ -12,6 +12,7 @@ import { sendGenericNotificationPush } from "./push.service.js";
 import { assertStatusViewerAccess } from "./status.service.js";
 import { assertStoryViewerAccess } from "./story.service.js";
 import { StoryModel } from "../models/story.model.js";
+import { resolveStoryTextContent } from "./story-content.service.js";
 
 const getAnonymousInboxChannel = (recipientUserId: string) => `anonymous:inbox:${recipientUserId}`;
 
@@ -44,10 +45,10 @@ async function assertStatusCommentAccess(statusId: string, viewerId?: string, sh
 async function assertStoryChapterCommentAccess(targetId: string, viewerId?: string) {
   const [storyId, chapterId] = targetId.split(":");
   const story = await StoryModel.findById(storyId).select(
-    "chapters slug authorId title anonymous visibility allowedViewerIds status"
+    "chapters slug authorId title anonymous visibility allowedViewerIds status contentEncrypted"
   );
 
-  if (!story || !chapterId || !story.chapters.some((chapter) => chapter.order.toString() === chapterId || chapter.title === chapterId)) {
+  if (!story || !chapterId || !story.chapters.some((chapter) => chapter.order.toString() === chapterId)) {
     throw new AppError("Story chapter not found", 404);
   }
 
@@ -113,7 +114,7 @@ export async function createComment(userId: string, payload: CommentCreateInput)
     if (String(story.authorId) !== userId) {
       notificationTargetUserId = String(story.authorId);
       notificationTitle = "New post comment";
-      notificationBody = `${user.fullName} (@${user.username}) commented on your ${story.anonymous ? "anonymous post" : "post"} "${story.title}".`;
+      notificationBody = `${user.fullName} (@${user.username}) commented on your ${story.anonymous ? "anonymous post" : "post"} "${resolveStoryTextContent(story).title}".`;
       notificationTag = `histora-story-comment-${story.id}-${user.username}`;
       notificationUrl = `/feed/story/${story.slug}`;
     }
@@ -140,7 +141,7 @@ export async function createComment(userId: string, payload: CommentCreateInput)
     authorId: userId,
     authorName: user.fullName,
     authorUsername: user.username,
-    ...(payload.targetType === "anonymousMessage" ? buildEncryptedTextFields(payload.body) : { body: payload.body }),
+    ...buildEncryptedTextFields(payload.body),
     replyToCommentId: payload.replyToCommentId
   });
 
