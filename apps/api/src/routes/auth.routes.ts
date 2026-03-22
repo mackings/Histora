@@ -29,6 +29,27 @@ const authWriteLimiter = rateLimit({
   legacyHeaders: false,
   store: getRateLimitStore("histora:rate-limit:auth-write:")
 });
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: getRateLimitStore("histora:rate-limit:auth-login:")
+});
+const recoveryLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: getRateLimitStore("histora:rate-limit:auth-recovery:")
+});
+const verificationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: getRateLimitStore("histora:rate-limit:auth-verification:")
+});
 const refreshLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 60,
@@ -38,15 +59,15 @@ const refreshLimiter = rateLimit({
 });
 
 authRouter.post("/register", requireTrustedBrowserOrigin, authWriteLimiter, registerController);
-authRouter.post("/login", requireTrustedBrowserOrigin, authWriteLimiter, loginController);
+authRouter.post("/login", requireTrustedBrowserOrigin, loginLimiter, loginController);
 authRouter.get("/me", requireAuth, meController);
 authRouter.post("/refresh", requireTrustedBrowserOrigin, refreshLimiter, refreshController);
 authRouter.post("/logout", requireTrustedBrowserOrigin, refreshLimiter, logoutController);
-authRouter.post("/forgot-password", requireTrustedBrowserOrigin, authWriteLimiter, forgotPasswordController);
-authRouter.post("/reset-password", requireTrustedBrowserOrigin, authWriteLimiter, resetPasswordController);
-authRouter.post("/verify-email", requireTrustedBrowserOrigin, authWriteLimiter, verifyEmailController);
-authRouter.post("/resend-verification", requireTrustedBrowserOrigin, authWriteLimiter, resendVerificationController);
-authRouter.post("/verify-device", requireTrustedBrowserOrigin, authWriteLimiter, verifyDeviceController);
-authRouter.post("/resend-device-verification", requireTrustedBrowserOrigin, authWriteLimiter, resendDeviceVerificationController);
+authRouter.post("/forgot-password", requireTrustedBrowserOrigin, recoveryLimiter, forgotPasswordController);
+authRouter.post("/reset-password", requireTrustedBrowserOrigin, recoveryLimiter, resetPasswordController);
+authRouter.post("/verify-email", requireTrustedBrowserOrigin, verificationLimiter, verifyEmailController);
+authRouter.post("/resend-verification", requireTrustedBrowserOrigin, verificationLimiter, resendVerificationController);
+authRouter.post("/verify-device", requireTrustedBrowserOrigin, verificationLimiter, verifyDeviceController);
+authRouter.post("/resend-device-verification", requireTrustedBrowserOrigin, verificationLimiter, resendDeviceVerificationController);
 
 export { authRouter };

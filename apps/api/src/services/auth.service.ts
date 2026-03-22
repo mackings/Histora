@@ -61,8 +61,8 @@ type VerificationRequestResult = {
   verificationRequired: true;
 };
 
-const buildAccessToken = (userId: string) =>
-  jwt.sign({ sub: userId, typ: "access" }, env.JWT_SECRET, {
+const buildAccessToken = (userId: string, sessionId: string) =>
+  jwt.sign({ sub: userId, sid: sessionId, typ: "access" }, env.JWT_SECRET, {
     expiresIn: accessTokenTtl as SignOptions["expiresIn"]
   });
 
@@ -119,7 +119,7 @@ async function createSessionPayload(userId: string, context?: RequestContext, de
   const avatarUrl = await resolveStoredObjectUrl(user.avatarUrl ?? null);
 
   return {
-    accessToken: buildAccessToken(userId),
+    accessToken: buildAccessToken(userId, session.id),
     refreshToken,
     user: {
       id: user.id,
@@ -593,7 +593,7 @@ export async function refreshAccessToken(refreshToken: string, context?: Request
   });
 
   return {
-    accessToken: buildAccessToken(payload.sub),
+    accessToken: buildAccessToken(payload.sub, nextSession.id),
     refreshToken: nextRefreshToken,
     user
   };

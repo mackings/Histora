@@ -3246,24 +3246,6 @@ textarea {
   border: 1px solid #dbe7ff;
 }
 
-.story-nav-zone {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 26%;
-  background: transparent;
-  z-index: 2;
-  cursor: pointer;
-}
-
-.story-nav-left {
-  left: 0;
-}
-
-.story-nav-right {
-  right: 0;
-}
-
 .story-stage-card {
   position: relative;
   z-index: 1;
@@ -3335,6 +3317,30 @@ textarea {
   margin-top: 4px;
 }
 
+.status-reaction-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid #dbe7ff;
+  color: var(--ink);
+  width: fit-content;
+}
+
+.status-reaction-count strong {
+  font-size: 1rem;
+}
+
+.status-reaction-count span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .anonymous-status-tools,
 .story-comment-list {
   display: grid;
@@ -3399,6 +3405,16 @@ textarea {
   border: 1px solid #dbe7ff;
   color: var(--ink);
   cursor: pointer;
+}
+
+.status-stage-image-frame ~ .status-reaction-count {
+  background: rgba(15, 23, 42, 0.55);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+
+.status-stage-image-frame ~ .status-reaction-count span {
+  color: rgba(255, 255, 255, 0.82);
 }
 
 .story-reply-bar {

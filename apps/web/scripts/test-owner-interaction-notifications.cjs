@@ -1,4 +1,5 @@
 const { chromium } = require("playwright");
+const crypto = require("crypto");
 const path = require("path");
 
 const dotenv = require(path.resolve(__dirname, "../../../node_modules/dotenv"));
@@ -63,9 +64,24 @@ async function loadUser(email) {
 
 async function loadSession(email) {
   const user = await loadUser(email);
+  const session = await mongoose.connection.collection("sessions").insertOne({
+    userId: user._id,
+    tokenHash: crypto.randomUUID(),
+    family: crypto.randomUUID(),
+    parentSessionId: null,
+    deviceKeyHash: null,
+    deviceLabel: null,
+    userAgent: "Playwright",
+    ipAddress: "127.0.0.1",
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    lastSeenAt: new Date(),
+    revokedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date()
+  });
 
   return {
-    accessToken: jwt.sign({ sub: String(user._id), typ: "access" }, process.env.JWT_SECRET, {
+    accessToken: jwt.sign({ sub: String(user._id), sid: String(session.insertedId), typ: "access" }, process.env.JWT_SECRET, {
       expiresIn: process.env.ACCESS_TOKEN_TTL || "15m"
     }),
     user: {

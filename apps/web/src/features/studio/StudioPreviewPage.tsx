@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import { type ApiStory, apiRequest } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
+import { sanitizeStudioPreviewHtml } from "../../lib/safe-content";
 import type { StudioPreviewPayload, StudioPublishPayload } from "./types";
 
 const studioStorageKey = "histora-studio-local-draft-v1";
@@ -225,7 +226,9 @@ export function StudioPreviewPage({
           <div
             className="preview-rich-text"
             dangerouslySetInnerHTML={{
-              __html: preview?.chapterBody ?? "<p>Open a preview from the studio to render the story reader view.</p>"
+              __html: sanitizeStudioPreviewHtml(
+                preview?.chapterBody ?? "<p>Open a preview from the studio to render the story reader view.</p>"
+              )
             }}
           />
         </section>

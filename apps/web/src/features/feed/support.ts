@@ -12,6 +12,8 @@ export type StatusEntry = {
   shareSlug?: string;
   imageUrl?: string | null;
   owned?: boolean;
+  likesCount?: number;
+  bookmarksCount?: number;
   comments?: Array<{ author: string; text: string }>;
   helpFee?: number;
 };
@@ -260,6 +262,8 @@ export const toStatusEntry = (status: ApiStatus, options?: { owned?: boolean }):
   shareSlug: status.shareSlug ?? undefined,
   imageUrl: status.imageUrl ?? null,
   owned: options?.owned ?? false,
+  likesCount: status.likesCount,
+  bookmarksCount: status.bookmarksCount,
   comments: [],
   helpFee: status.anonymous ? 8 : undefined
 });

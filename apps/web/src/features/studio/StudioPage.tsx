@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import { type ApiStory, getEventsSocketUrl, type ProfileDashboard, type SignedReadResponse, apiRequest, uploadMediaAsset } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
+import { sanitizeStudioRichText } from "../../lib/safe-content";
 import type { FeedIconComponent, FeedSectionLabelComponent } from "../feed/ui-types";
 import {
   createEmptyTimelineEntry,
@@ -210,10 +211,10 @@ export function StudioPage({
   const normalizeFetchedStoryChapter = (chapter: ApiStory["chapters"][number], storyStatus: ApiStory["status"]): StudioChapter => ({
     title: chapter.title,
     type: chapter.type.toUpperCase(),
-    words: getChapterWordCount(chapter.body),
+    words: getChapterWordCount(sanitizeStudioRichText(chapter.body)),
     status: storyStatus === "published" ? "Published" : "Draft saved",
     moments: chapter.moments.length,
-    body: chapter.body,
+    body: sanitizeStudioRichText(chapter.body),
     imageAttachments: (chapter.imageUrls ?? []).map((imageUrl, index) => ({
       name: `${chapter.title} image ${index + 1}`,
       url: imageUrl,
@@ -779,6 +780,7 @@ export function StudioPage({
         const restoredChapters = savedDraft.chapters
           .map((chapter) => ({
             ...chapter,
+            body: sanitizeStudioRichText(chapter.body),
             imageAttachments: (chapter.imageAttachments ?? []).filter(
               (attachment) => Boolean(attachment.objectKey || (attachment.url && !isBlobUrl(attachment.url)))
             ),
@@ -910,7 +912,7 @@ export function StudioPage({
 
     const editor = chapterBodyRef.current;
     if (editor && editor.innerHTML !== chapterBody) {
-      editor.innerHTML = chapterBody;
+      editor.innerHTML = sanitizeStudioRichText(chapterBody);
     }
   }, [chapterBody, activeChapter, isEnteringStudio, isStudioEditorOpen]);
 
@@ -1314,7 +1316,11 @@ export function StudioPage({
     }
 
     const nextHtml = editor.innerHTML;
-    const nextText = editor.textContent ?? "";
+    const sanitizedHtml = sanitizeStudioRichText(nextHtml);
+    if (editor.innerHTML !== sanitizedHtml) {
+      editor.innerHTML = sanitizedHtml;
+    }
+    const nextText = getPlainTextFromHtml(sanitizedHtml);
     setHasReviewedPreview(false);
     if (typeof window !== "undefined") {
       window.sessionStorage.removeItem("histora-studio-reviewed");
@@ -1323,7 +1329,7 @@ export function StudioPage({
       index === (activeChapterIndex >= 0 ? activeChapterIndex : 0)
         ? {
             ...chapter,
-            body: nextHtml,
+            body: sanitizedHtml,
             words: nextText.trim().length === 0 ? 0 : nextText.trim().split(/\s+/).length,
             imageAttachments: [...imageAttachmentsRef.current],
             voiceNotes: [...voiceNotesRef.current],
@@ -1333,7 +1339,7 @@ export function StudioPage({
     );
     updateChapter((chapter) => ({
       ...chapter,
-      body: nextHtml,
+      body: sanitizedHtml,
       words: nextText.trim().length === 0 ? 0 : nextText.trim().split(/\s+/).length
     }));
     if (typeof window !== "undefined" && hasLoadedStudioDraftRef.current) {
@@ -2242,7 +2248,7 @@ export function StudioPage({
       status,
       chapters: persistedChapters.map((chapter, index) => ({
         title: chapter.title,
-        body: chapter.body,
+        body: sanitizeStudioRichText(chapter.body),
         type:
           chapter.type.toLowerCase() === "anon"
             ? "anonymous"

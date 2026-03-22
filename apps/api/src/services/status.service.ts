@@ -1,3 +1,5 @@
+import crypto from "crypto";
+
 import type { StatusCreateInput } from "../shared/index.js";
 
 import { StatusModel } from "../models/status.model.js";
@@ -6,12 +8,13 @@ import { UserModel } from "../models/user.model.js";
 import { CommentModel } from "../models/comment.model.js";
 import { FollowModel } from "../models/follow.model.js";
 import { deleteCache, readJsonCache, writeJsonCache } from "./cache.service.js";
+import { buildEncryptedTextFields, resolveDecryptedText } from "./encryption.service.js";
 import { enqueueCounterSync } from "./queue.service.js";
 import { AppError } from "../utils/app-error.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
 import { sendStatusReactionNotificationPush } from "./push.service.js";
 
-const buildStatusShareSlug = () => `status-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+const buildStatusShareSlug = () => `status-${Date.now().toString(36)}-${crypto.randomBytes(5).toString("base64url")}`;
 const statusLifetimeMs = 24 * 60 * 60 * 1000;
 
 const toStatusResponse = (status: {
@@ -20,6 +23,7 @@ const toStatusResponse = (status: {
   authorName: string;
   authorUsername: string;
   body: string;
+  bodyEncrypted?: string | null;
   anonymous: boolean;
   visibility: "public" | "followers" | "private";
   authorVerified?: boolean;
@@ -34,18 +38,53 @@ const toStatusResponse = (status: {
   id: status.id ?? String(status._id ?? ""),
   authorName: status.authorName,
   authorUsername: status.authorUsername,
-  body: status.body,
+  body: resolveDecryptedText(status.body, status.bodyEncrypted),
   anonymous: status.anonymous,
   visibility: status.visibility,
   authorVerified: status.authorVerified ?? false,
   imageUrl: status.imageUrl ?? null,
   shareSlug: status.shareSlug ?? null,
-  commentsCount: status.commentsCount,
-  likesCount: status.likesCount,
-  bookmarksCount: status.bookmarksCount,
+  commentsCount: Number(status.commentsCount ?? 0),
+  likesCount: Number(status.likesCount ?? 0),
+  bookmarksCount: Number(status.bookmarksCount ?? 0),
   createdAt: status.createdAt,
   ...(status.expiresAt ? { expiresAt: status.expiresAt } : {})
 });
+
+export async function assertStatusViewerAccess(statusId: string, viewerId?: string, shareSlug?: string) {
+  const status = await StatusModel.findById(statusId).select("authorId visibility anonymous shareSlug");
+
+  if (!status) {
+    throw new AppError("Status not found", 404);
+  }
+
+  if (viewerId && String(status.authorId) === viewerId) {
+    return status;
+  }
+
+  if (status.visibility === "public") {
+    return status;
+  }
+
+  if (status.anonymous && shareSlug && status.shareSlug === shareSlug) {
+    return status;
+  }
+
+  if (status.visibility === "followers" && viewerId) {
+    const follow = await FollowModel.findOne({
+      followerUserId: viewerId,
+      followeeUserId: status.authorId
+    })
+      .select("_id")
+      .lean();
+
+    if (follow) {
+      return status;
+    }
+  }
+
+  throw new AppError("Status not found", 404);
+}
 
 export async function createStatus(userId: string, payload: StatusCreateInput) {
   const user = await UserModel.findById(userId).select("fullName username verificationStatus");
@@ -58,7 +97,7 @@ export async function createStatus(userId: string, payload: StatusCreateInput) {
     authorId: userId,
     authorName: payload.anonymous ? "Anonymous" : user.fullName,
     authorUsername: payload.anonymous ? "anonymous" : user.username,
-    body: payload.body,
+    ...(payload.anonymous ? buildEncryptedTextFields(payload.body) : { body: payload.body }),
     anonymous: payload.anonymous,
     visibility: payload.visibility,
     imageUrl: payload.imageUrl,
@@ -119,7 +158,7 @@ export async function getStatusFeed(viewerId?: string) {
     })
       .sort({ createdAt: -1 })
       .limit(40)
-      .select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+      .select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
     const visibleUsernames = [...new Set(feed.filter((status) => !status.anonymous).map((status) => status.authorUsername))];
     const verifiedUsernames = new Set(
@@ -156,7 +195,7 @@ export async function getStatusFeed(viewerId?: string) {
   })
     .sort({ createdAt: -1 })
     .limit(30)
-    .select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+    .select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
   const visibleUsernames = [...new Set(feed.filter((status) => !status.anonymous).map((status) => status.authorUsername))];
   const verifiedUsernames = new Set(
@@ -191,7 +230,7 @@ export async function getMyStatuses(userId: string) {
   })
     .sort({ createdAt: -1 })
     .limit(50)
-    .select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+    .select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
   return statuses.map((status) =>
     toStatusResponse({
@@ -209,7 +248,7 @@ export async function getAnonymousStatusByShareSlug(shareSlug: string) {
       { expiresAt: { $gt: new Date() } },
       { createdAt: { $gt: new Date(Date.now() - statusLifetimeMs) } }
     ]
-  }).select("authorName authorUsername body anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+  }).select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
   if (!status) {
     throw new AppError("Anonymous status not found", 404);
@@ -219,11 +258,7 @@ export async function getAnonymousStatusByShareSlug(shareSlug: string) {
 }
 
 export async function toggleStatusReaction(statusId: string, userId: string, action: "like" | "bookmark") {
-  const status = await StatusModel.findById(statusId);
-
-  if (!status) {
-    throw new AppError("Status not found", 404);
-  }
+  const status = await assertStatusViewerAccess(statusId, userId);
 
   const existingInteraction = await StatusInteractionModel.findOne({
     statusId,
@@ -246,9 +281,9 @@ export async function toggleStatusReaction(statusId: string, userId: string, act
   }
 
   if (action === "like") {
-    status.likesCount = Math.max(0, status.likesCount + (active ? 1 : -1));
+    status.likesCount = Math.max(0, Number(status.likesCount ?? 0) + (active ? 1 : -1));
   } else {
-    status.bookmarksCount = Math.max(0, status.bookmarksCount + (active ? 1 : -1));
+    status.bookmarksCount = Math.max(0, Number(status.bookmarksCount ?? 0) + (active ? 1 : -1));
   }
 
   await status.save();

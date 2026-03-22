@@ -63,7 +63,7 @@ export function AnonymousStoryPage({
     }
 
     void apiRequest<ApiComment[]>(
-      `/comments?targetType=anonymousMessage&targetId=${encodeURIComponent(status.id)}`
+      `/comments?targetType=anonymousMessage&targetId=${encodeURIComponent(status.id)}&shareSlug=${encodeURIComponent(status.shareSlug)}`
     )
       .then((messageComments) => {
         setComments(
@@ -88,6 +88,7 @@ export function AnonymousStoryPage({
         body: {
           targetType: "anonymousMessage",
           targetId: status.id,
+          shareSlug: status.shareSlug,
           body: replyDraft.trim()
         }
       });

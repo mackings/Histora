@@ -1,4 +1,5 @@
 const { chromium } = require("playwright");
+const crypto = require("crypto");
 const path = require("path");
 
 const dotenv = require(path.resolve(__dirname, "../../../node_modules/dotenv"));
@@ -59,8 +60,24 @@ async function loadSession(email) {
     throw new Error(`Seeded user not found for ${email}.`);
   }
 
+  const session = await mongoose.connection.collection("sessions").insertOne({
+    userId: user._id,
+    tokenHash: crypto.randomUUID(),
+    family: crypto.randomUUID(),
+    parentSessionId: null,
+    deviceKeyHash: null,
+    deviceLabel: null,
+    userAgent: "Playwright",
+    ipAddress: "127.0.0.1",
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    lastSeenAt: new Date(),
+    revokedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date()
+  });
+
   return {
-    accessToken: jwt.sign({ sub: String(user._id), typ: "access" }, process.env.JWT_SECRET, {
+    accessToken: jwt.sign({ sub: String(user._id), sid: String(session.insertedId), typ: "access" }, process.env.JWT_SECRET, {
       expiresIn: process.env.ACCESS_TOKEN_TTL || "15m"
     }),
     user: {
@@ -229,6 +246,36 @@ async function waitForStatusOnViewer(page, authorName, statusText, timeout = 120
   throw new Error(`Could not find the new status from ${authorName} in time.`);
 }
 
+async function swipeStatusStage(page) {
+  const stage = page.locator(".story-viewer-stage").first();
+  const box = await stage.boundingBox();
+  if (!box) {
+    throw new Error("Could not measure the status stage for swipe testing.");
+  }
+
+  const startX = box.x + box.width * 0.82;
+  const endX = box.x + box.width * 0.18;
+  const y = box.y + box.height * 0.5;
+
+  await page.mouse.move(startX, y);
+  await page.mouse.down();
+  await page.mouse.move(endX, y, { steps: 12 });
+  await page.mouse.up();
+}
+
+async function waitForViewerBodyChange(page, previousBody, timeout = 6000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeout) {
+    const nextBody = (await page.locator(".story-stage-card p").first().innerText().catch(() => "")).trim();
+    if (nextBody && nextBody !== previousBody) {
+      return nextBody;
+    }
+    await page.waitForTimeout(150);
+  }
+
+  throw new Error("Status swipe did not advance the viewer body.");
+}
+
 async function reactToActiveStatus(page) {
   const reactionButton = page.locator(".story-react-row .story-reaction").last();
   const reactionResponsePromise = page
@@ -271,6 +318,21 @@ async function waitForReactionToast(page, expectedText, timeout = 12000) {
   throw new Error(`Reaction toast did not arrive in time. expected=${expectedText}`);
 }
 
+async function waitForOwnerReactionCount(page, timeout = 10000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeout) {
+    await page.locator(".my-status-bubble-shell .my-status-bubble").click();
+    const reactionCount = (await page.locator(".status-reaction-count").first().innerText().catch(() => "")).trim();
+    if (reactionCount.includes("1") && /reaction/i.test(reactionCount)) {
+      return reactionCount;
+    }
+    await closeStatusViewer(page);
+    await page.waitForTimeout(150);
+  }
+
+  throw new Error("Owner reaction count did not update on the status viewer.");
+}
+
 async function run() {
   const [authorSession, viewerSession] = await Promise.all([loadSession(authorUser.email), loadSession(viewerUser.email)]);
   const browserA = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
@@ -298,6 +360,14 @@ async function run() {
         `Status viewer still shows extra chrome. image=${pageBViewer.imageVisible} tagCount=${pageBViewer.tagCount} metricsCount=${pageBViewer.metricsCount}`
       );
     }
+    const navZoneCount = await pageB.locator(".story-nav-zone").count();
+    if (navZoneCount !== 0) {
+      throw new Error(`Status viewer still renders left/right click zones. count=${navZoneCount}`);
+    }
+    await swipeStatusStage(pageB);
+    const swipedBody = await waitForViewerBodyChange(pageB, pageBViewer.bodyText);
+    await closeStatusViewer(pageB);
+    await waitForStatusOnViewer(pageB, authorUser.statusLabel, statusText);
 
     const reactionResult = await reactToActiveStatus(pageB);
     let reactionToast;
@@ -310,6 +380,9 @@ async function run() {
       }));
       throw new Error(`Reaction toast did not arrive. ${JSON.stringify({ reactionResult, toastProbe })}`);
     }
+    await closeStatusViewer(pageB);
+    const ownerReactionCount = await waitForOwnerReactionCount(pageA);
+    await closeStatusViewer(pageA);
 
     console.log(
       JSON.stringify(
@@ -326,14 +399,17 @@ async function run() {
           statusPropagation: {
             latencyMs: pageBViewer.latencyMs,
             viewerBody: pageBViewer.bodyText,
+            swipedBody,
             imageVisible: pageBViewer.imageVisible,
-            extraLabelsRemoved: pageBViewer.tagCount === 0 && pageBViewer.metricsCount === 0
+            extraLabelsRemoved: pageBViewer.tagCount === 0 && pageBViewer.metricsCount === 0,
+            navZonesRemoved: navZoneCount === 0
           },
           reaction: {
             feedback: reactionResult.feedback,
             response: reactionResult.response,
             toastLatencyMs: reactionToast.latencyMs,
-            toastBody: reactionToast.body
+            toastBody: reactionToast.body,
+            ownerReactionCount
           }
         },
         null,

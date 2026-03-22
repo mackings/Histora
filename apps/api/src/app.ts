@@ -25,55 +25,18 @@ export function createApp() {
     ? rateLimitModule.default
     : (rateLimitModule as unknown as { rateLimit: typeof import("express-rate-limit").default }).rateLimit) as typeof import("express-rate-limit").default;
   const app = express();
-  const truncateLogValue = (value: string) => (value.length > 1200 ? `${value.slice(0, 1200)}...` : value);
-  const formatLogPayload = (value: unknown) => {
-    if (typeof value === "undefined") {
-      return "";
-    }
-
-    if (typeof value === "string") {
-      return truncateLogValue(value);
-    }
-
-    try {
-      return truncateLogValue(JSON.stringify(value));
-    } catch {
-      return "[unserializable]";
-    }
-  };
-  const apiResponseLogger: express.RequestHandler = (request, response, next) => {
+  const apiRequestLogger: express.RequestHandler = (request, response, next) => {
     if (!request.path.startsWith("/api/")) {
       next();
       return;
     }
 
-    const requestPayload = formatLogPayload(request.body);
-    let responsePayload: unknown;
-    const originalJson = response.json.bind(response);
-    const originalSend = response.send.bind(response);
-
-    response.json = ((body: unknown) => {
-      responsePayload = body;
-      return originalJson(body);
-    }) as typeof response.json;
-
-    response.send = ((body?: unknown) => {
-      if (typeof responsePayload === "undefined") {
-        responsePayload = body;
-      }
-      return originalSend(body);
-    }) as typeof response.send;
+    const startedAt = Date.now();
 
     response.on("finish", () => {
-      const payloadText = formatLogPayload(responsePayload);
-      const parts = [`[API] ${request.method} ${request.originalUrl} ${response.statusCode}`];
-      if (requestPayload) {
-        parts.push(`request=${requestPayload}`);
-      }
-      if (payloadText) {
-        parts.push(`response=${payloadText}`);
-      }
-      console.log(parts.join(" "));
+      console.log(
+        `[API] ${request.method} ${request.originalUrl} ${response.statusCode} ${Date.now() - startedAt}ms`
+      );
     });
 
     next();
@@ -97,7 +60,7 @@ export function createApp() {
   );
   app.use(express.json({ limit: "1mb" }));
   app.use(cookieParser());
-  app.use(apiResponseLogger);
+  app.use(apiRequestLogger);
 
   app.get("/", (_request, response) => {
     response.status(200).json({ ok: true, service: "Histora API" });

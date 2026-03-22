@@ -1,3 +1,5 @@
+import crypto from "crypto";
+
 import type { AnonymousMessageCreateInput } from "../shared/index.js";
 
 import {
@@ -8,15 +10,21 @@ import { CommentModel } from "../models/comment.model.js";
 import { UserModel } from "../models/user.model.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
 import { recordAuditEvent } from "./audit.service.js";
-import { decryptSensitiveValue, encryptSensitiveValue } from "./encryption.service.js";
+import {
+  buildEncryptedTextFields,
+  decryptSensitiveValue,
+  encryptSensitiveValue,
+  resolveDecryptedText
+} from "./encryption.service.js";
 import { AppError } from "../utils/app-error.js";
 
-const buildShareSlug = () => `anon-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+const buildShareSlug = () => `anon-${Date.now().toString(36)}-${crypto.randomBytes(6).toString("base64url")}`;
 const getAnonymousInboxChannel = (recipientUserId: string) => `anonymous:inbox:${recipientUserId}`;
 type AnonymousMessageResponseRecord = Pick<
   AnonymousMessageDocument,
   | "recipientUsername"
   | "body"
+  | "bodyEncrypted"
   | "shareSlug"
   | "distribution"
   | "commentsCount"
@@ -35,7 +43,7 @@ const toAnonymousResponse = (
 ) => ({
   id: message.id ?? String(message._id ?? ""),
   recipientUsername: message.recipientUsername,
-  body: message.body,
+  body: resolveDecryptedText(message.body, message.bodyEncrypted),
   shareSlug: message.shareSlug,
   distribution: message.distribution,
   commentsCount: message.commentsCount,
@@ -65,7 +73,7 @@ export async function createAnonymousMessage(
     senderUserId: actorUserId ?? null,
     recipientUserId: recipient.id,
     recipientUsername: recipient.username,
-    body: payload.body,
+    ...buildEncryptedTextFields(payload.body),
     shareSlug: buildShareSlug(),
     distribution: payload.distribution,
     helpFee: 8
@@ -73,13 +81,13 @@ export async function createAnonymousMessage(
 
   broadcastAppEvent(getAnonymousInboxChannel(recipient.id), {
     kind: "anonymous.inbox.received",
-    message: {
-      id: message.id,
-      shareSlug: message.shareSlug,
-      body: message.body,
-      distribution: message.distribution,
-      commentsCount: message.commentsCount,
-      createdAt: message.createdAt
+      message: {
+        id: message.id,
+        shareSlug: message.shareSlug,
+        body: payload.body,
+        distribution: message.distribution,
+        commentsCount: message.commentsCount,
+        createdAt: message.createdAt
     }
   });
 
@@ -89,7 +97,7 @@ export async function createAnonymousMessage(
       message: {
         id: message.id,
         shareSlug: message.shareSlug,
-        body: message.body,
+        body: payload.body,
         commentsCount: message.commentsCount,
         createdAt: message.createdAt
       }
@@ -116,7 +124,7 @@ export async function listAnonymousInbox(userId: string) {
     .sort({ createdAt: -1 })
     .limit(100)
     .select(
-      "recipientUsername body shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
+      "recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
     );
 
   return messages.map((message) => toAnonymousResponse(message));
@@ -127,7 +135,7 @@ export async function listSentAnonymousMessages(userId: string) {
     .sort({ createdAt: -1 })
     .limit(100)
     .select(
-      "recipientUsername body shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
+      "recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
     );
 
   return messages.map((message) => toAnonymousResponse(message));
@@ -135,7 +143,7 @@ export async function listSentAnonymousMessages(userId: string) {
 
 export async function getAnonymousMessageBySlug(shareSlug: string) {
   const message = await AnonymousMessageModel.findOne({ shareSlug }).select(
-    "recipientUsername body shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
+    "recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
   );
 
   if (!message) {
@@ -174,7 +182,7 @@ export async function getAnonymousMessageForRecipient(userId: string, shareSlug:
     shareSlug,
     recipientUserId: userId
   }).select(
-    "recipientUsername body shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
+    "recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
   );
 
   if (!message) {
@@ -189,7 +197,10 @@ export async function unlockAnonymousHelperContact(input: {
   messageId: string;
   helper: { name: string; phone: string };
 }) {
-  const message = await AnonymousMessageModel.findById(input.messageId);
+  const message = await AnonymousMessageModel.findOne({
+    _id: input.messageId,
+    recipientUserId: input.actorUserId
+  });
   if (!message) {
     throw new AppError("Anonymous message not found", 404);
   }

@@ -183,6 +183,34 @@ type PublicFeedStory = SerializedStory & {
   chapterCount: number;
 };
 
+export async function assertStoryViewerAccess(storyId: string, viewerId?: string) {
+  const story = await StoryModel.findById(storyId).select(
+    "authorId slug status visibility allowedViewerIds anonymous title"
+  );
+
+  if (!story || story.status !== "published") {
+    throw new AppError("Story not found", 404);
+  }
+
+  if (viewerId && String(story.authorId) === viewerId) {
+    return story;
+  }
+
+  if (story.visibility === "public") {
+    return story;
+  }
+
+  if (
+    story.visibility === "selected" &&
+    viewerId &&
+    story.allowedViewerIds.some((allowedViewerId) => String(allowedViewerId) === viewerId)
+  ) {
+    return story;
+  }
+
+  throw new AppError("Story not found", 404);
+}
+
 async function getViewerStoryStates(storyIds: string[], viewerId?: string) {
   const viewerStateByStoryId = new Map<string, StoryViewerState>();
 
@@ -564,10 +592,7 @@ export async function getPublicFeed(viewerId?: string) {
 }
 
 export async function toggleStoryReaction(storyId: string, userId: string, action: "like" | "bookmark") {
-  const story = await StoryModel.findById(storyId);
-  if (!story) {
-    throw new AppError("Story not found", 404);
-  }
+  const story = await assertStoryViewerAccess(storyId, userId);
 
   const existingInteraction = await StoryInteractionModel.findOne({
     storyId,
@@ -653,10 +678,7 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
 }
 
 export async function trackStoryShare(storyId: string, userId: string) {
-  const story = await StoryModel.findById(storyId);
-  if (!story) {
-    throw new AppError("Story not found", 404);
-  }
+  const story = await assertStoryViewerAccess(storyId, userId);
   const actor = await UserModel.findById(userId).select("fullName username").lean();
 
   story.sharesCount += 1;

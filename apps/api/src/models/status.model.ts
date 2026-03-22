@@ -5,6 +5,7 @@ export interface StatusDocument extends mongoose.Document {
   authorName: string;
   authorUsername: string;
   body: string;
+  bodyEncrypted?: string | null;
   anonymous: boolean;
   visibility: "public" | "followers" | "private";
   imageUrl?: string;
@@ -23,6 +24,7 @@ const statusSchema = new Schema<StatusDocument>(
     authorName: { type: String, required: true, trim: true },
     authorUsername: { type: String, required: true, trim: true, lowercase: true },
     body: { type: String, required: true, trim: true },
+    bodyEncrypted: { type: String, default: null },
     anonymous: { type: Boolean, default: false, index: true },
     visibility: { type: String, enum: ["public", "followers", "private"], default: "public", index: true },
     imageUrl: { type: String },

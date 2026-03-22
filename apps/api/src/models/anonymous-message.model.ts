@@ -5,6 +5,7 @@ export interface AnonymousMessageDocument extends mongoose.Document {
   recipientUserId: mongoose.Types.ObjectId;
   recipientUsername: string;
   body: string;
+  bodyEncrypted?: string | null;
   shareSlug: string;
   distribution: "app" | "external";
   commentsCount: number;
@@ -21,6 +22,7 @@ const anonymousMessageSchema = new Schema<AnonymousMessageDocument>(
     recipientUserId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     recipientUsername: { type: String, required: true, trim: true, lowercase: true, index: true },
     body: { type: String, required: true, trim: true },
+    bodyEncrypted: { type: String, default: null },
     shareSlug: { type: String, required: true, unique: true, index: true },
     distribution: { type: String, enum: ["app", "external"], default: "external", index: true },
     commentsCount: { type: Number, default: 0 },

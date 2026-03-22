@@ -2,16 +2,77 @@ import type { CommentCreateInput } from "../shared/index.js";
 
 import { AnonymousMessageModel } from "../models/anonymous-message.model.js";
 import { CommentModel } from "../models/comment.model.js";
-import { StatusModel } from "../models/status.model.js";
-import { StoryModel } from "../models/story.model.js";
 import { UserModel } from "../models/user.model.js";
-import { deleteCache, deleteCacheByPrefix, readJsonCache, writeJsonCache } from "./cache.service.js";
+import { deleteCache, deleteCacheByPrefix } from "./cache.service.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
+import { buildEncryptedTextFields, resolveDecryptedText } from "./encryption.service.js";
 import { enqueueCounterSync } from "./queue.service.js";
 import { AppError } from "../utils/app-error.js";
 import { sendGenericNotificationPush } from "./push.service.js";
+import { assertStatusViewerAccess } from "./status.service.js";
+import { assertStoryViewerAccess } from "./story.service.js";
+import { StoryModel } from "../models/story.model.js";
 
 const getAnonymousInboxChannel = (recipientUserId: string) => `anonymous:inbox:${recipientUserId}`;
+
+const toCommentResponse = (comment: {
+  id?: string;
+  _id?: unknown;
+  targetType: "status" | "storyChapter" | "anonymousMessage";
+  targetId: string;
+  authorName: string;
+  authorUsername: string;
+  body: string;
+  bodyEncrypted?: string | null;
+  replyToCommentId?: string;
+  createdAt: Date;
+}) => ({
+  id: comment.id ?? String(comment._id ?? ""),
+  targetType: comment.targetType,
+  targetId: comment.targetId,
+  authorName: comment.authorName,
+  authorUsername: comment.authorUsername,
+  body: resolveDecryptedText(comment.body, comment.bodyEncrypted),
+  replyToCommentId: comment.replyToCommentId,
+  createdAt: comment.createdAt
+});
+
+async function assertStatusCommentAccess(statusId: string, viewerId?: string, shareSlug?: string) {
+  return assertStatusViewerAccess(statusId, viewerId, shareSlug);
+}
+
+async function assertStoryChapterCommentAccess(targetId: string, viewerId?: string) {
+  const [storyId, chapterId] = targetId.split(":");
+  const story = await StoryModel.findById(storyId).select(
+    "chapters slug authorId title anonymous visibility allowedViewerIds status"
+  );
+
+  if (!story || !chapterId || !story.chapters.some((chapter) => chapter.order.toString() === chapterId || chapter.title === chapterId)) {
+    throw new AppError("Story chapter not found", 404);
+  }
+
+  await assertStoryViewerAccess(storyId, viewerId);
+
+  return story;
+}
+
+async function assertAnonymousMessageCommentAccess(messageId: string, viewerId?: string, shareSlug?: string) {
+  const message = await AnonymousMessageModel.findById(messageId).select("recipientUserId senderUserId shareSlug");
+
+  if (!message) {
+    throw new AppError("Anonymous message not found", 404);
+  }
+
+  if (viewerId && (String(message.recipientUserId) === viewerId || String(message.senderUserId ?? "") === viewerId)) {
+    return message;
+  }
+
+  if (shareSlug && shareSlug === message.shareSlug) {
+    return message;
+  }
+
+  throw new AppError("Anonymous message not found", 404);
+}
 
 export async function createComment(userId: string, payload: CommentCreateInput) {
   const user = await UserModel.findById(userId).select("fullName username");
@@ -28,13 +89,9 @@ export async function createComment(userId: string, payload: CommentCreateInput)
   let notificationUrl = "/feed";
 
   if (payload.targetType === "status") {
-    const status = await StatusModel.findById(payload.targetId);
+    const status = await assertStatusCommentAccess(payload.targetId, userId, payload.shareSlug);
 
-    if (!status) {
-      throw new AppError("Status not found", 404);
-    }
-
-    status.commentsCount += 1;
+    status.commentsCount = Math.max(0, Number(status.commentsCount ?? 0) + 1);
     await status.save();
     await deleteCache("statuses:feed");
     await enqueueCounterSync("status", status.id);
@@ -47,13 +104,7 @@ export async function createComment(userId: string, payload: CommentCreateInput)
       notificationUrl = "/feed";
     }
   } else if (payload.targetType === "storyChapter") {
-    const [storyId, chapterId] = payload.targetId.split(":");
-    const story = await StoryModel.findById(storyId).select("chapters slug authorId title anonymous");
-
-    // The frontend uses storyId:chapterId, so validate the pair before accepting comments.
-    if (!story || !chapterId || !story.chapters.some((chapter) => chapter.order.toString() === chapterId || chapter.title === chapterId)) {
-      throw new AppError("Story chapter not found", 404);
-    }
+    const story = await assertStoryChapterCommentAccess(payload.targetId, userId);
     await enqueueCounterSync("story", story.id);
     await deleteCache("stories:feed");
     await deleteCache(`stories:public:${story.slug}`);
@@ -67,13 +118,9 @@ export async function createComment(userId: string, payload: CommentCreateInput)
       notificationUrl = `/feed/story/${story.slug}`;
     }
   } else {
-    const message = await AnonymousMessageModel.findById(payload.targetId).select("recipientUserId senderUserId shareSlug");
+    const message = await assertAnonymousMessageCommentAccess(payload.targetId, userId, payload.shareSlug);
 
-    if (!message) {
-      throw new AppError("Anonymous message not found", 404);
-    }
-
-    message.commentsCount += 1;
+    message.commentsCount = Math.max(0, Number(message.commentsCount ?? 0) + 1);
     await message.save();
     await enqueueCounterSync("anonymousMessage", message.id);
     broadcastChannel = getAnonymousInboxChannel(message.recipientUserId.toString());
@@ -93,22 +140,16 @@ export async function createComment(userId: string, payload: CommentCreateInput)
     authorId: userId,
     authorName: user.fullName,
     authorUsername: user.username,
-    body: payload.body,
+    ...(payload.targetType === "anonymousMessage" ? buildEncryptedTextFields(payload.body) : { body: payload.body }),
     replyToCommentId: payload.replyToCommentId
   });
 
   broadcastAppEvent(broadcastChannel, {
     kind: "comment.created",
-    comment: {
-      id: comment.id,
-      targetType: comment.targetType,
-      targetId: comment.targetId,
-      authorName: comment.authorName,
-      authorUsername: comment.authorUsername,
-      body: comment.body,
-      replyToCommentId: comment.replyToCommentId,
-      createdAt: comment.createdAt
-    }
+    comment: toCommentResponse({
+      ...comment.toObject(),
+      body: payload.body
+    })
   });
 
   if (notificationTargetUserId) {
@@ -124,24 +165,27 @@ export async function createComment(userId: string, payload: CommentCreateInput)
       url: notificationUrl
     }).catch(() => undefined);
   }
-
-  await deleteCache(`comments:${payload.targetType}:${payload.targetId}`);
-
-  return comment;
+  return toCommentResponse(comment);
 }
 
-export async function listComments(targetType: "status" | "storyChapter" | "anonymousMessage", targetId: string) {
-  const cacheKey = `comments:${targetType}:${targetId}`;
-  const cachedComments = await readJsonCache<Array<Record<string, unknown>>>(cacheKey);
-  if (cachedComments) {
-    return cachedComments;
+export async function listComments(
+  targetType: "status" | "storyChapter" | "anonymousMessage",
+  targetId: string,
+  viewerId?: string,
+  shareSlug?: string
+) {
+  if (targetType === "status") {
+    await assertStatusCommentAccess(targetId, viewerId, shareSlug);
+  } else if (targetType === "storyChapter") {
+    await assertStoryChapterCommentAccess(targetId, viewerId);
+  } else {
+    await assertAnonymousMessageCommentAccess(targetId, viewerId, shareSlug);
   }
 
   const comments = await CommentModel.find({ targetType, targetId })
     .sort({ createdAt: -1 })
     .limit(100)
-    .select("targetType targetId authorName authorUsername body replyToCommentId createdAt");
+    .select("targetType targetId authorName authorUsername body bodyEncrypted replyToCommentId createdAt");
 
-  await writeJsonCache(cacheKey, comments, 30);
-  return comments;
+  return comments.map((comment) => toCommentResponse(comment));
 }

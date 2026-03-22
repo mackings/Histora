@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
 import feedStory from "../../assets/feed-story.svg";
@@ -145,6 +145,8 @@ function StoryCirclesRow({
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [selectedStatusImage, setSelectedStatusImage] = useState<StatusImageSelection | null>(null);
   const statusImageInputRef = useRef<HTMLInputElement | null>(null);
+  const swipePointerIdRef = useRef<number | null>(null);
+  const swipeStartPointRef = useRef<{ x: number; y: number } | null>(null);
 
   const ownedStatusItems = useMemo(() => statusItems.filter((entry) => entry.owned), [statusItems]);
   const otherStatusItems = useMemo(() => statusItems.filter((entry) => !entry.owned), [statusItems]);
@@ -257,6 +259,54 @@ function StoryCirclesRow({
       return;
     }
     setActiveStatusId(viewableStatuses[activeStatusIndex + 1].id);
+  };
+
+  const getStatusReactionCount = (entry: StatusEntry) => (entry.likesCount ?? 0) + (entry.bookmarksCount ?? 0);
+
+  const handleStatusStagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (
+      target?.closest(
+        "button, a, input, textarea, select, label"
+      )
+    ) {
+      swipePointerIdRef.current = null;
+      swipeStartPointRef.current = null;
+      return;
+    }
+
+    swipePointerIdRef.current = event.pointerId;
+    swipeStartPointRef.current = {
+      x: event.clientX,
+      y: event.clientY
+    };
+  };
+
+  const handleStatusStagePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (swipePointerIdRef.current !== event.pointerId || !swipeStartPointRef.current) {
+      return;
+    }
+
+    const deltaX = event.clientX - swipeStartPointRef.current.x;
+    const deltaY = event.clientY - swipeStartPointRef.current.y;
+    swipePointerIdRef.current = null;
+    swipeStartPointRef.current = null;
+
+    if (Math.abs(deltaX) < 48 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) {
+      return;
+    }
+
+    if (deltaX < 0) {
+      goToNext();
+      return;
+    }
+
+    goToPrevious();
+  };
+
+  const resetStatusStagePointer = () => {
+    swipePointerIdRef.current = null;
+    swipeStartPointRef.current = null;
   };
 
   const openStory = (entryId: string) => {
@@ -657,9 +707,12 @@ function StoryCirclesRow({
                 </button>
               </div>
             </div>
-            <div className="story-viewer-stage">
-              <button aria-label="Previous story" className="story-nav-zone story-nav-left" onClick={goToPrevious} type="button" />
-              <button aria-label="Next story" className="story-nav-zone story-nav-right" onClick={goToNext} type="button" />
+            <div
+              className="story-viewer-stage"
+              onPointerCancel={resetStatusStagePointer}
+              onPointerDown={handleStatusStagePointerDown}
+              onPointerUp={handleStatusStagePointerUp}
+            >
               <div className="story-stage-card">
                 {activeStatus.imageUrl ? (
                   <div className="status-stage-image-frame">
@@ -701,6 +754,12 @@ function StoryCirclesRow({
                     </button>
                   ))}
                 </div>
+                {activeStatus.owned ? (
+                  <div className="status-reaction-count">
+                    <strong>{getStatusReactionCount(activeStatus)}</strong>
+                    <span>{getStatusReactionCount(activeStatus) === 1 ? "reaction" : "reactions"}</span>
+                  </div>
+                ) : null}
                 {activeStatus.anonymous ? (
                   <div className="anonymous-status-tools">
                     <button className="story-chip" onClick={() => void copyStatusLink(activeStatus)} type="button">Copy link</button>
@@ -709,10 +768,6 @@ function StoryCirclesRow({
                 ) : null}
                 {shareFeedback ? <p className="status-feedback">{shareFeedback}</p> : null}
               </div>
-            </div>
-            <div className="story-footer-row">
-              <button className="ghost-action" disabled={activeStatusIndex === 0} onClick={goToPrevious} type="button">Previous</button>
-              <button className="ghost-action" onClick={goToNext} type="button">{activeStatusIndex === viewableStatuses.length - 1 ? "Finish" : "Next"}</button>
             </div>
           </article>
         </div>

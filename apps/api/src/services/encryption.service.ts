@@ -3,6 +3,8 @@ import crypto from "crypto";
 import { env } from "../config/env.js";
 import { AppError } from "../utils/app-error.js";
 
+export const ENCRYPTED_CONTENT_PLACEHOLDER = "[encrypted]";
+
 const deriveKey = () => {
   if (!env.DATA_ENCRYPTION_KEY) {
     return null;
@@ -57,4 +59,15 @@ export function decryptSensitiveValue(payload?: string | null) {
   ]);
 
   return decrypted.toString("utf8");
+}
+
+export function buildEncryptedTextFields(value: string) {
+  return {
+    body: ENCRYPTED_CONTENT_PLACEHOLDER,
+    bodyEncrypted: encryptSensitiveValue(value)
+  };
+}
+
+export function resolveDecryptedText(body: string, bodyEncrypted?: string | null) {
+  return decryptSensitiveValue(bodyEncrypted) ?? body;
 }

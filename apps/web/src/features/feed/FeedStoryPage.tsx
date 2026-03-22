@@ -226,10 +226,18 @@ export function FeedStoryPage({
           commentCount: storyPayload.commentsCount
         });
 
-        const chapterComments = await Promise.all(
+        if (cancelled) {
+          return;
+        }
+
+        setStories([nextStory]);
+        setIsStoryLoading(false);
+
+        const chapterComments = await Promise.allSettled(
           storyPayload.chapters.map(async (chapter) => {
             const comments = await apiRequest<ApiComment[]>(
-              `/comments?targetType=storyChapter&targetId=${encodeURIComponent(`${storyPayload.id}:${chapter.order}`)}`
+              `/comments?targetType=storyChapter&targetId=${encodeURIComponent(`${storyPayload.id}:${chapter.order}`)}`,
+              { accessToken }
             );
 
             return [chapter.order, comments] as const;
@@ -240,20 +248,24 @@ export function FeedStoryPage({
           return;
         }
 
-        const commentMap = new Map(chapterComments);
-        nextStory.chapters = nextStory.chapters.map((chapter, index) => ({
-          ...chapter,
-          comments:
-            commentMap.get(index + 1)?.map((comment) => ({
-              author: comment.authorName,
-              handle: `@${comment.authorUsername}`,
-              text: comment.body,
-              time: new Date(comment.createdAt).toLocaleDateString()
-            })) ?? []
-        }));
-
-        setStories([nextStory]);
-        setIsStoryLoading(false);
+        const commentMap = new Map(
+          chapterComments.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []))
+        );
+        setStories([
+          {
+            ...nextStory,
+            chapters: nextStory.chapters.map((chapter, index) => ({
+              ...chapter,
+              comments:
+                commentMap.get(index + 1)?.map((comment) => ({
+                  author: comment.authorName,
+                  handle: `@${comment.authorUsername}`,
+                  text: comment.body,
+                  time: new Date(comment.createdAt).toLocaleDateString()
+                })) ?? chapter.comments
+            }))
+          }
+        ]);
       })
       .catch((error) => {
         if (!cancelled) {

@@ -9,6 +9,7 @@ export interface CommentDocument extends mongoose.Document {
   authorName: string;
   authorUsername: string;
   body: string;
+  bodyEncrypted?: string | null;
   replyToCommentId?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -24,6 +25,7 @@ const commentSchema = new Schema<CommentDocument>(
     authorName: { type: String, required: true, trim: true },
     authorUsername: { type: String, required: true, trim: true, lowercase: true },
     body: { type: String, required: true, trim: true },
+    bodyEncrypted: { type: String, default: null },
     replyToCommentId: { type: String }
   },
   { timestamps: true }

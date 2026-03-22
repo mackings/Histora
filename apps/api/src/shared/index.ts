@@ -1,10 +1,67 @@
 import { z } from "zod";
 
+const unsafeInlinePattern =
+  /javascript:|vbscript:|data:text\/html|srcdoc\s*=|on[a-z]+\s*=|<\s*script|<\s*iframe|<\s*object|<\s*embed|<\s*svg|<\s*math|document\.|window\.|eval\s*\(|Function\s*\(/i;
+const allowedRichTextTags = new Set(["p", "br", "strong", "b", "em", "i", "u", "blockquote", "ul", "ol", "li"]);
+
+const plainTextSchema = (min: number, max: number, label: string) =>
+  z
+    .string()
+    .trim()
+    .min(min)
+    .max(max)
+    .refine((value) => !/[<>]/.test(value), `${label} cannot contain HTML markup.`)
+    .refine((value) => !unsafeInlinePattern.test(value), `${label} contains blocked script-like content.`);
+
+const sanitizeRichTextHtml = (value: string) => {
+  const withoutDangerousBlocks = value
+    .replace(/<!--[\s\S]*?-->/g, "")
+    .replace(
+      /<\s*(script|style|iframe|object|embed|svg|math|form|input|button|textarea|select|link|meta)[^>]*>[\s\S]*?<\s*\/\s*\1\s*>/gi,
+      ""
+    );
+
+  return withoutDangerousBlocks
+    .replace(/<([^>]+)>/g, (tag, inner: string) => {
+      const match = inner.match(/^\s*(\/?)\s*([a-z0-9-]+)\s*([^>]*)$/i);
+      if (!match) {
+        return "";
+      }
+
+      const [, closingSlash, rawTagName, rawAttributes] = match;
+      const tagName = rawTagName.toLowerCase();
+      if (!allowedRichTextTags.has(tagName)) {
+        return "";
+      }
+
+      const attributes = rawAttributes.trim().replace(/\/$/, "").trim();
+      if (attributes) {
+        return "";
+      }
+
+      if (closingSlash) {
+        return `</${tagName}>`;
+      }
+
+      return tagName === "br" ? "<br>" : `<${tagName}>`;
+    })
+    .replace(/\u00a0/g, " ")
+    .trim();
+};
+
+const richTextSchema = z
+  .string()
+  .min(80)
+  .max(12000)
+  .refine((value) => !unsafeInlinePattern.test(value), "Story body contains blocked script-like content.")
+  .transform((value) => sanitizeRichTextHtml(value))
+  .refine((value) => value.replace(/<[^>]+>/g, " ").trim().length >= 80, "Story body must contain at least 80 characters.");
+
 export const visibilitySchema = z.enum(["private", "public", "selected"]);
 export const subscriptionTierSchema = z.enum(["free", "premium"]);
 export const chapterTypeSchema = z.enum(["memory", "reflection", "milestone", "anonymous"]);
 export const storyLinkSchema = z.object({
-  label: z.string().trim().min(2).max(80),
+  label: plainTextSchema(2, 80, "Link label"),
   url: z
     .string()
     .trim()
@@ -14,27 +71,31 @@ export const storyLinkSchema = z.object({
 });
 const mediaReferenceSchema = z.string().refine(
   (value) => {
-    try {
-      new URL(value);
+    if (/^users\/[^/]+\/.+/.test(value)) {
       return true;
+    }
+
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" || url.protocol === "http:";
     } catch {
-      return /^users\/[^/]+\/.+/.test(value);
+      return false;
     }
   },
-  "Media reference must be a valid URL or storage object key."
+  "Media reference must be an http/https URL or a storage object key."
 );
 
 export const momentSchema = z.object({
-  title: z.string().min(2).max(120),
-  description: z.string().min(10).max(1000),
+  title: plainTextSchema(2, 120, "Timeline title"),
+  description: plainTextSchema(10, 1000, "Timeline description"),
   happenedAt: z.string().datetime(),
   imageUrls: z.array(mediaReferenceSchema).max(10).default([]),
   voiceNoteUrl: mediaReferenceSchema.optional()
 });
 
 export const chapterSchema = z.object({
-  title: z.string().min(2).max(120),
-  body: z.string().min(80).max(12000),
+  title: plainTextSchema(2, 120, "Chapter title"),
+  body: richTextSchema,
   type: chapterTypeSchema.default("memory"),
   order: z.number().int().min(1),
   imageUrls: z.array(mediaReferenceSchema).max(10).default([]),
@@ -43,10 +104,8 @@ export const chapterSchema = z.object({
 });
 
 export const storySchema = z.object({
-  title: z.string().min(3).max(140),
-  summary: z
-    .string()
-    .trim()
+  title: plainTextSchema(3, 140, "Story title"),
+  summary: plainTextSchema(40, 500, "Story summary")
     .refine(
       (value) => value.split(/\s+/).filter(Boolean).length >= 20,
       "Write a fuller story summary with at least 20 words."
@@ -92,7 +151,7 @@ const allowedEmailSchema = z
   }, "Temporary email addresses are not allowed.");
 
 export const signUpSchema = z.object({
-  fullName: z.string().min(2).max(80),
+  fullName: plainTextSchema(2, 80, "Full name"),
   username: z.string().min(3).max(24).regex(/^[a-z0-9_]+$/),
   email: allowedEmailSchema,
   password: z.string().min(10).max(72),
@@ -162,7 +221,7 @@ export const anonymousDistributionSchema = z.enum(["app", "external"]);
 export const commentTargetTypeSchema = z.enum(["status", "storyChapter", "anonymousMessage"]);
 
 export const statusCreateSchema = z.object({
-  body: z.string().min(3).max(1500),
+  body: plainTextSchema(3, 1500, "Status"),
   anonymous: z.boolean().default(false),
   visibility: statusVisibilitySchema.default("public"),
   imageUrl: z.string().url().optional()
@@ -175,7 +234,8 @@ export const statusReactionSchema = z.object({
 export const commentCreateSchema = z.object({
   targetType: commentTargetTypeSchema,
   targetId: z.string().min(1).max(120),
-  body: z.string().min(1).max(1200),
+  body: plainTextSchema(1, 1200, "Comment"),
+  shareSlug: z.string().min(1).max(120).optional(),
   replyToCommentId: z.string().min(1).max(120).optional()
 });
 
@@ -185,7 +245,7 @@ export const storyReactionSchema = z.object({
 
 export const anonymousMessageCreateSchema = z.object({
   recipientUsername: z.string().min(3).max(24).regex(/^[a-z0-9_]+$/),
-  body: z.string().min(3).max(1500),
+  body: plainTextSchema(3, 1500, "Anonymous message"),
   distribution: anonymousDistributionSchema.default("external")
 });
 
@@ -194,8 +254,8 @@ export const anonymousDistributionUpdateSchema = z.object({
 });
 
 export const anonymousHelpUnlockSchema = z.object({
-  helperName: z.string().min(2).max(80),
-  helperPhone: z.string().min(7).max(32)
+  helperName: plainTextSchema(2, 80, "Helper name"),
+  helperPhone: plainTextSchema(7, 32, "Helper phone")
 });
 
 export const signedUploadSchema = z.object({
@@ -225,10 +285,10 @@ export const signedUploadSchema = z.object({
 });
 
 export const profileUpdateSchema = z.object({
-  fullName: z.string().min(2).max(80),
+  fullName: plainTextSchema(2, 80, "Full name"),
   username: z.string().min(3).max(24).regex(/^[a-z0-9_]+$/),
-  bio: z.string().max(240).default(""),
-  location: z.string().max(120).default(""),
+  bio: plainTextSchema(0, 240, "Bio").default(""),
+  location: plainTextSchema(0, 120, "Location").default(""),
   avatarUrl: mediaReferenceSchema.nullish(),
   profileVisibility: z.enum(["public", "selected", "private"]).default("public"),
   defaultStoryVisibility: z.enum(["public", "selected", "private", "anonymous"]).default("selected"),
@@ -247,7 +307,7 @@ export const contributorInviteSchema = z.object({
 export const verificationRequestSchema = z.object({});
 
 export const deviceRenameSchema = z.object({
-  label: z.string().trim().min(2).max(80)
+  label: plainTextSchema(2, 80, "Device label")
 });
 
 export type StoryInput = z.infer<typeof storySchema>;

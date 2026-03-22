@@ -1,11 +1,10 @@
 import type { IncomingMessage, Server as HttpServer } from "http";
 import { randomUUID } from "crypto";
-import jwt from "jsonwebtoken";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { isTrustedBrowserOrigin, normalizeOriginValue } from "../config/cors.js";
-import { env } from "../config/env.js";
 import { getRedisClient, getRedisSubscriber, safeRedisConnect } from "../services/redis.service.js";
+import { authenticateAccessToken } from "../services/session-auth.service.js";
 
 type EventEnvelope = {
   type: "event";
@@ -48,7 +47,7 @@ const isEventsUpgradeRequest = (request: IncomingMessage) => {
   return requestUrl.pathname === "/ws/events";
 };
 
-const getUserIdFromToken = (request: IncomingMessage) => {
+const getUserIdFromToken = async (request: IncomingMessage) => {
   const host = request.headers.host;
 
   if (!host || !request.url) {
@@ -63,12 +62,8 @@ const getUserIdFromToken = (request: IncomingMessage) => {
       return undefined;
     }
 
-    const payload = jwt.verify(token, env.JWT_SECRET) as { sub: string; typ?: string };
-    if (payload.typ !== "access" || !payload.sub) {
-      return undefined;
-    }
-
-    return payload.sub;
+    const auth = await authenticateAccessToken(token);
+    return auth.userId;
   } catch {
     return undefined;
   }
@@ -167,15 +162,19 @@ export function registerAppEventsRelay(server: HttpServer) {
       return;
     }
 
-    eventsServer.handleUpgrade(request, socket, head, (clientSocket) => {
-      eventsServer.emit("connection", clientSocket, request);
+    void getUserIdFromToken(request).then((userId) => {
+      eventsServer.handleUpgrade(request, socket, head, (clientSocket) => {
+        eventsServer.emit("connection", clientSocket, request, userId);
+      });
+    }).catch(() => {
+      socket.destroy();
     });
   });
 
-  eventsServer.on("connection", (socket, request) => {
+  eventsServer.on("connection", (socket, _request, userId?: string) => {
     const client: ClientContext = {
       socket,
-      userId: getUserIdFromToken(request),
+      userId,
       channels: new Set()
     };
 

@@ -46,7 +46,9 @@ export function AnonymousStatusPage({
       return;
     }
 
-    void apiRequest<ApiComment[]>(`/comments?targetType=status&targetId=${encodeURIComponent(status.id)}`)
+    void apiRequest<ApiComment[]>(
+      `/comments?targetType=status&targetId=${encodeURIComponent(status.id)}&shareSlug=${encodeURIComponent(shareSlug)}`
+    )
       .then((statusComments) => {
         setComments(
           statusComments.map((comment) => ({
@@ -56,7 +58,7 @@ export function AnonymousStatusPage({
         );
       })
       .catch(() => undefined);
-  }, [status?.id]);
+  }, [shareSlug, status?.id]);
 
   const submitReply = async () => {
     if (!status || !replyDraft.trim()) {
@@ -70,6 +72,7 @@ export function AnonymousStatusPage({
         body: {
           targetType: "status",
           targetId: status.id,
+          shareSlug,
           body: replyDraft.trim()
         }
       });
