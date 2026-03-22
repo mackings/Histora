@@ -80,6 +80,23 @@ async function run() {
   await page.getByRole("button", { name: /^NEW STORY$/i }).click();
   await page.locator(".editor-surface").waitFor({ state: "visible", timeout: 10000 });
 
+  const guideSpacing = await page.evaluate(() => {
+    const guide = document.querySelector(".studio-flow-guide");
+    const head = guide?.querySelector(".section-head");
+    const grid = guide?.querySelector(".studio-step-grid");
+    if (!guide || !head || !grid) {
+      return null;
+    }
+
+    const guideRect = guide.getBoundingClientRect();
+    const headRect = head.getBoundingClientRect();
+    const gridRect = grid.getBoundingClientRect();
+    return {
+      guidePaddingTop: Math.round(headRect.top - guideRect.top),
+      headerToGridGap: Math.round(gridRect.top - headRect.bottom)
+    };
+  });
+
   const chapterCountOnStart = await page.locator(".chapter-pill").count();
   const initialTimelineRows = await page.locator(".timeline-editor-row").count();
   const initialSummaryCounter = await page.locator(".studio-word-counter").first().innerText();
@@ -91,18 +108,65 @@ async function run() {
   if (initialTimelineRows !== 1) {
     throw new Error(`Expected exactly one timeline row on a fresh story, got ${initialTimelineRows}`);
   }
+  if (!guideSpacing || guideSpacing.guidePaddingTop < 20 || guideSpacing.headerToGridGap < 16) {
+    throw new Error(`Studio guide spacing is still too tight: ${JSON.stringify(guideSpacing)}`);
+  }
 
   const storySetup = page.locator("article").filter({ hasText: "Story identity" }).first();
-  await storySetup.locator("input").first().fill(`Playwright studio library flow ${Date.now()}`);
+  const storyTitle = `Playwright studio library flow ${Date.now()}`;
+  await storySetup.locator("input").first().fill(storyTitle);
   await storySetup.locator("textarea").first().fill(summaryText);
   await page.getByRole("button", { name: /^public$/i }).click();
 
   const editor = page.locator(".editor-surface");
   await editor.click();
   await editor.fill(bodyText);
+  await page.waitForTimeout(2200);
 
   const updatedSummaryCounter = await page.locator(".studio-word-counter").first().innerText();
   const updatedBodyCounter = await page.locator(".studio-word-counter").nth(1).innerText();
+
+  await page.getByRole("button", { name: /story library/i }).click();
+  await page.locator(".studio-library-panel").waitFor({ state: "visible", timeout: 10000 });
+  await page.getByRole("button", { name: new RegExp(storyTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") }).click();
+  await page.locator(".editor-surface").waitFor({ state: "visible", timeout: 10000 });
+  await page.getByRole("button", { name: /story library/i }).click();
+  await page.locator(".studio-library-panel").waitFor({ state: "visible", timeout: 10000 });
+  await page.getByRole("button", { name: /^NEW STORY$/i }).click();
+  await page.locator(".editor-surface").waitFor({ state: "visible", timeout: 10000 });
+
+  const resetProbe = await page.evaluate(() => {
+    const titleInput = document.querySelector("article input");
+    const summaryInput = document.querySelector("article textarea");
+    const editorSurface = document.querySelector(".editor-surface");
+    const chapterPills = document.querySelectorAll(".chapter-pill");
+    const timelineRows = document.querySelectorAll(".timeline-editor-row");
+
+    return {
+      titleValue: titleInput instanceof HTMLInputElement ? titleInput.value : null,
+      summaryValue: summaryInput instanceof HTMLTextAreaElement ? summaryInput.value : null,
+      editorHtml: editorSurface instanceof HTMLElement ? editorSurface.innerHTML.trim() : null,
+      editorText: editorSurface instanceof HTMLElement ? editorSurface.textContent?.trim() ?? null : null,
+      chapterCount: chapterPills.length,
+      timelineRowCount: timelineRows.length
+    };
+  });
+
+  if (
+    !resetProbe ||
+    resetProbe.titleValue !== "" ||
+    resetProbe.summaryValue !== "" ||
+    resetProbe.editorText !== "" ||
+    resetProbe.chapterCount !== 1 ||
+    resetProbe.timelineRowCount !== 1
+  ) {
+    throw new Error(`New story still carried over previous draft state: ${JSON.stringify(resetProbe)}`);
+  }
+
+  await storySetup.locator("input").first().fill(`${storyTitle} fresh`);
+  await storySetup.locator("textarea").first().fill(summaryText);
+  await editor.click();
+  await editor.fill(bodyText);
 
   await page.getByRole("button", { name: /add moment/i }).click();
   await page.locator(".timeline-editor-row").nth(1).waitFor({ state: "visible", timeout: 10000 });
@@ -184,12 +248,14 @@ async function run() {
   const result = {
     libraryVisible,
     editorVisibleOnEntry,
+    guideSpacing,
     chapterCountOnStart,
     initialTimelineRows,
     initialSummaryCounter,
     initialBodyCounter,
     updatedSummaryCounter,
     updatedBodyCounter,
+    resetProbe,
     studioOrder,
     previewOrder,
     previewLinkIconCount,

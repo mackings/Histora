@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { type ApiAnonymousMessage, type ApiStatus, type AuthUser, apiRequest } from "../../lib/api-client";
+import { type ApiAnonymousMessage, type ApiStatus, type ApiStory, type AuthUser, apiRequest } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
 import {
   type StoredAnonymousStatus,
   roundRect,
   toStoredAnonymousStatus,
+  toStoredAnonymousStoryEntry,
   toStoredAnonymousStatusEntry,
   wrapCanvasText
 } from "../feed/support";
@@ -40,10 +41,11 @@ export function AnonymousHubPage({
 
     const loadStatuses = async () => {
       try {
-        const [inboxMessages, sentMessages, postedStatuses] = await Promise.all([
+        const [inboxMessages, sentMessages, postedStatuses, postedStories] = await Promise.all([
           apiRequest<ApiAnonymousMessage[]>("/anonymous-messages/inbox", { accessToken }),
           apiRequest<ApiAnonymousMessage[]>("/anonymous-messages/sent", { accessToken }),
-          apiRequest<ApiStatus[]>("/statuses/mine", { accessToken })
+          apiRequest<ApiStatus[]>("/statuses/mine", { accessToken }),
+          apiRequest<ApiStory[]>("/stories/mine", { accessToken })
         ]);
 
         if (cancelled) {
@@ -53,7 +55,8 @@ export function AnonymousHubPage({
         setStatuses([
           ...inboxMessages.map((message) => toStoredAnonymousStatus(message, "received")),
           ...sentMessages.map((message) => toStoredAnonymousStatus(message, "posted")),
-          ...postedStatuses.filter((status) => status.anonymous && status.shareSlug).map((status) => toStoredAnonymousStatusEntry(status))
+          ...postedStatuses.filter((status) => status.anonymous && status.shareSlug).map((status) => toStoredAnonymousStatusEntry(status)),
+          ...postedStories.filter((story) => story.anonymous && story.status === "published").map((story) => toStoredAnonymousStoryEntry(story))
         ]);
       } catch (error) {
         if (!cancelled) {
@@ -75,7 +78,12 @@ export function AnonymousHubPage({
     }
 
     try {
-      const sharePath = status.kind === "status" ? `/anonymous/status/${status.shareSlug}` : `/anonymous/${status.shareSlug}`;
+      const sharePath =
+        status.kind === "status"
+          ? `/anonymous/status/${status.shareSlug}`
+          : status.kind === "story"
+            ? `/feed/story/${status.shareSlug}`
+            : `/anonymous/${status.shareSlug}`;
       await navigator.clipboard.writeText(`${window.location.origin}${sharePath}`);
       setShareFeedback("Anonymous link copied.");
     } catch {
@@ -103,11 +111,14 @@ export function AnonymousHubPage({
           method: "DELETE",
           accessToken
         });
-      } else {
+      } else if (status.kind === "message") {
         await apiRequest<{ ok: boolean }>(`/anonymous-messages/${status.id}`, {
           method: "DELETE",
           accessToken
         });
+      } else {
+        setShareFeedback("Anonymous stories can be updated from the studio.");
+        return;
       }
 
       setStatuses((current) => current.filter((entry) => !(entry.id === status.id && entry.kind === status.kind)));
@@ -271,8 +282,18 @@ export function AnonymousHubPage({
                   <article className="anonymous-hub-card" key={`${status.kind ?? "message"}-${status.id}`}>
                     <div className="anonymous-hub-card-top">
                       <div className="anonymous-hub-card-copy">
-                        <strong>{status.kind === "status" ? "Anonymous status" : "Anonymous message"}</strong>
-                        <span>{status.meta}</span>
+                        <strong>
+                          {status.kind === "story"
+                            ? status.title
+                            : status.kind === "status"
+                              ? "Anonymous status"
+                              : "Anonymous message"}
+                        </strong>
+                        <span>
+                          {status.kind === "story"
+                            ? `Anonymous story // ${status.meta}`
+                            : status.meta}
+                        </span>
                       </div>
                       <div className="story-viewer-top-actions">
                         {status.kind === "status" ? (
@@ -285,14 +306,16 @@ export function AnonymousHubPage({
                             <IconComponent className="button-icon" name="download" />
                           </button>
                         ) : null}
-                        <button
-                          aria-label="Delete anonymous post"
-                          className="icon-chip icon-chip-dark"
-                          onClick={() => void deletePostedItem(status)}
-                          type="button"
-                        >
-                          <IconComponent className="button-icon" name="trash" />
-                        </button>
+                        {status.kind !== "story" ? (
+                          <button
+                            aria-label="Delete anonymous post"
+                            className="icon-chip icon-chip-dark"
+                            onClick={() => void deletePostedItem(status)}
+                            type="button"
+                          >
+                            <IconComponent className="button-icon" name="trash" />
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                     <p>{status.body}</p>
@@ -302,10 +325,18 @@ export function AnonymousHubPage({
                       </button>
                       <button
                         className="primary-action"
-                        onClick={() => navigate(status.kind === "status" ? `/anonymous/status/${status.shareSlug}` : `/anonymous/${status.shareSlug}`)}
+                        onClick={() =>
+                          navigate(
+                            status.kind === "status"
+                              ? `/anonymous/status/${status.shareSlug}`
+                              : status.kind === "story"
+                                ? `/feed/story/${status.shareSlug}`
+                                : `/anonymous/${status.shareSlug}`
+                          )
+                        }
                         type="button"
                       >
-                        OPEN
+                        {status.kind === "story" ? "OPEN STORY" : "OPEN"}
                         <IconComponent className="button-icon" name="arrow" />
                       </button>
                     </div>

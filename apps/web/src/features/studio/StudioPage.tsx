@@ -124,6 +124,22 @@ const getStoryAudienceHelp = (visibility: "private" | "selected" | "public") => 
   return "Anyone can discover and open this story.";
 };
 
+type StudioGuideTarget =
+  | "chapters"
+  | "storySetup"
+  | "currentChapter"
+  | "media"
+  | "timeline"
+  | "links"
+  | "privacy"
+  | "publish";
+
+type StudioNoticeState = {
+  title: string;
+  body: string;
+  target?: StudioGuideTarget;
+};
+
 export function StudioPage({
   accessToken,
   currentUser,
@@ -318,7 +334,7 @@ export function StudioPage({
   const [isEditingChapterTitle, setIsEditingChapterTitle] = useState(false);
   const [chapterTitleDraft, setChapterTitleDraft] = useState("");
   const [draftHistory, setDraftHistory] = useState<string[]>(["Studio opened."]);
-  const [studioNotice, setStudioNotice] = useState<null | { title: string; body: string }>(null);
+  const [studioNotice, setStudioNotice] = useState<StudioNoticeState | null>(null);
   const [storyLibrary, setStoryLibrary] = useState<ApiStory[]>([]);
   const [isStoryLibraryLoading, setIsStoryLibraryLoading] = useState(false);
   const [timelineEntries, setTimelineEntries] = useState<StudioTimelineEntry[]>([]);
@@ -347,6 +363,10 @@ export function StudioPage({
   const mediaSectionRef = useRef<HTMLElement | null>(null);
   const publishSectionRef = useRef<HTMLElement | null>(null);
   const timelineSectionRef = useRef<HTMLElement | null>(null);
+  const mediaAttachmentsSectionRef = useRef<HTMLElement | null>(null);
+  const storyLinksSectionRef = useRef<HTMLElement | null>(null);
+  const privacySectionRef = useRef<HTMLElement | null>(null);
+  const publishControlSectionRef = useRef<HTMLElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const imageAttachmentsRef = useRef<StudioMediaAttachment[]>([]);
   const voiceNotesRef = useRef<StudioMediaAttachment[]>([]);
@@ -410,6 +430,70 @@ export function StudioPage({
   const activeChapterNumberLabel = `Chapter ${activeChapterNumber}`;
   const liveChapterIndexSet = new Set(liveChapterIndexes);
   const activeChapterIsLive = liveChapterIndexSet.has(activeChapterIndex >= 0 ? activeChapterIndex : 0);
+  const storySetupComplete = storyTitle.trim().length >= 3 && summaryWordCount >= 20;
+  const chapterStepComplete = readyChapters.length > 0;
+  const mediaStepComplete = imageAttachments.length > 0 || voiceNotes.length > 0;
+  const timelineStepComplete = hasTimelineContent(timelineEntries);
+  const storyLinksComplete = storyLinks.some((link) => link.label.trim() && link.url.trim());
+  const previewStepComplete = hasReviewedPreview;
+  const studioGuideSteps = [
+    {
+      id: "storySetup" as const,
+      number: 1,
+      title: "Story setup",
+      description: "Add a title and a summary so the story can be previewed.",
+      completed: storySetupComplete,
+      status: storySetupComplete ? "Ready" : "Start here"
+    },
+    {
+      id: "currentChapter" as const,
+      number: 2,
+      title: "Write a chapter",
+      description: "Give one chapter a title and enough words to make it publishable.",
+      completed: chapterStepComplete,
+      status: chapterStepComplete ? "Ready" : "Write next"
+    },
+    {
+      id: "media" as const,
+      number: 3,
+      title: "Add media",
+      description: "Attach images or voice notes if they help tell the chapter better.",
+      completed: mediaStepComplete,
+      status: mediaStepComplete ? "Added" : "Optional"
+    },
+    {
+      id: "timeline" as const,
+      number: 4,
+      title: "Timeline moments",
+      description: "Anchor the chapter to real dates, months, or turning points.",
+      completed: timelineStepComplete,
+      status: timelineStepComplete ? "Added" : "Optional"
+    },
+    {
+      id: "links" as const,
+      number: 5,
+      title: "Story links",
+      description: "Add supporting links readers can open after they finish the story.",
+      completed: storyLinksComplete,
+      status: storyLinksComplete ? "Added" : "Optional"
+    },
+    {
+      id: "privacy" as const,
+      number: 6,
+      title: "Audience",
+      description: "Check who should be able to open the story before you publish.",
+      completed: true,
+      status: anonymous ? "Anonymous" : getStoryAudienceLabel(visibility)
+    },
+    {
+      id: "publish" as const,
+      number: 7,
+      title: "Preview and publish",
+      description: "Review the final reader view, then publish or republish the live version.",
+      completed: previewStepComplete,
+      status: currentStoryStatus === "published" ? "Live story" : previewStepComplete ? "Previewed" : "Review next"
+    }
+  ];
   const autoSaveSignature = JSON.stringify({
     activeChapter,
     anonymous,
@@ -537,6 +621,17 @@ export function StudioPage({
       currentUser.defaultStoryVisibility === "selected"
         ? currentUser.defaultStoryVisibility
         : "selected";
+    const initialChapter = createInitialStudioChapter(0);
+
+    restoredLocalDraftRef.current = false;
+    lastAutoSavedSignatureRef.current = "";
+    currentStoryIdRef.current = null;
+    chaptersRef.current = [initialChapter];
+    imageAttachmentsRef.current = [];
+    voiceNotesRef.current = [];
+    if (chapterBodyRef.current) {
+      chapterBodyRef.current.innerHTML = "";
+    }
 
     setCurrentStoryId(null);
     setCurrentStoryStatus("draft");
@@ -548,11 +643,18 @@ export function StudioPage({
     setAnonymous(currentUser.defaultStoryVisibility === "anonymous");
     setChapterType("memory");
     setAllowComments(currentUser.allowCommentsByDefault);
-    setChapters([createInitialStudioChapter(0)]);
+    setChapters([initialChapter]);
     setActiveChapter("Chapter 1");
+    setImageAttachments([]);
+    setVoiceNotes([]);
+    setTimelineEntries(initialChapter.timelineEntries);
+    setMediaError(null);
+    setIsEditingChapterTitle(false);
+    setChapterTitleDraft("");
     setIsStudioEditorOpen(true);
-    setDraftHistory((current) => ["New story started.", ...current].slice(0, 6));
+    setDraftHistory(["New story started."]);
     setStudioMessage("New story ready.");
+    setStudioNotice(null);
     if (typeof window !== "undefined") {
       window.localStorage.removeItem(studioStorageKey);
       window.sessionStorage.removeItem("histora-studio-preview");
@@ -1017,7 +1119,9 @@ export function StudioPage({
             }
             const message = getErrorMessage(error, "Could not upload the voice note.");
             setMediaError(`${message} Voice notes only appear after a successful upload.`);
-            openStudioNotice("Voice note upload failed", `${message} Record again when your connection is stable.`);
+            openStudioNotice("Voice note upload failed", `${message} Record again when your connection is stable.`, {
+              target: "media"
+            });
             setVoiceRecordingStatus("Voice note upload failed.");
           });
 
@@ -1784,8 +1888,8 @@ export function StudioPage({
     setTranscriptionStatus("Voice transcription stopped");
   };
 
-  const openStudioNotice = (title: string, body: string) => {
-    setStudioNotice({ title, body });
+  const openStudioNotice = (title: string, body: string, options?: { target?: StudioGuideTarget }) => {
+    setStudioNotice({ title, body, target: options?.target });
     playStudioNoticeTone(noticeAudioContextRef);
   };
 
@@ -1817,26 +1921,53 @@ export function StudioPage({
     });
   };
 
-  const guideToSection = (ref: RefObject<HTMLElement | null>, message: string) => {
-    setStudioMessage(message);
-    openStudioNotice("Action needed", message);
-    scrollToSectionTop(ref);
+  const getGuideTargetRef = (target: StudioGuideTarget) => {
+    switch (target) {
+      case "chapters":
+        return chapterEditorSectionRef;
+      case "storySetup":
+        return mediaSectionRef;
+      case "currentChapter":
+        return publishSectionRef;
+      case "media":
+        return mediaAttachmentsSectionRef;
+      case "timeline":
+        return timelineSectionRef;
+      case "links":
+        return storyLinksSectionRef;
+      case "privacy":
+        return privacySectionRef;
+      case "publish":
+        return publishControlSectionRef;
+      default:
+        return chapterEditorSectionRef;
+    }
   };
 
-  const scrollToCurrentChapterIssue = () => {
+  const takeUserToStudioTarget = (target: StudioGuideTarget) => {
+    setStudioNotice(null);
+    scrollToSectionTop(getGuideTargetRef(target));
+  };
+
+  const guideToSection = (target: StudioGuideTarget, message: string, title = "Finish this step first") => {
+    setStudioMessage(message);
+    openStudioNotice(title, message, { target });
+  };
+
+  const getCurrentChapterIssueTarget = (): StudioGuideTarget => {
     if (currentChapterRequiredItems.length > 0) {
-      scrollToSectionTop(chapterEditorSectionRef);
-      return;
+      return "currentChapter";
     }
 
     if (currentChapterOptionalItems.includes("attach an image") || currentChapterOptionalItems.includes("record a voice note")) {
-      scrollToSectionTop(mediaSectionRef);
-      return;
+      return "media";
     }
 
     if (currentChapterOptionalItems.includes("add a timeline moment")) {
-      scrollToSectionTop(timelineSectionRef);
+      return "timeline";
     }
+
+    return "currentChapter";
   };
 
   const saveCurrentDraft = (options?: { quiet?: boolean }) => {
@@ -1879,8 +2010,9 @@ export function StudioPage({
         : "";
       const noticeBody = `${activeChapterNumberLabel} saved locally. ${missingRequiredText}${optionalText}`.trim();
       setStudioMessage(`${activeChapterNumberLabel} saved with pending work.`);
-      openStudioNotice("Chapter saved with pending items", noticeBody);
-      scrollToCurrentChapterIssue();
+      openStudioNotice("Chapter saved with pending items", noticeBody, {
+        target: getCurrentChapterIssueTarget()
+      });
       setDraftHistory((current) => [`${activeChapterNumberLabel} saved with pending items.`, ...current].slice(0, 6));
       return;
     }
@@ -1940,7 +2072,7 @@ export function StudioPage({
 
     if (readyChaptersSnapshot.length === 0) {
       guideToSection(
-        chapterEditorSectionRef,
+        "currentChapter",
         `Finish at least one chapter before publishing. Chapters need a title and at least ${chapterCompletionThreshold} words.`
       );
       return;
@@ -1951,9 +2083,9 @@ export function StudioPage({
         "Review before publish",
         startedIncompleteChaptersSnapshot.length > 0
           ? `After preview review, these chapters will go live: ${readyChaptersSnapshot.map((chapter) => chapter.title).join(", ")}. Unfinished chapters will stay as drafts: ${startedIncompleteChaptersSnapshot.map((chapter) => chapter.title).join(", ")}.`
-          : `After preview review, these chapters will go live: ${readyChaptersSnapshot.map((chapter) => chapter.title).join(", ")}.`
+          : `After preview review, these chapters will go live: ${readyChaptersSnapshot.map((chapter) => chapter.title).join(", ")}.`,
+        { target: "publish" }
       );
-      scrollToSectionTop(publishSectionRef);
       void handlePreviewToggle();
       return;
     }
@@ -2139,16 +2271,14 @@ export function StudioPage({
     if (storyTitle.trim().length < 3) {
       const message = "Add a clearer story title before continuing.";
       setStudioMessage(message);
-      openStudioNotice("Story title too short", message);
-      scrollToSectionTop(mediaSectionRef);
+      openStudioNotice("Story title too short", message, { target: "storySetup" });
       return false;
     }
 
     if (summaryWords < 20) {
       const message = `Add a fuller story summary with at least 20 words. You currently have ${summaryWords}.`;
       setStudioMessage(message);
-      openStudioNotice("Story summary needs more detail", message);
-      scrollToSectionTop(mediaSectionRef);
+      openStudioNotice("Story summary needs more detail", message, { target: "storySetup" });
       return false;
     }
 
@@ -2224,7 +2354,7 @@ export function StudioPage({
         ? "Chapter limit reached for this plan."
         : "Free users can write in the first 2 chapters only.";
       setStudioMessage(message);
-      openStudioNotice("Chapter limit reached", message);
+      openStudioNotice("Chapter limit reached", message, { target: "chapters" });
       return;
     }
 
@@ -2355,7 +2485,7 @@ export function StudioPage({
     } catch (error) {
       const message = getErrorMessage(error, "Could not open preview.");
       setStudioMessage(message);
-      openStudioNotice("Preview failed", message);
+      openStudioNotice("Preview failed", message, { target: "publish" });
     }
   };
 
@@ -2403,8 +2533,10 @@ export function StudioPage({
   };
 
   const publishPanel = (
-    <article className="studio-panel card">
+    <article className="studio-panel card" ref={publishControlSectionRef}>
       <SectionLabelComponent>PUBLISH_CONTROL</SectionLabelComponent>
+      <span className="studio-section-step">Step 7</span>
+      <p className="studio-section-helper">Use preview to check the reader view first, then publish when you are ready to go live.</p>
       {isEditingPublishedStory ? (
         <div className="editor-preview studio-live-story-note">
           <h3>Live story update</h3>
@@ -2476,8 +2608,10 @@ export function StudioPage({
   );
 
   const privacyPanel = (
-    <article className="rail-panel card">
+    <article className="rail-panel card" ref={privacySectionRef}>
       <SectionLabelComponent>PRIVACY_CONTROL</SectionLabelComponent>
+      <span className="studio-section-step">Step 6</span>
+      <p className="studio-section-helper">Choose who can read this story before you publish or republish it.</p>
       <div className="choice-stack">
         {["private", "selected", "public"].map((option) => (
           <button
@@ -2546,8 +2680,12 @@ export function StudioPage({
                 <span className="story-tag">{story.status === "published" ? "LIVE" : "DRAFT"}</span>
               </div>
               <p>{story.summary}</p>
+              {story.status === "published" ? (
+                <span className="studio-library-action-chip">CONTINUE STORY</span>
+              ) : null}
               <div className="studio-library-meta">
                 <span>{story.chapters.length} chapter{story.chapters.length === 1 ? "" : "s"}</span>
+                <span>{story.status === "published" ? "Live now" : "Not published yet"}</span>
                 <span>{getStoryAudienceLabel(story.visibility)}</span>
                 <span>{new Date(story.updatedAt).toLocaleDateString()}</span>
               </div>
@@ -2589,29 +2727,45 @@ export function StudioPage({
         </span>
       </section>
       {!isStudioEditorOpen ? storyLibraryPanel : null}
-      {studioNotice ? (
-        <section className="studio-notice card studio-notice-live" role="status">
-          <span className="studio-notice-badge" aria-hidden="true">
-            <IconComponent className="button-icon" name="bolt" />
-          </span>
-          <div className="studio-notice-copy">
-            <span className="studio-notice-label">Action needed</span>
-            <strong>{studioNotice.title}</strong>
-            <p>{studioNotice.body}</p>
-          </div>
-          <button className="ghost-action" onClick={() => setStudioNotice(null)} type="button">DISMISS</button>
-        </section>
-      ) : null}
 
       {isStudioEditorOpen ? (
         <>
+      <section className="studio-flow-guide card">
+        <div className="section-head">
+          <div className="studio-flow-guide-copy">
+            <SectionLabelComponent>GUIDED_STEPS</SectionLabelComponent>
+            <h2>Follow the steps in order</h2>
+            <p className="studio-flow-guide-note">Finish one block at a time. Each card below can take you straight to the next thing that still needs attention.</p>
+          </div>
+          <span className="section-meta">
+            {studioGuideSteps.filter((step) => step.completed).length}/{studioGuideSteps.length} steps ready
+          </span>
+        </div>
+        <div className="studio-step-grid">
+          {studioGuideSteps.map((step) => (
+            <button
+              className={`studio-step-card${step.completed ? " studio-step-card-complete" : ""}`}
+              key={step.id}
+              onClick={() => takeUserToStudioTarget(step.id)}
+              type="button"
+            >
+              <span className="studio-step-number">Step {step.number}</span>
+              <strong>{step.title}</strong>
+              <p>{step.description}</p>
+              <span className="studio-step-status">{step.status}</span>
+            </button>
+          ))}
+        </div>
+      </section>
       <section className="studio-layout">
         <div className="studio-main">
           <article className="studio-panel card" ref={chapterEditorSectionRef}>
             <div className="section-head">
               <div>
                 <SectionLabelComponent>CHAPTER_SWITCHER</SectionLabelComponent>
+                <span className="studio-section-step">Choose chapter</span>
                 <h2>Slide through your chapters</h2>
+                <p className="studio-section-helper">Pick the chapter you want to work on, or add a new one before writing.</p>
               </div>
               <div className="chapter-switcher-actions">
                 <span className="story-tag">{chapterSlots.length} chapters</span>
@@ -2658,7 +2812,9 @@ export function StudioPage({
             <div className="section-head">
               <div>
                 <SectionLabelComponent>STORY_SETUP</SectionLabelComponent>
+                <span className="studio-section-step">Step 1</span>
                 <h2>Story identity</h2>
+                <p className="studio-section-helper">Start with a clear title and summary so the studio can build a good preview.</p>
               </div>
               <span className="story-tag">FREE_PLAN // 2500_WORDS</span>
             </div>
@@ -2689,9 +2845,11 @@ export function StudioPage({
             <div className="section-head">
               <div className="chapter-heading-block">
                 <SectionLabelComponent>CURRENT_CHAPTER</SectionLabelComponent>
+                <span className="studio-section-step">Step 2</span>
                 <span className="current-chapter-kicker">
                   Working on {chapterSlots.find((chapter) => chapter.title === activeChapter)?.chapterLabel ?? "Current chapter"}
                 </span>
+                <p className="studio-section-helper">Write the chapter body here. Finish one strong chapter before worrying about the rest.</p>
                 <div className="chapter-heading-row">
                   {isEditingChapterTitle ? (
                     <input
@@ -2863,11 +3021,13 @@ export function StudioPage({
             </div>
           </article>
 
-          <article className="studio-panel card">
+          <article className="studio-panel card" ref={mediaAttachmentsSectionRef}>
             <div className="section-head">
               <div>
                 <SectionLabelComponent>MEDIA_ATTACHMENTS</SectionLabelComponent>
+                <span className="studio-section-step">Step 3</span>
                 <h2>Tap a slot to attach images and voice notes</h2>
+                <p className="studio-section-helper">Use media only when it adds proof, emotion, or context to the chapter.</p>
               </div>
               <span className="story-tag">{isPremium ? "PREMIUM_ACTIVE" : "FREE_LIMITS_ACTIVE"}</span>
             </div>
@@ -2981,7 +3141,9 @@ export function StudioPage({
           <div className="section-head">
             <div>
               <SectionLabelComponent>TIMELINE_MOMENTS</SectionLabelComponent>
+              <span className="studio-section-step">Step 4</span>
               <h2>Anchor the chapter to real time</h2>
+              <p className="studio-section-helper">Add dates or turning points so readers can follow the story in the right order.</p>
             </div>
             <button className="ghost-action" onClick={addTimelineEntry} type="button">ADD MOMENT</button>
           </div>
@@ -3081,11 +3243,13 @@ export function StudioPage({
       </section>
 
       <section className="timeline-stage">
-        <article className="studio-panel card">
+        <article className="studio-panel card" ref={storyLinksSectionRef}>
           <div className="section-head studio-links-head">
             <div>
               <SectionLabelComponent>STORY_LINKS</SectionLabelComponent>
+              <span className="studio-section-step">Step 5</span>
               <h3>Attach supporting links to this story</h3>
+              <p className="studio-section-helper">Add links only if readers should leave the story to see supporting material.</p>
             </div>
             <button className="ghost-action" onClick={addStoryLink} type="button">ADD LINK</button>
           </div>
@@ -3149,6 +3313,36 @@ export function StudioPage({
         {publishPanel}
       </section>
         </>
+      ) : null}
+
+      {studioNotice ? (
+        <div className="studio-guide-dialog-backdrop" onClick={() => setStudioNotice(null)} role="presentation">
+          <article
+            aria-modal="true"
+            className="studio-guide-dialog card"
+            onClick={(event) => event.stopPropagation()}
+            role="dialog"
+          >
+            <div className="studio-guide-dialog-head">
+              <span className="studio-notice-badge" aria-hidden="true">
+                <IconComponent className="button-icon" name="bolt" />
+              </span>
+              <div className="studio-notice-copy">
+                <span className="studio-notice-label">Next step</span>
+                <strong>{studioNotice.title}</strong>
+                <p>{studioNotice.body}</p>
+              </div>
+            </div>
+            <div className="studio-guide-dialog-actions">
+              {studioNotice.target ? (
+                <button className="primary-action" onClick={() => takeUserToStudioTarget(studioNotice.target!)} type="button">
+                  TAKE ME THERE
+                </button>
+              ) : null}
+              <button className="ghost-action" onClick={() => setStudioNotice(null)} type="button">DISMISS</button>
+            </div>
+          </article>
+        </div>
       ) : null}
 
       {isVoiceSheetOpen ? (

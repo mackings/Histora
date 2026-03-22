@@ -891,11 +891,27 @@ export function FeedPage({
       source.comments.slice(0, 2).map((comment, index) => ({
         id: `${source.slug}-reply-${index}`,
         postSlug: source.slug,
-        title: "Anonymous reply",
+        title: source.sourceType === "story" ? "Reply on anonymous story" : "Anonymous reply",
         meta: source.meta,
-        preview: comment.text
+        preview: comment.text,
+        sourceType: source.sourceType
       })) ?? [];
-    return [{ id: `${source.slug}-lead`, postSlug: source.slug, title: "Anonymous", meta: source.meta, preview: source.excerpt }, ...chapterReplies];
+    return [
+      {
+        id: `${source.slug}-lead`,
+        postSlug: source.slug,
+        title:
+          source.sourceType === "story"
+            ? source.title
+            : source.sourceType === "status"
+              ? "Anonymous status"
+              : "Anonymous message",
+        meta: source.meta,
+        preview: source.excerpt,
+        sourceType: source.sourceType
+      },
+      ...chapterReplies
+    ];
   });
   const activeAnonymousMessage = activeAnonymousIndex === null ? null : anonymousFeedMessages[activeAnonymousIndex] ?? null;
   const activeAnonymousPost = activeAnonymousMessage ? anonymousFeedSources.find((source) => source.slug === activeAnonymousMessage.postSlug) ?? null : null;
@@ -1174,14 +1190,26 @@ export function FeedPage({
                 <section className="feed-footer-strip card feed-anonymous-inline">
                   <div className="section-head">
                     <div className="chapter-heading-block">
-                      <SectionLabelComponent>ANONYMOUS_MESSAGES</SectionLabelComponent>
-                      <h2>Anonymous messages readers are opening</h2>
+                      <SectionLabelComponent>ANONYMOUS_POSTS</SectionLabelComponent>
+                      <h2>Anonymous posts readers are opening</h2>
                     </div>
                     <span aria-label="Scroll sideways" className="section-meta">↔</span>
                   </div>
                   <div className="status-scroll anonymous-status-strip">
                     {anonymousFeedMessages.map((message, messageIndex) => (
-                      <button className="anonymous-message-card" key={message.id} onClick={() => setActiveAnonymousIndex(messageIndex)} type="button">
+                      <button
+                        className="anonymous-message-card"
+                        key={message.id}
+                        onClick={() => {
+                          if (message.sourceType === "story") {
+                            navigate(`/feed/story/${message.postSlug}`);
+                            return;
+                          }
+
+                          setActiveAnonymousIndex(messageIndex);
+                        }}
+                        type="button"
+                      >
                         <div className="anonymous-message-head">
                           <span className="status-ring tone-ink">
                             <span className="status-avatar">A</span>

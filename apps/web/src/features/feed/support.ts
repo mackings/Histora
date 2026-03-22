@@ -1,4 +1,4 @@
-import type { ApiAnonymousMessage, ApiStatus } from "../../lib/api-client";
+import type { ApiAnonymousMessage, ApiStatus, ApiStory } from "../../lib/api-client";
 
 export type StatusEntry = {
   id: string;
@@ -29,7 +29,7 @@ export type StoredAnonymousStatus = {
   helpFee: number;
   distribution: "app" | "external";
   source: "posted" | "received";
-  kind?: "message" | "status";
+  kind?: "message" | "status" | "story";
   helperContact?: {
     name: string;
     phone: string;
@@ -131,6 +131,21 @@ export const toStoredAnonymousStatusEntry = (status: ApiStatus): StoredAnonymous
   distribution: "app",
   source: "posted",
   kind: "status",
+  helperContact: null
+});
+
+export const toStoredAnonymousStoryEntry = (story: ApiStory): StoredAnonymousStatus => ({
+  id: story.id,
+  title: story.title,
+  body: story.summary,
+  meta: `${story.chapters.length} chapter${story.chapters.length === 1 ? "" : "s"} // ${formatAnonymousMeta(story.updatedAt)}`,
+  shareSlug: story.slug,
+  imageUrl: story.coverImageUrl ?? null,
+  comments: [],
+  helpFee: 8,
+  distribution: "app",
+  source: "posted",
+  kind: "story",
   helperContact: null
 });
 
