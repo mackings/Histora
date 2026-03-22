@@ -93,11 +93,13 @@ export async function createStatus(userId: string, payload: StatusCreateInput) {
     throw new AppError("User not found", 404);
   }
 
+  const normalizedBody = payload.body.trim();
+
   const status = await StatusModel.create({
     authorId: userId,
     authorName: payload.anonymous ? "Anonymous" : user.fullName,
     authorUsername: payload.anonymous ? "anonymous" : user.username,
-    ...buildEncryptedTextFields(payload.body),
+    ...(normalizedBody ? buildEncryptedTextFields(normalizedBody) : { body: "", bodyEncrypted: null }),
     anonymous: payload.anonymous,
     visibility: payload.visibility,
     imageUrl: payload.imageUrl,

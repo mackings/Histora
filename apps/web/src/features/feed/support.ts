@@ -121,7 +121,7 @@ export const toStoredAnonymousStatus = (
 
 export const toStoredAnonymousStatusEntry = (status: ApiStatus): StoredAnonymousStatus => ({
   id: status.id,
-  title: status.body.slice(0, 72),
+  title: (status.body || "Photo status").slice(0, 72),
   body: status.body,
   meta: formatAnonymousMeta(status.createdAt),
   shareSlug: status.shareSlug ?? status.id,

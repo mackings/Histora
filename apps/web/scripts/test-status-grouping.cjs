@@ -207,6 +207,38 @@ async function postStatusWithImage(page, text) {
   };
 }
 
+async function waitForImageOnlyStatus(page, authorName, timeout = 12000) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeout) {
+    const bubble = page.locator(".status-scroll .status-bubble").filter({ hasText: authorName }).first();
+    if ((await bubble.count()) > 0) {
+      await bubble.click();
+      const viewer = page.locator(".status-story-viewer");
+      await viewer.waitFor({ state: "visible", timeout: 5000 });
+      const imageVisible = await viewer.locator(".status-stage-image").first().isVisible().catch(() => false);
+      const bodyCount = await viewer.locator(".story-stage-card p").count();
+      const bodyText = bodyCount
+        ? (await viewer.locator(".story-stage-card p").first().innerText().catch(() => "")).trim()
+        : "";
+
+      if (imageVisible && !bodyText) {
+        return {
+          latencyMs: Date.now() - startedAt,
+          imageVisible,
+          bodyText
+        };
+      }
+
+      await closeStatusViewer(page);
+    }
+
+    await page.waitForTimeout(200);
+  }
+
+  throw new Error(`Could not find the new image-only status from ${authorName} in time.`);
+}
+
 async function closeStatusViewer(page) {
   const closeButton = page.locator(".story-viewer-close-row button").first();
   if (await closeButton.count()) {
@@ -384,12 +416,18 @@ async function run() {
     const ownerReactionCount = await waitForOwnerReactionCount(pageA);
     await closeStatusViewer(pageA);
 
+    const imageOnlyPost = await postStatusWithImage(pageA, "");
+    await closeStatusViewer(pageA);
+    const imageOnlyViewer = await waitForImageOnlyStatus(pageB, authorUser.statusLabel);
+    await closeStatusViewer(pageB);
+
     console.log(
       JSON.stringify(
         {
           composer: {
             uploadReadyMs: postResult.uploadReadyMs,
             imageVisibleImmediately: postResult.imageVisibleInComposer,
+            imageOnlyUploadReadyMs: imageOnlyPost.uploadReadyMs,
             removedControls: {
               voice: true,
               mention: true,
@@ -410,6 +448,11 @@ async function run() {
             toastLatencyMs: reactionToast.latencyMs,
             toastBody: reactionToast.body,
             ownerReactionCount
+          },
+          imageOnlyStatus: {
+            latencyMs: imageOnlyViewer.latencyMs,
+            imageVisible: imageOnlyViewer.imageVisible,
+            bodyText: imageOnlyViewer.bodyText
           }
         },
         null,

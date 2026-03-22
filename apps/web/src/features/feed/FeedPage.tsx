@@ -469,7 +469,7 @@ function StoryCirclesRow({
   };
 
   const postStatus = () => {
-    if (isPostingStatus || !statusDraft.trim()) {
+    if (isPostingStatus || (!statusDraft.trim() && !selectedStatusImage?.uploadedUrl)) {
       return;
     }
     if (selectedStatusImage && !selectedStatusImage.uploadedUrl) {
@@ -719,7 +719,7 @@ function StoryCirclesRow({
                     <img alt="" className="status-stage-image" src={activeStatus.imageUrl} />
                   </div>
                 ) : null}
-                <p>{activeStatus.contentBody}</p>
+                {activeStatus.contentBody ? <p>{activeStatus.contentBody}</p> : null}
                 <div className="story-react-row">
                   {["❤️", "👏", "🔥", "😭"].map((emoji) => (
                     <button

@@ -220,12 +220,38 @@ export const statusVisibilitySchema = z.enum(["public", "followers", "private"])
 export const anonymousDistributionSchema = z.enum(["app", "external"]);
 export const commentTargetTypeSchema = z.enum(["status", "storyChapter", "anonymousMessage"]);
 
-export const statusCreateSchema = z.object({
-  body: plainTextSchema(3, 1500, "Status"),
-  anonymous: z.boolean().default(false),
-  visibility: statusVisibilitySchema.default("public"),
-  imageUrl: z.string().url().optional()
-});
+const statusBodySchema = z
+  .string()
+  .trim()
+  .max(1500)
+  .refine((value) => !/[<>]/.test(value), "Status cannot contain HTML markup.")
+  .refine((value) => !unsafeInlinePattern.test(value), "Status contains blocked script-like content.");
+
+export const statusCreateSchema = z
+  .object({
+    body: statusBodySchema.default(""),
+    anonymous: z.boolean().default(false),
+    visibility: statusVisibilitySchema.default("public"),
+    imageUrl: z.string().url().optional()
+  })
+  .superRefine((value, context) => {
+    if (!value.body && !value.imageUrl) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["body"],
+        message: "Write at least 3 characters or attach an image."
+      });
+      return;
+    }
+
+    if (value.body && value.body.length < 3) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["body"],
+        message: "Status text must be at least 3 characters when provided."
+      });
+    }
+  });
 
 export const statusReactionSchema = z.object({
   action: z.enum(["like", "bookmark"])

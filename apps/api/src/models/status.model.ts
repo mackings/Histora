@@ -23,7 +23,7 @@ const statusSchema = new Schema<StatusDocument>(
     authorId: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
     authorName: { type: String, required: true, trim: true },
     authorUsername: { type: String, required: true, trim: true, lowercase: true },
-    body: { type: String, required: true, trim: true },
+    body: { type: String, trim: true, default: "" },
     bodyEncrypted: { type: String, default: null },
     anonymous: { type: Boolean, default: false, index: true },
     visibility: { type: String, enum: ["public", "followers", "private"], default: "public", index: true },
