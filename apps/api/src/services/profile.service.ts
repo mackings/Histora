@@ -377,9 +377,9 @@ export async function listSavedStories(userId: string) {
   return listBookmarkedStories(userId);
 }
 
-export async function toggleFollowUser(followerUserId: string, username: string) {
+async function toggleFollowTarget(followerUserId: string, followeeUserId: string) {
   const [followee, follower] = await Promise.all([
-    UserModel.findOne({ username: username.toLowerCase() }).select("_id username fullName"),
+    UserModel.findById(followeeUserId).select("_id username fullName"),
     UserModel.findById(followerUserId).select("username fullName")
   ]);
   if (!followee) {
@@ -437,6 +437,24 @@ export async function toggleFollowUser(followerUserId: string, username: string)
     username: followee.username,
     active
   };
+}
+
+export async function toggleFollowUser(followerUserId: string, username: string) {
+  const followee = await UserModel.findOne({ username: username.toLowerCase() }).select("_id");
+  if (!followee) {
+    throw new AppError("User not found", 404);
+  }
+
+  return toggleFollowTarget(followerUserId, followee.id);
+}
+
+export async function toggleFollowStoryAuthor(followerUserId: string, storyId: string) {
+  const story = await StoryModel.findById(storyId).select("authorId");
+  if (!story) {
+    throw new AppError("Story not found", 404);
+  }
+
+  return toggleFollowTarget(followerUserId, String(story.authorId));
 }
 
 export async function listFollowers(userId: string) {

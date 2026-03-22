@@ -9,6 +9,7 @@ import { deleteCache, readJsonCache, writeJsonCache } from "./cache.service.js";
 import { enqueueCounterSync } from "./queue.service.js";
 import { AppError } from "../utils/app-error.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
+import { sendStatusReactionNotificationPush } from "./push.service.js";
 
 const buildStatusShareSlug = () => `status-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const statusLifetimeMs = 24 * 60 * 60 * 1000;
@@ -255,6 +256,8 @@ export async function toggleStatusReaction(statusId: string, userId: string, act
   await enqueueCounterSync("status", status.id);
   await recordStatusAuditEvent(userId, status.id, `status.${action}.${active ? "enabled" : "disabled"}`);
 
+  const reactor = await UserModel.findById(userId).select("fullName username").lean();
+
   broadcastAppEvent("feed", {
     kind: "status.reaction.updated",
     statusId: status.id,
@@ -263,6 +266,18 @@ export async function toggleStatusReaction(statusId: string, userId: string, act
     likesCount: status.likesCount,
     bookmarksCount: status.bookmarksCount
   });
+
+  if (active && reactor && String(status.authorId) !== userId) {
+    broadcastAppEvent(`user:${String(status.authorId)}`, {
+      kind: "notification.status.reacted",
+      username: reactor.username,
+      fullName: reactor.fullName
+    });
+    void sendStatusReactionNotificationPush(String(status.authorId), {
+      reactorName: reactor.fullName,
+      reactorUsername: reactor.username
+    }).catch(() => undefined);
+  }
 
   return {
     statusId: status.id,

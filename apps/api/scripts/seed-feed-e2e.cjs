@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+const crypto = require("crypto");
 
 const uri =
   process.env.MONGODB_URI ||
@@ -79,9 +80,25 @@ async function main() {
 
   const User = mongoose.models.FeedSeedUser || mongoose.model("FeedSeedUser", userSchema);
   const Story = mongoose.models.FeedSeedStory || mongoose.model("FeedSeedStory", storySchema);
+  const trustedSchema = new mongoose.Schema(
+    {
+      userId: mongoose.Schema.Types.ObjectId,
+      deviceKeyHash: String,
+      label: String,
+      userAgent: String,
+      lastIpAddress: String,
+      approvedAt: Date,
+      lastSeenAt: Date,
+      revokedAt: Date
+    },
+    { timestamps: true, collection: "trusteddevices" }
+  );
+  const Trusted = mongoose.models.FeedSeedTrustedDevice || mongoose.model("FeedSeedTrustedDevice", trustedSchema);
 
   const email = "feedauthor@gmail.com";
   const username = "feedauthor";
+  const deviceId = "test-device-000000000002";
+  const deviceName = "Playwright Feed Author Device";
   const passwordHash = await bcrypt.hash("AuthorPass123", 12);
 
   let user = await User.findOne({ email });
@@ -111,6 +128,22 @@ async function main() {
     user.emailVerifiedAt = new Date();
     await user.save();
   }
+
+  const deviceKeyHash = crypto.createHash("sha256").update(deviceId).digest("hex");
+  await Trusted.findOneAndUpdate(
+    { userId: user._id, deviceKeyHash },
+    {
+      $set: {
+        label: deviceName,
+        userAgent: "Playwright",
+        lastIpAddress: "127.0.0.1",
+        approvedAt: new Date(),
+        lastSeenAt: new Date(),
+        revokedAt: null
+      }
+    },
+    { upsert: true, new: true }
+  );
 
   const storyPayload = {
     authorId: user._id,
@@ -147,7 +180,7 @@ async function main() {
 
   await Story.findOneAndUpdate({ slug: storyPayload.slug }, { $set: storyPayload }, { upsert: true, new: true });
 
-  console.log(JSON.stringify({ email, username, slug: storyPayload.slug }));
+  console.log(JSON.stringify({ email, username, slug: storyPayload.slug, deviceId, deviceName }));
 }
 
 main()

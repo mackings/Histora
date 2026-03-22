@@ -18,6 +18,7 @@ import {
   revokeDeviceController,
   revokeSessionController,
   toggleFollowController,
+  toggleStoryAuthorFollowController,
   updateProfileController
 } from "../controllers/profile.controller.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
@@ -41,6 +42,7 @@ profileRouter.get("/saved", requireAuth, savedStoriesController);
 profileRouter.post("/verification/request", requireAuth, requestVerificationController);
 profileRouter.get("/followers", requireAuth, listFollowersController);
 profileRouter.get("/following", requireAuth, listFollowingController);
+profileRouter.post("/follows/story/:storyId/toggle", requireAuth, toggleStoryAuthorFollowController);
 profileRouter.post("/follows/:username/toggle", requireAuth, toggleFollowController);
 
 export { profileRouter };

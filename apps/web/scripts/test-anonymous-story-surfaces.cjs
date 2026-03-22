@@ -88,6 +88,10 @@ async function run() {
   }
   await anonymousStoryCard.getByRole("button", { name: /open story/i }).click();
   await page.waitForURL(new RegExp(`${publishedStoryPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`), { timeout: 15000 });
+  const anonymousFollowButtonCount = await page.getByRole("button", { name: /^follow$/i }).count();
+  if (anonymousFollowButtonCount !== 0) {
+    throw new Error(`Anonymous story reader still shows a follow button. count=${anonymousFollowButtonCount}`);
+  }
 
   await page.evaluate(() => {
     window.history.pushState({}, "", "/feed");
@@ -120,7 +124,8 @@ async function run() {
         storyTitle,
         publishedStoryPath,
         anonymousStoryLabel,
-        feedAnonymousStoryLabel
+        feedAnonymousStoryLabel,
+        anonymousFollowProbe: "hidden"
       },
       null,
       2

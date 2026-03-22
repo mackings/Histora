@@ -434,7 +434,9 @@ export function FeedStoryPage({
     setPendingStoryActions((current) => ({ ...current, follow: true }));
 
     void apiRequest<{ username: string; active: boolean }>(
-      `/profile/follows/${story.handle.replace(/^@/, "")}/toggle`,
+      story.anonymous
+        ? `/profile/follows/story/${story.id}/toggle`
+        : `/profile/follows/${story.handle.replace(/^@/, "")}/toggle`,
       { method: "POST", accessToken }
     )
       .then((result) => {
@@ -688,9 +690,11 @@ export function FeedStoryPage({
         </div>
         <div className="topbar-actions">
           <button className="ghost-action" onClick={() => navigate("/feed")} type="button">BACK TO FEED</button>
-          <button className={story.following ? "primary-action" : "ghost-action"} disabled={pendingStoryActions.follow} onClick={toggleFollow} type="button">
-            {story.following ? "UNFOLLOW" : "FOLLOW"}
-          </button>
+          {!story.anonymous ? (
+            <button className={story.following ? "primary-action" : "ghost-action"} disabled={pendingStoryActions.follow} onClick={toggleFollow} type="button">
+              {story.following ? "UNFOLLOW" : "FOLLOW"}
+            </button>
+          ) : null}
         </div>
       </section>
 
@@ -953,7 +957,7 @@ export function FeedStoryPage({
             </div>
             <p>
               To protect privacy, you must pay a consent fee of ${helpTarget.helpFee ?? 8} before you are allowed to reach,
-              message, or follow the person behind this anonymous post.
+              or message the person behind this anonymous post.
             </p>
             <label className="toggle-row">
               <input checked={consentAccepted} onChange={(event) => setConsentAccepted(event.target.checked)} type="checkbox" />

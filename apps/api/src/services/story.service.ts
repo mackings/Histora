@@ -216,6 +216,71 @@ async function getViewerStoryStates(storyIds: string[], viewerId?: string) {
   return viewerStateByStoryId;
 }
 
+async function applyAnonymousStoryFollowState<T extends { id: string; anonymous: boolean; following?: boolean }>(
+  storyPayload: T,
+  viewerId?: string
+) {
+  if (!viewerId || !storyPayload.anonymous) {
+    return storyPayload;
+  }
+
+  const story = await StoryModel.findById(storyPayload.id).select("authorId").lean();
+  if (!story) {
+    return storyPayload;
+  }
+
+  const follow = await FollowModel.findOne({
+    followerUserId: viewerId,
+    followeeUserId: String(story.authorId)
+  })
+    .select("_id")
+    .lean();
+
+  return {
+    ...storyPayload,
+    following: Boolean(follow)
+  };
+}
+
+async function applyAnonymousStoryFollowStateList<T extends { id: string; anonymous: boolean; following?: boolean }>(
+  storyPayloads: T[],
+  viewerId?: string
+) {
+  if (!viewerId) {
+    return storyPayloads;
+  }
+
+  const anonymousStoryIds = storyPayloads.filter((story) => story.anonymous).map((story) => story.id);
+  if (!anonymousStoryIds.length) {
+    return storyPayloads;
+  }
+
+  const anonymousStories = await StoryModel.find({ _id: { $in: anonymousStoryIds } }).select("_id authorId").lean();
+  const authorIdByStoryId = new Map(anonymousStories.map((story) => [String(story._id), String(story.authorId)] as const));
+  const authorIds = [...new Set(anonymousStories.map((story) => String(story.authorId)))];
+
+  if (!authorIds.length) {
+    return storyPayloads;
+  }
+
+  const follows = await FollowModel.find({
+    followerUserId: viewerId,
+    followeeUserId: { $in: authorIds }
+  })
+    .select("followeeUserId")
+    .lean();
+  const followedAuthorIds = new Set(follows.map((follow) => String(follow.followeeUserId)));
+
+  return storyPayloads.map((story) =>
+    story.anonymous
+      ? {
+          ...story,
+          following: followedAuthorIds.has(authorIdByStoryId.get(story.id) ?? "")
+        }
+      : story
+  );
+}
+
 async function attachViewerStoryState<T extends { id: string; liked?: boolean; bookmarked?: boolean }>(
   storyPayload: T,
   viewerId?: string
@@ -411,7 +476,10 @@ export async function getStoryBySlug(shareSlug: string, viewerId?: string) {
   if (story.visibility === "public") {
     await writeJsonCache(`stories:public:${shareSlug}`, payload, 30);
   }
-  return await attachStoryAuthorState(await attachViewerStoryState(payload, viewerId), viewerId);
+  return await applyAnonymousStoryFollowState(
+    await attachStoryAuthorState(await attachViewerStoryState(payload, viewerId), viewerId),
+    viewerId
+  );
 }
 
 async function includeOwnPublishedStoriesInFeed(feedStories: PublicFeedStory[], viewerId?: string) {
@@ -456,7 +524,10 @@ export async function getPublicFeed(viewerId?: string) {
   const cachedFeed = await readJsonCache<PublicFeedStory[]>("stories:feed");
   if (cachedFeed) {
     const combinedFeed = await includeOwnPublishedStoriesInFeed(cachedFeed, viewerId);
-    return await attachStoryAuthorStateList(await attachViewerStoryStateList(combinedFeed, viewerId), viewerId);
+    return await applyAnonymousStoryFollowStateList(
+      await attachStoryAuthorStateList(await attachViewerStoryStateList(combinedFeed, viewerId), viewerId),
+      viewerId
+    );
   }
 
   const stories = await StoryModel.find({ visibility: "public", status: "published" })
@@ -485,7 +556,10 @@ export async function getPublicFeed(viewerId?: string) {
   })));
   await writeJsonCache("stories:feed", payload, 30);
   const combinedFeed = await includeOwnPublishedStoriesInFeed(payload, viewerId);
-  return await attachStoryAuthorStateList(await attachViewerStoryStateList(combinedFeed, viewerId), viewerId);
+  return await applyAnonymousStoryFollowStateList(
+    await attachStoryAuthorStateList(await attachViewerStoryStateList(combinedFeed, viewerId), viewerId),
+    viewerId
+  );
 }
 
 export async function toggleStoryReaction(storyId: string, userId: string, action: "like" | "bookmark") {

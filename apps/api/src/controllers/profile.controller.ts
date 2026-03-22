@@ -22,6 +22,7 @@ import {
   revokeContributorInvite,
   revokeTrustedDevice,
   revokeUserSession,
+  toggleFollowStoryAuthor,
   toggleFollowUser,
   updateProfile
 } from "../services/profile.service.js";
@@ -128,6 +129,12 @@ export const requestVerificationController = asyncHandler(async (request, respon
 export const toggleFollowController = asyncHandler(async (request, response) => {
   const params = z.object({ username: z.string().min(1) }).parse(request.params);
   const result = await toggleFollowUser(request.auth!.userId, params.username);
+  response.status(200).json(result);
+});
+
+export const toggleStoryAuthorFollowController = asyncHandler(async (request, response) => {
+  const params = z.object({ storyId: z.string().min(1) }).parse(request.params);
+  const result = await toggleFollowStoryAuthor(request.auth!.userId, params.storyId);
   response.status(200).json(result);
 });
 

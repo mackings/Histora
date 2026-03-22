@@ -7,8 +7,6 @@ export type StatusEntry = {
   verified?: boolean;
   meta: string;
   tone: "orange" | "ink" | "add" | "blue";
-  label: string;
-  contentTitle: string;
   contentBody: string;
   anonymous?: boolean;
   shareSlug?: string;
@@ -234,8 +232,6 @@ export const storedAnonymousStatusToEntry = (entry: StoredAnonymousStatus): Stat
   name: "Anonymous",
   meta: entry.meta,
   tone: "ink",
-  label: "Advice status",
-  contentTitle: entry.title,
   contentBody: entry.body,
   anonymous: true,
   shareSlug: entry.shareSlug,
@@ -249,8 +245,6 @@ export const addStatusEntry: StatusEntry = {
   name: "Add",
   meta: "New",
   tone: "add",
-  label: "Create status",
-  contentTitle: "",
   contentBody: ""
 };
 
@@ -261,8 +255,6 @@ export const toStatusEntry = (status: ApiStatus, options?: { owned?: boolean }):
   verified: status.anonymous ? false : Boolean(status.authorVerified),
   meta: formatAnonymousMeta(status.createdAt),
   tone: status.anonymous ? "ink" : "blue",
-  label: status.anonymous ? "Advice status" : "Memory status",
-  contentTitle: status.anonymous ? "Anonymous advice status" : "Memory status",
   contentBody: status.body,
   anonymous: status.anonymous,
   shareSlug: status.shareSlug ?? undefined,

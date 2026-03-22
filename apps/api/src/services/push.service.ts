@@ -204,3 +204,20 @@ export async function sendFollowNotificationPush(
     }
   });
 }
+
+export async function sendStatusReactionNotificationPush(
+  userId: string,
+  payload: {
+    reactorName: string;
+    reactorUsername: string;
+  }
+) {
+  await sendUserPushNotification(userId, {
+    title: "New status reaction",
+    body: `${payload.reactorName} (@${payload.reactorUsername}) reacted to your status.`,
+    tag: `histora-status-reaction-${payload.reactorUsername}`,
+    data: {
+      url: "/feed"
+    }
+  });
+}

@@ -131,22 +131,12 @@ function StoryCirclesRow({
   SectionLabelComponent: FeedSectionLabelComponent;
 }) {
   const navigate = useNavigate();
-  const emojiGroups = [
-    { label: "Recent", icon: "🕘", emojis: ["😂", "❤️", "😭", "🔥", "🙏", "✨"] },
-    { label: "Smileys", icon: "😊", emojis: ["😊", "😄", "😁", "😂", "🥹", "😮", "😌", "🤭"] },
-    { label: "Love", icon: "💛", emojis: ["❤️", "💙", "💜", "💞", "💫", "🌈", "✨", "🫶"] },
-    { label: "Support", icon: "🙌", emojis: ["👏", "🙏", "🙌", "🤍", "💭", "🤝", "🌟", "🕊️"] }
-  ];
   const [activeStatusId, setActiveStatusId] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [seenStatusIds, setSeenStatusIds] = useState<string[]>([]);
   const [isComposerOpen, setIsComposerOpen] = useState(false);
   const [statusDraft, setStatusDraft] = useState("Today I finally wrote the chapter I kept postponing.");
-  const [statusStyle, setStatusStyle] = useState<"plain" | "bold" | "italic">("plain");
-  const [statusTone, setStatusTone] = useState<"sky" | "mint" | "peach">("sky");
-  const [showEmojiLibrary, setShowEmojiLibrary] = useState(false);
-  const [activeEmojiGroup, setActiveEmojiGroup] = useState("Recent");
   const [isAnonymousComposer, setIsAnonymousComposer] = useState(false);
   const [isPostingStatus, setIsPostingStatus] = useState(false);
   const [statusItems, setStatusItems] = useState<StatusEntry[]>([]);
@@ -280,7 +270,6 @@ function StoryCirclesRow({
 
   const openComposer = () => {
     setIsComposerOpen(true);
-    setShowEmojiLibrary(false);
     setIsAnonymousComposer(false);
     setShareFeedback("");
   };
@@ -292,10 +281,6 @@ function StoryCirclesRow({
     }
 
     openComposer();
-  };
-
-  const insertSnippet = (snippet: string) => {
-    setStatusDraft((current) => `${current}${current.endsWith(" ") || current.length === 0 ? "" : " "}${snippet}`);
   };
 
   const getStatusShareLink = (entry: StatusEntry) =>
@@ -318,6 +303,13 @@ function StoryCirclesRow({
     if (typeof document === "undefined") {
       return;
     }
+    const statusHeadline =
+      entry.contentBody
+        .trim()
+        .split(/\s+/)
+        .slice(0, 4)
+        .join(" ")
+        .slice(0, 24) || "Anonymous status";
     const canvas = document.createElement("canvas");
     canvas.width = 1080;
     canvas.height = 1350;
@@ -335,7 +327,7 @@ function StoryCirclesRow({
     context.font = "700 46px Space Grotesk, sans-serif";
     context.fillText("HISTORA // ANONYMOUS STATUS", 80, 120);
     context.font = "700 72px Space Grotesk, sans-serif";
-    context.fillText(entry.contentTitle.slice(0, 24), 80, 240);
+    context.fillText(statusHeadline, 80, 240);
     context.font = "400 42px Manrope, sans-serif";
     const messageLines = wrapCanvasText(context, entry.contentBody, 880);
     messageLines.slice(0, 10).forEach((line, index) => {
@@ -428,10 +420,6 @@ function StoryCirclesRow({
 
   const postStatus = () => {
     if (isPostingStatus || !statusDraft.trim()) {
-      return;
-    }
-    if (selectedStatusImage?.uploading) {
-      setShareFeedback("Status photo is still uploading.");
       return;
     }
     if (selectedStatusImage && !selectedStatusImage.uploadedUrl) {
@@ -567,86 +555,36 @@ function StoryCirclesRow({
             <div className="status-composer-top">
               <div>
                 <SectionLabelComponent>YOUR_STATUS</SectionLabelComponent>
-                <h3>Post a WhatsApp-style memory status</h3>
+                <h3>Post a status</h3>
               </div>
               <button aria-label="Close status composer" className="icon-chip" onClick={() => setIsComposerOpen(false)} type="button">
                 <IconComponent className="button-icon" name="close" />
               </button>
             </div>
             <div className="status-toolbar">
-              <button className={statusStyle === "bold" ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => setStatusStyle("bold")} type="button">B</button>
-              <button className={statusStyle === "italic" ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => setStatusStyle("italic")} type="button">I</button>
-              <button className={statusStyle === "plain" ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => setStatusStyle("plain")} type="button">Aa</button>
-              <button className={showEmojiLibrary ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => setShowEmojiLibrary((current) => !current)} type="button">Emoji</button>
               <button className={selectedStatusImage ? "composer-chip active-composer-chip" : "composer-chip"} onClick={() => statusImageInputRef.current?.click()} type="button">Photo</button>
-              <button className="composer-chip" onClick={() => insertSnippet("[Voice]")} type="button">Voice</button>
-              <button className="composer-chip" onClick={() => insertSnippet("@closefriends")} type="button">Mention</button>
-            </div>
-            <div className="status-tone-picker">
-              {["sky", "mint", "peach"].map((tone) => (
-                <button className={statusTone === tone ? "tone-swatch active-tone-swatch" : "tone-swatch"} key={tone} onClick={() => setStatusTone(tone as "sky" | "mint" | "peach")} type="button">
-                  {tone}
-                </button>
-              ))}
             </div>
             <label className="toggle-row">
               <input checked={isAnonymousComposer} onChange={(event) => setIsAnonymousComposer(event.target.checked)} type="checkbox" />
               <span>Post this status anonymously and make it shareable</span>
             </label>
-            {showEmojiLibrary ? (
-              <div className="picker-panel">
-                <div className="picker-panel-head">
-                  <strong>Emoji library</strong>
-                  <span>WhatsApp-style tray</span>
-                </div>
-                <div className="emoji-category-row">
-                  {emojiGroups.map((group) => (
-                    <button className={activeEmojiGroup === group.label ? "emoji-category active-emoji-category" : "emoji-category"} key={group.label} onClick={() => setActiveEmojiGroup(group.label)} type="button">
-                      <span>{group.icon}</span>
-                      {group.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="emoji-library">
-                  {emojiGroups.find((group) => group.label === activeEmojiGroup)?.emojis.map((emoji) => (
-                    <button className="emoji-tile" key={emoji} onClick={() => insertSnippet(emoji)} type="button">{emoji}</button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
             {selectedStatusImage ? (
               <div className="picker-panel">
                 <div className="picker-panel-head">
                   <strong>Status photo</strong>
-                  <span>{selectedStatusImage.uploading ? "Uploading to Histora media..." : "Ready to post"}</span>
+                  <span>{selectedStatusImage.uploadError || "Photo attached"}</span>
                 </div>
                 <div className="status-photo-card">
                   <img alt="Selected status" className="status-photo-preview" src={selectedStatusImage.previewUrl} />
                   <div className="status-photo-meta">
                     <strong>{selectedStatusImage.fileName}</strong>
-                    <span>{selectedStatusImage.uploadError || (selectedStatusImage.uploading ? "Optimizing and uploading..." : "Attached to this status")}</span>
+                    <span>{selectedStatusImage.uploadError || "Ready for posting"}</span>
                   </div>
                   <button className="ghost-action" onClick={clearSelectedStatusImage} type="button">Remove photo</button>
                 </div>
               </div>
             ) : null}
             <textarea className="status-compose-input" onChange={(event) => setStatusDraft(event.target.value)} placeholder="Write your status..." value={statusDraft} />
-            <div
-              className={`status-compose-preview tone-preview-${statusTone} style-preview-${statusStyle}${selectedStatusImage ? " status-compose-preview-with-image" : ""}`}
-              style={
-                selectedStatusImage
-                  ? {
-                      backgroundImage: `linear-gradient(180deg, rgba(15, 23, 42, 0.18), rgba(15, 23, 42, 0.72)), url(${selectedStatusImage.previewUrl})`,
-                      backgroundSize: "cover",
-                      backgroundPosition: "center"
-                    }
-                  : undefined
-              }
-            >
-              <span className="story-tag">{isAnonymousComposer ? "Anonymous preview" : "Preview"}</span>
-              {selectedStatusImage ? <span className="preview-asset-tag">Photo status</span> : null}
-              <p>{statusDraft}</p>
-            </div>
             {isAnonymousComposer ? (
               <div className="anonymous-compose-note">
                 <strong>Anonymous post tools</strong>
@@ -654,8 +592,13 @@ function StoryCirclesRow({
               </div>
             ) : null}
             <div className="status-composer-footer">
-              <button className="ghost-action" onClick={() => insertSnippet("✨")} type="button">Add emoji</button>
-              <button className="primary-action" onClick={postStatus} type="button">
+              <button className="ghost-action" onClick={clearSelectedStatusImage} type="button">Clear photo</button>
+              <button
+                className="primary-action"
+                disabled={isPostingStatus || Boolean(selectedStatusImage && !selectedStatusImage.uploadedUrl && !selectedStatusImage.uploadError)}
+                onClick={postStatus}
+                type="button"
+              >
                 {isPostingStatus ? "Posting..." : isAnonymousComposer ? "Post anonymous status" : "Post status"}
               </button>
             </div>
@@ -723,18 +666,40 @@ function StoryCirclesRow({
                     <img alt="" className="status-stage-image" src={activeStatus.imageUrl} />
                   </div>
                 ) : null}
-                <span className="story-tag">{activeStatus.label}</span>
-                <h3>{activeStatus.contentTitle}</h3>
                 <p>{activeStatus.contentBody}</p>
-                <div className="story-stage-metrics">
-                  <span>{activeStatus.imageUrl ? "Photo status" : "Memory status"}</span>
-                  <strong>{activeStatus.meta}</strong>
-                </div>
                 <div className="story-react-row">
-                  <button className="story-reaction" type="button">❤️</button>
-                  <button className="story-reaction" type="button">👏</button>
-                  <button className="story-reaction" type="button">🔥</button>
-                  <button className="story-reaction" type="button">😭</button>
+                  {["❤️", "👏", "🔥", "😭"].map((emoji) => (
+                    <button
+                      className="story-reaction"
+                      key={emoji}
+                      onClick={() => {
+                        if (!activeStatus) {
+                          return;
+                        }
+
+                        void apiRequest<{ active: boolean; likesCount: number; bookmarksCount: number }>(
+                          `/statuses/${activeStatus.id}/reactions`,
+                          { method: "POST", accessToken, body: { action: "like" } }
+                        )
+                          .then((result) => {
+                            updateFeedStatuses((current) =>
+                              current.map((status) =>
+                                status.id === activeStatus.id
+                                  ? { ...status, likesCount: result.likesCount, bookmarksCount: result.bookmarksCount }
+                                  : status
+                              )
+                            );
+                            setShareFeedback(result.active ? `Reaction sent ${emoji}` : "Reaction removed");
+                          })
+                          .catch((error) => {
+                            setShareFeedback(getErrorMessage(error, "Could not react to the status."));
+                          });
+                      }}
+                      type="button"
+                    >
+                      {emoji}
+                    </button>
+                  ))}
                 </div>
                 {activeStatus.anonymous ? (
                   <div className="anonymous-status-tools">
@@ -1274,13 +1239,15 @@ export function FeedPage({
                   <img alt="" className="status-stage-image" src={activeAnonymousPost.imageUrl} />
                 </div>
               ) : null}
-              <span className="story-tag">Anonymous advice</span>
-              <h3>{activeAnonymousPost.title}</h3>
+              {activeAnonymousPost.sourceType === "status" ? null : <span className="story-tag">Anonymous advice</span>}
+              {activeAnonymousPost.sourceType === "status" ? null : <h3>{activeAnonymousPost.title}</h3>}
               <p>{activeAnonymousPost.excerpt}</p>
-              <div className="story-stage-metrics">
-                <span>{activeAnonymousPost.fromQuickMemory ? "Quick memory status" : "Anonymous chapter"}</span>
-                <strong>{activeAnonymousPost.comments.length} replies</strong>
-              </div>
+              {activeAnonymousPost.sourceType === "status" ? null : (
+                <div className="story-stage-metrics">
+                  <span>{activeAnonymousPost.fromQuickMemory ? "Quick memory status" : "Anonymous chapter"}</span>
+                  <strong>{activeAnonymousPost.comments.length} replies</strong>
+                </div>
+              )}
               <div className="anonymous-status-tools">
                 <button className="primary-action anonymous-help-action" onClick={() => { setHelpTarget(activeAnonymousPost); setConsentAccepted(false); }} type="button">Render help</button>
               </div>

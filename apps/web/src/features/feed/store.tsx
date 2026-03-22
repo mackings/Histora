@@ -52,6 +52,11 @@ type RealtimeEventMessage =
             kind: "notification.followed";
             username: string;
             fullName: string;
+          }
+        | {
+            kind: "notification.status.reacted";
+            username: string;
+            fullName: string;
           };
     }
   | {
@@ -306,6 +311,26 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
       if ("Notification" in window && Notification.permission === "granted") {
         void Promise.resolve().then(() => {
           new Notification("New follower", { body });
+        });
+      }
+    }
+  }
+
+  if (payload.kind === "notification.status.reacted") {
+    if (typeof window !== "undefined") {
+      const body = `${payload.fullName} (@${payload.username}) reacted to your status.`;
+      window.dispatchEvent(
+        new CustomEvent("histora-live-notification", {
+          detail: {
+            title: "New status reaction",
+            body
+          }
+        })
+      );
+
+      if ("Notification" in window && Notification.permission === "granted") {
+        void Promise.resolve().then(() => {
+          new Notification("New status reaction", { body });
         });
       }
     }
