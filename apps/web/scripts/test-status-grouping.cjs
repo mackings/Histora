@@ -230,14 +230,14 @@ async function waitForStatusOnViewer(page, authorName, statusText, timeout = 120
 }
 
 async function reactToActiveStatus(page) {
-  const reactionButton = page.locator(".story-react-row .story-reaction").first();
+  const reactionButton = page.locator(".story-react-row .story-reaction").last();
   const reactionResponsePromise = page
     .waitForResponse(
       (response) => response.url().includes("/reactions") && response.request().method() === "POST",
       { timeout: 8000 }
     )
     .catch(() => null);
-  await reactionButton.evaluate((node) => node.click());
+  await reactionButton.click();
   await page.waitForTimeout(500);
   const reactionResponse = await reactionResponsePromise;
   return {

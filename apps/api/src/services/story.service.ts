@@ -10,6 +10,7 @@ import { readJsonCache, writeJsonCache, deleteCache, deleteCacheByPrefix } from 
 import { enqueueCounterSync } from "./queue.service.js";
 import { resolveStoredObjectUrl } from "./storage.service.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
+import { sendGenericNotificationPush } from "./push.service.js";
 
 type StoryViewerState = {
   liked: boolean;
@@ -607,6 +608,7 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
   await deleteCache("stories:feed");
   await deleteCache(`stories:public:${story.slug}`);
   await deleteCacheByPrefix(`stories:mine:${story.authorId.toString()}`);
+  const actor = await UserModel.findById(userId).select("fullName username").lean();
 
   broadcastAppEvent("feed", {
     kind: "story.reaction.updated",
@@ -625,6 +627,21 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
     reactionsCount: likesCount + bookmarksCount
   });
 
+  if (action === "like" && active && actor && String(story.authorId) !== userId) {
+    const body = `${actor.fullName} (@${actor.username}) liked your ${story.anonymous ? "anonymous post" : "post"} "${story.title}".`;
+    broadcastAppEvent(`user:${String(story.authorId)}`, {
+      kind: "notification.generic",
+      title: "New post like",
+      body
+    });
+    void sendGenericNotificationPush(String(story.authorId), {
+      title: "New post like",
+      body,
+      tag: `histora-story-like-${story.id}-${actor.username}`,
+      url: `/feed/story/${story.slug}`
+    }).catch(() => undefined);
+  }
+
   return {
     storyId: story.id,
     action,
@@ -635,11 +652,12 @@ export async function toggleStoryReaction(storyId: string, userId: string, actio
   };
 }
 
-export async function trackStoryShare(storyId: string) {
+export async function trackStoryShare(storyId: string, userId: string) {
   const story = await StoryModel.findById(storyId);
   if (!story) {
     throw new AppError("Story not found", 404);
   }
+  const actor = await UserModel.findById(userId).select("fullName username").lean();
 
   story.sharesCount += 1;
   await story.save();
@@ -653,6 +671,21 @@ export async function trackStoryShare(storyId: string) {
     storyId: story.id,
     sharesCount: story.sharesCount
   });
+
+  if (actor && String(story.authorId) !== userId) {
+    const body = `${actor.fullName} (@${actor.username}) shared your ${story.anonymous ? "anonymous post" : "post"} "${story.title}".`;
+    broadcastAppEvent(`user:${String(story.authorId)}`, {
+      kind: "notification.generic",
+      title: "New post share",
+      body
+    });
+    void sendGenericNotificationPush(String(story.authorId), {
+      title: "New post share",
+      body,
+      tag: `histora-story-share-${story.id}-${actor.username}`,
+      url: `/feed/story/${story.slug}`
+    }).catch(() => undefined);
+  }
 
   return {
     storyId: story.id,

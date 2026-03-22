@@ -9,6 +9,7 @@ import { deleteCache, deleteCacheByPrefix, readJsonCache, writeJsonCache } from 
 import { broadcastAppEvent } from "../realtime/app-events.js";
 import { enqueueCounterSync } from "./queue.service.js";
 import { AppError } from "../utils/app-error.js";
+import { sendGenericNotificationPush } from "./push.service.js";
 
 const getAnonymousInboxChannel = (recipientUserId: string) => `anonymous:inbox:${recipientUserId}`;
 
@@ -20,6 +21,11 @@ export async function createComment(userId: string, payload: CommentCreateInput)
   }
 
   let broadcastChannel = "feed";
+  let notificationTargetUserId: string | null = null;
+  let notificationTitle = "";
+  let notificationBody = "";
+  let notificationTag = "";
+  let notificationUrl = "/feed";
 
   if (payload.targetType === "status") {
     const status = await StatusModel.findById(payload.targetId);
@@ -32,9 +38,17 @@ export async function createComment(userId: string, payload: CommentCreateInput)
     await status.save();
     await deleteCache("statuses:feed");
     await enqueueCounterSync("status", status.id);
+
+    if (String(status.authorId) !== userId) {
+      notificationTargetUserId = String(status.authorId);
+      notificationTitle = "New status comment";
+      notificationBody = `${user.fullName} (@${user.username}) commented on your ${status.anonymous ? "anonymous status" : "status"}.`;
+      notificationTag = `histora-status-comment-${status.id}-${user.username}`;
+      notificationUrl = "/feed";
+    }
   } else if (payload.targetType === "storyChapter") {
     const [storyId, chapterId] = payload.targetId.split(":");
-    const story = await StoryModel.findById(storyId).select("chapters slug authorId");
+    const story = await StoryModel.findById(storyId).select("chapters slug authorId title anonymous");
 
     // The frontend uses storyId:chapterId, so validate the pair before accepting comments.
     if (!story || !chapterId || !story.chapters.some((chapter) => chapter.order.toString() === chapterId || chapter.title === chapterId)) {
@@ -44,8 +58,16 @@ export async function createComment(userId: string, payload: CommentCreateInput)
     await deleteCache("stories:feed");
     await deleteCache(`stories:public:${story.slug}`);
     await deleteCacheByPrefix(`stories:mine:${story.authorId?.toString?.() ?? ""}`);
+
+    if (String(story.authorId) !== userId) {
+      notificationTargetUserId = String(story.authorId);
+      notificationTitle = "New post comment";
+      notificationBody = `${user.fullName} (@${user.username}) commented on your ${story.anonymous ? "anonymous post" : "post"} "${story.title}".`;
+      notificationTag = `histora-story-comment-${story.id}-${user.username}`;
+      notificationUrl = `/feed/story/${story.slug}`;
+    }
   } else {
-    const message = await AnonymousMessageModel.findById(payload.targetId);
+    const message = await AnonymousMessageModel.findById(payload.targetId).select("recipientUserId senderUserId shareSlug");
 
     if (!message) {
       throw new AppError("Anonymous message not found", 404);
@@ -55,6 +77,14 @@ export async function createComment(userId: string, payload: CommentCreateInput)
     await message.save();
     await enqueueCounterSync("anonymousMessage", message.id);
     broadcastChannel = getAnonymousInboxChannel(message.recipientUserId.toString());
+
+    if (message.senderUserId && String(message.senderUserId) !== userId) {
+      notificationTargetUserId = String(message.senderUserId);
+      notificationTitle = "New anonymous post comment";
+      notificationBody = `${user.fullName} (@${user.username}) commented on your anonymous post.`;
+      notificationTag = `histora-anonymous-comment-${message.id}-${user.username}`;
+      notificationUrl = `/anonymous/${message.shareSlug}`;
+    }
   }
 
   const comment = await CommentModel.create({
@@ -80,6 +110,20 @@ export async function createComment(userId: string, payload: CommentCreateInput)
       createdAt: comment.createdAt
     }
   });
+
+  if (notificationTargetUserId) {
+    broadcastAppEvent(`user:${notificationTargetUserId}`, {
+      kind: "notification.generic",
+      title: notificationTitle,
+      body: notificationBody
+    });
+    void sendGenericNotificationPush(notificationTargetUserId, {
+      title: notificationTitle,
+      body: notificationBody,
+      tag: notificationTag,
+      url: notificationUrl
+    }).catch(() => undefined);
+  }
 
   await deleteCache(`comments:${payload.targetType}:${payload.targetId}`);
 

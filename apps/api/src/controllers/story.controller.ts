@@ -55,6 +55,6 @@ export const toggleStoryReactionController = asyncHandler(async (request, respon
 
 export const trackStoryShareController = asyncHandler(async (request, response) => {
   const params = z.object({ storyId: z.string().min(1) }).parse(request.params);
-  const result = await trackStoryShare(params.storyId);
+  const result = await trackStoryShare(params.storyId, request.auth!.userId);
   response.status(200).json(result);
 });

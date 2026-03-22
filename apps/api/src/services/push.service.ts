@@ -221,3 +221,24 @@ export async function sendStatusReactionNotificationPush(
     }
   });
 }
+
+export async function sendGenericNotificationPush(
+  userId: string,
+  payload: {
+    title: string;
+    body: string;
+    tag: string;
+    url?: string;
+  }
+) {
+  await sendUserPushNotification(userId, {
+    title: payload.title,
+    body: payload.body,
+    tag: payload.tag,
+    data: payload.url
+      ? {
+          url: payload.url
+        }
+      : undefined
+  });
+}

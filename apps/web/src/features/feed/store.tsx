@@ -57,6 +57,11 @@ type RealtimeEventMessage =
             kind: "notification.status.reacted";
             username: string;
             fullName: string;
+          }
+        | {
+            kind: "notification.generic";
+            title: string;
+            body: string;
           };
     }
   | {
@@ -331,6 +336,25 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
       if ("Notification" in window && Notification.permission === "granted") {
         void Promise.resolve().then(() => {
           new Notification("New status reaction", { body });
+        });
+      }
+    }
+  }
+
+  if (payload.kind === "notification.generic") {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("histora-live-notification", {
+          detail: {
+            title: payload.title,
+            body: payload.body
+          }
+        })
+      );
+
+      if ("Notification" in window && Notification.permission === "granted") {
+        void Promise.resolve().then(() => {
+          new Notification(payload.title, { body: payload.body });
         });
       }
     }
