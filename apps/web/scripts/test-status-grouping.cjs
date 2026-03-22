@@ -112,7 +112,7 @@ async function installStatusImageStubs(page) {
       contentType: "application/json",
       body: JSON.stringify({
         uploadUrl: `${baseUrl}/playwright-upload/status-photo.png`,
-        objectKey: "playwright/status-photo.png",
+        objectKey: "users/playwright/status-photo.png",
         publicUrl: `${baseUrl}/playwright-status-photo.png`
       })
     });

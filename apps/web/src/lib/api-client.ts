@@ -61,6 +61,7 @@ export type ApiStatus = {
   visibility: "public" | "followers" | "private";
   authorVerified?: boolean;
   imageUrl?: string | null;
+  imageKey?: string | null;
   shareSlug?: string | null;
   commentsCount: number;
   likesCount: number;

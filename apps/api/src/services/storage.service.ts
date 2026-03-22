@@ -87,6 +87,54 @@ export function isOwnedStorageObjectKey(value: string) {
   return /^users\/[^/]+\/.+/.test(value);
 }
 
+export function extractOwnedObjectKey(value?: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  if (isOwnedStorageObjectKey(value)) {
+    return value;
+  }
+
+  try {
+    const url = new URL(value);
+    const normalizedPath = url.pathname.replace(/^\/+/, "");
+
+    if (env.R2_PUBLIC_BASE_URL) {
+      const publicBase = new URL(env.R2_PUBLIC_BASE_URL);
+      if (url.origin === publicBase.origin) {
+        const publicBasePath = publicBase.pathname.replace(/^\/+|\/+$/g, "");
+        const publicPrefix = publicBasePath ? `${publicBasePath}/` : "";
+        const relativePath = publicPrefix && normalizedPath.startsWith(publicPrefix)
+          ? normalizedPath.slice(publicPrefix.length)
+          : normalizedPath;
+
+        if (isOwnedStorageObjectKey(relativePath)) {
+          return relativePath;
+        }
+      }
+    }
+
+    if (env.R2_BUCKET_NAME) {
+      const bucketPrefix = `${env.R2_BUCKET_NAME}/`;
+      if (normalizedPath.startsWith(bucketPrefix)) {
+        const bucketRelativePath = normalizedPath.slice(bucketPrefix.length);
+        if (isOwnedStorageObjectKey(bucketRelativePath)) {
+          return bucketRelativePath;
+        }
+      }
+    }
+
+    if (isOwnedStorageObjectKey(normalizedPath)) {
+      return normalizedPath;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 export function assertOwnedObjectKey(userId: string, objectKey: string) {
   if (!objectKey.startsWith(`users/${userId}/`)) {
     throw new AppError("You do not have access to this media object.", 403);
@@ -118,14 +166,15 @@ export async function resolveStoredObjectUrl(value?: string | null) {
     return null;
   }
 
-  if (!isOwnedStorageObjectKey(value)) {
+  const objectKey = extractOwnedObjectKey(value);
+  if (!objectKey) {
     return value;
   }
 
   if (env.R2_PUBLIC_BASE_URL) {
-    return `${env.R2_PUBLIC_BASE_URL.replace(/\/$/, "")}/${value}`;
+    return `${env.R2_PUBLIC_BASE_URL.replace(/\/$/, "")}/${objectKey}`;
   }
 
-  const result = await createSignedReadUrl({ objectKey: value });
+  const result = await createSignedReadUrl({ objectKey });
   return result.readUrl;
 }

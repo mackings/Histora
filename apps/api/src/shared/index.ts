@@ -232,7 +232,12 @@ export const statusCreateSchema = z
     body: statusBodySchema.default(""),
     anonymous: z.boolean().default(false),
     visibility: statusVisibilitySchema.default("public"),
-    imageUrl: z.string().url().optional()
+    imageUrl: z.string().url().optional(),
+    imageKey: z
+      .string()
+      .trim()
+      .regex(/^users\/[^/]+\/.+/, "Status image key must be a valid storage object key.")
+      .optional()
   })
   .superRefine((value, context) => {
     if (!value.body && !value.imageUrl) {

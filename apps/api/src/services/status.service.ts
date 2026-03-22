@@ -13,6 +13,7 @@ import { enqueueCounterSync } from "./queue.service.js";
 import { AppError } from "../utils/app-error.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
 import { sendStatusReactionNotificationPush } from "./push.service.js";
+import { extractOwnedObjectKey, resolveStoredObjectUrl } from "./storage.service.js";
 
 const buildStatusShareSlug = () => `status-${Date.now().toString(36)}-${crypto.randomBytes(5).toString("base64url")}`;
 const statusLifetimeMs = 24 * 60 * 60 * 1000;
@@ -28,6 +29,7 @@ const toStatusResponse = (status: {
   visibility: "public" | "followers" | "private";
   authorVerified?: boolean;
   imageUrl?: string | null;
+  imageKey?: string | null;
   shareSlug?: string | null;
   commentsCount: number;
   likesCount: number;
@@ -43,6 +45,7 @@ const toStatusResponse = (status: {
   visibility: status.visibility,
   authorVerified: status.authorVerified ?? false,
   imageUrl: status.imageUrl ?? null,
+  imageKey: status.imageKey ?? null,
   shareSlug: status.shareSlug ?? null,
   commentsCount: Number(status.commentsCount ?? 0),
   likesCount: Number(status.likesCount ?? 0),
@@ -50,6 +53,39 @@ const toStatusResponse = (status: {
   createdAt: status.createdAt,
   ...(status.expiresAt ? { expiresAt: status.expiresAt } : {})
 });
+
+async function serializeStatus(
+  status: {
+    id?: string;
+    _id?: unknown;
+    authorName: string;
+    authorUsername: string;
+    body: string;
+    bodyEncrypted?: string | null;
+    anonymous: boolean;
+    visibility: "public" | "followers" | "private";
+    authorVerified?: boolean;
+    imageUrl?: string | null;
+    imageKey?: string | null;
+    shareSlug?: string | null;
+    commentsCount: number;
+    likesCount: number;
+    bookmarksCount: number;
+    createdAt: Date;
+    expiresAt?: Date;
+  }
+) {
+  const imageKey = status.imageKey ?? extractOwnedObjectKey(status.imageUrl ?? null);
+  const resolvedImageUrl = imageKey
+    ? await resolveStoredObjectUrl(imageKey)
+    : status.imageUrl ?? null;
+
+  return toStatusResponse({
+    ...status,
+    imageKey,
+    imageUrl: resolvedImageUrl
+  });
+}
 
 export async function assertStatusViewerAccess(statusId: string, viewerId?: string, shareSlug?: string) {
   const status = await StatusModel.findById(statusId).select("authorId visibility anonymous shareSlug");
@@ -94,6 +130,7 @@ export async function createStatus(userId: string, payload: StatusCreateInput) {
   }
 
   const normalizedBody = payload.body.trim();
+  const imageKey = payload.imageKey ?? extractOwnedObjectKey(payload.imageUrl);
 
   const status = await StatusModel.create({
     authorId: userId,
@@ -103,6 +140,7 @@ export async function createStatus(userId: string, payload: StatusCreateInput) {
     anonymous: payload.anonymous,
     visibility: payload.visibility,
     imageUrl: payload.imageUrl,
+    imageKey: imageKey ?? undefined,
     shareSlug: payload.anonymous ? buildStatusShareSlug() : undefined,
     expiresAt: new Date(Date.now() + statusLifetimeMs)
   });
@@ -116,20 +154,20 @@ export async function createStatus(userId: string, payload: StatusCreateInput) {
   // Broadcast a tiny event envelope so feeds can update without reloading.
   broadcastAppEvent("feed", {
     kind: "status.created",
-    status: toStatusResponse({
+    status: await serializeStatus({
       ...status.toObject(),
       authorVerified: user.verificationStatus === "verified"
     })
   });
   broadcastAppEvent(`user:${userId}`, {
     kind: "status.created",
-    status: toStatusResponse({
+    status: await serializeStatus({
       ...status.toObject(),
       authorVerified: user.verificationStatus === "verified"
     })
   });
 
-  return toStatusResponse({
+  return serializeStatus({
     ...status.toObject(),
     authorVerified: user.verificationStatus === "verified"
   });
@@ -160,7 +198,7 @@ export async function getStatusFeed(viewerId?: string) {
     })
       .sort({ createdAt: -1 })
       .limit(40)
-      .select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+      .select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl imageKey commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
     const visibleUsernames = [...new Set(feed.filter((status) => !status.anonymous).map((status) => status.authorUsername))];
     const verifiedUsernames = new Set(
@@ -174,12 +212,12 @@ export async function getStatusFeed(viewerId?: string) {
       ).map((user) => user.username)
     );
 
-    return feed.map((status) =>
-      toStatusResponse({
+    return Promise.all(feed.map((status) =>
+      serializeStatus({
         ...status.toObject(),
         authorVerified: !status.anonymous && verifiedUsernames.has(status.authorUsername)
       })
-    );
+    ));
   }
 
   const cachedFeed = await readJsonCache<Array<Record<string, unknown>>>("statuses:feed");
@@ -197,7 +235,7 @@ export async function getStatusFeed(viewerId?: string) {
   })
     .sort({ createdAt: -1 })
     .limit(30)
-    .select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+    .select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl imageKey commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
   const visibleUsernames = [...new Set(feed.filter((status) => !status.anonymous).map((status) => status.authorUsername))];
   const verifiedUsernames = new Set(
@@ -211,12 +249,12 @@ export async function getStatusFeed(viewerId?: string) {
     ).map((user) => user.username)
   );
 
-  const response = feed.map((status) =>
-    toStatusResponse({
+  const response = await Promise.all(feed.map((status) =>
+    serializeStatus({
       ...status.toObject(),
       authorVerified: !status.anonymous && verifiedUsernames.has(status.authorUsername)
     })
-  );
+  ));
   await writeJsonCache("statuses:feed", response, 30);
   return response;
 }
@@ -232,14 +270,14 @@ export async function getMyStatuses(userId: string) {
   })
     .sort({ createdAt: -1 })
     .limit(50)
-    .select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+    .select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl imageKey commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
-  return statuses.map((status) =>
-    toStatusResponse({
+  return Promise.all(statuses.map((status) =>
+    serializeStatus({
       ...status.toObject(),
       authorVerified: user?.verificationStatus === "verified"
     })
-  );
+  ));
 }
 
 export async function getAnonymousStatusByShareSlug(shareSlug: string) {
@@ -250,13 +288,13 @@ export async function getAnonymousStatusByShareSlug(shareSlug: string) {
       { expiresAt: { $gt: new Date() } },
       { createdAt: { $gt: new Date(Date.now() - statusLifetimeMs) } }
     ]
-  }).select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
+  }).select("authorName authorUsername body bodyEncrypted anonymous visibility imageUrl imageKey commentsCount likesCount bookmarksCount shareSlug createdAt expiresAt");
 
   if (!status) {
     throw new AppError("Anonymous status not found", 404);
   }
 
-  return toStatusResponse(status);
+  return serializeStatus(status.toObject());
 }
 
 export async function toggleStatusReaction(statusId: string, userId: string, action: "like" | "bookmark") {

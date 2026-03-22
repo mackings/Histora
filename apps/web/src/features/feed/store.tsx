@@ -456,11 +456,23 @@ export function FeedRealtimeBridge({
       applyLocalStatusUpdate(payload);
     };
 
+    const revalidateVisibleFeed = () => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+
+      void revalidateFeedStore(accessToken);
+    };
+
     window.addEventListener(statusUpdateEvent, handleStatusUpdate as EventListener);
+    window.addEventListener("online", revalidateVisibleFeed);
+    document.addEventListener("visibilitychange", revalidateVisibleFeed);
 
     return () => {
       unsubscribeEvents();
       window.removeEventListener(statusUpdateEvent, handleStatusUpdate as EventListener);
+      window.removeEventListener("online", revalidateVisibleFeed);
+      document.removeEventListener("visibilitychange", revalidateVisibleFeed);
     };
   }, [accessToken, currentUserId]);
 

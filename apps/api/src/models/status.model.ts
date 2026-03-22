@@ -9,6 +9,7 @@ export interface StatusDocument extends mongoose.Document {
   anonymous: boolean;
   visibility: "public" | "followers" | "private";
   imageUrl?: string;
+  imageKey?: string;
   shareSlug?: string;
   expiresAt: Date;
   commentsCount: number;
@@ -28,6 +29,7 @@ const statusSchema = new Schema<StatusDocument>(
     anonymous: { type: Boolean, default: false, index: true },
     visibility: { type: String, enum: ["public", "followers", "private"], default: "public", index: true },
     imageUrl: { type: String },
+    imageKey: { type: String },
     shareSlug: { type: String, index: true, sparse: true },
     expiresAt: {
       type: Date,

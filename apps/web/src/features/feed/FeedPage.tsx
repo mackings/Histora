@@ -33,6 +33,7 @@ type StatusImageSelection = {
   id: string;
   previewUrl: string;
   uploadedUrl: string | null;
+  objectKey: string | null;
   fileName: string;
   uploading: boolean;
   uploadError: string;
@@ -421,6 +422,7 @@ function StoryCirclesRow({
         id: selectionId,
         previewUrl: objectUrl,
         uploadedUrl: null,
+        objectKey: null,
         fileName: file.name,
         uploading: true,
         uploadError: "",
@@ -447,6 +449,7 @@ function StoryCirclesRow({
             ...current,
             previewUrl: uploaded.readUrl,
             uploadedUrl: uploaded.readUrl,
+            objectKey: uploaded.objectKey,
             uploading: false,
             uploadError: "",
             objectUrl: null
@@ -484,7 +487,8 @@ function StoryCirclesRow({
         body: statusDraft.trim(),
         anonymous: isAnonymousComposer,
         visibility: "public",
-        imageUrl: selectedStatusImage?.uploadedUrl ?? undefined
+        imageUrl: selectedStatusImage?.uploadedUrl ?? undefined,
+        imageKey: selectedStatusImage?.objectKey ?? undefined
       }
     })
       .then((createdStatus) => {
