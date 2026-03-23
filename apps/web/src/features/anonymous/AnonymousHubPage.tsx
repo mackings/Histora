@@ -1,10 +1,42 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { type ApiAnonymousMessage, type AuthUser, apiRequest } from "../../lib/api-client";
+import { type ApiAnonymousMessage, type AuthUser, apiRequest, subscribeToAppEvents } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
 import { formatAnonymousMeta, wrapCanvasText } from "../feed/support";
 import { type FeedIconComponent, type FeedSectionLabelComponent } from "../feed/ui-types";
+
+type AnonymousInboxEvent =
+  | {
+      type: "event";
+      channel: string;
+      payload?: {
+        kind?: "anonymous.inbox.upsert" | "anonymous.inbox.received";
+        message?: ApiAnonymousMessage;
+      };
+    }
+  | {
+      type: "event";
+      channel: string;
+      payload?: {
+        kind?: "anonymous.inbox.deleted";
+        messageId?: string;
+      };
+    };
+
+const mergeAnonymousInboxMessage = (messages: ApiAnonymousMessage[], incoming: ApiAnonymousMessage) =>
+  [...messages.filter((message) => message.id !== incoming.id), incoming].sort(
+    (left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()
+  );
+
+const isAnonymousInboxUpsertPayload = (
+  payload: AnonymousInboxEvent["payload"]
+): payload is { kind?: "anonymous.inbox.upsert" | "anonymous.inbox.received"; message?: ApiAnonymousMessage } =>
+  payload?.kind === "anonymous.inbox.upsert" || payload?.kind === "anonymous.inbox.received";
+
+const isAnonymousInboxDeletePayload = (
+  payload: AnonymousInboxEvent["payload"]
+): payload is { kind?: "anonymous.inbox.deleted"; messageId?: string } => payload?.kind === "anonymous.inbox.deleted";
 
 export function AnonymousHubPage({
   accessToken,
@@ -61,6 +93,37 @@ export function AnonymousHubPage({
       cancelled = true;
     };
   }, [accessToken]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToAppEvents(
+      accessToken,
+      [`anonymous:inbox:${currentUser.id}`],
+      (rawMessage) => {
+        const message = rawMessage as AnonymousInboxEvent;
+        if (message.type !== "event" || message.channel !== `anonymous:inbox:${currentUser.id}`) {
+          return;
+        }
+
+        const payload = message.payload;
+
+        if (isAnonymousInboxUpsertPayload(payload)) {
+          const incomingMessage = payload.message;
+          if (!incomingMessage) {
+            return;
+          }
+
+          setMessages((current) => mergeAnonymousInboxMessage(current, incomingMessage));
+          return;
+        }
+
+        if (isAnonymousInboxDeletePayload(payload) && payload.messageId) {
+          setMessages((current) => current.filter((entry) => entry.id !== payload.messageId));
+        }
+      }
+    );
+
+    return unsubscribe;
+  }, [accessToken, currentUser.id]);
 
   const copyInboxLink = async () => {
     if (typeof navigator === "undefined") {

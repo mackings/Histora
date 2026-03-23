@@ -18,8 +18,13 @@ export function AnonymousInboxComposePage({
   const navigate = useNavigate();
   const [body, setBody] = useState("I need perspective before I decide what the next chapter should be.");
   const [feedback, setFeedback] = useState("");
+  const [isSending, setIsSending] = useState(false);
 
   const submitAnonymousMessage = async () => {
+    if (isSending) {
+      return;
+    }
+
     const trimmedBody = body.trim();
 
     if (!trimmedBody) {
@@ -28,6 +33,8 @@ export function AnonymousInboxComposePage({
     }
 
     try {
+      setIsSending(true);
+      setFeedback("");
       await apiRequest<ApiAnonymousMessage>("/anonymous-messages", {
         method: "POST",
         accessToken,
@@ -37,10 +44,10 @@ export function AnonymousInboxComposePage({
           distribution: "external"
         }
       });
-      setFeedback("Anonymous message sent. The recipient can now review it in their anonymous inbox.");
-      window.setTimeout(() => navigate("/anonymous"), 260);
+      navigate("/anonymous", { replace: true });
     } catch (error) {
       setFeedback(getErrorMessage(error, "Could not send the anonymous message."));
+      setIsSending(false);
     }
   };
 
@@ -70,16 +77,21 @@ export function AnonymousInboxComposePage({
           <div className="profile-form-grid">
             <label>
               Message
-              <textarea onChange={(event) => setBody(event.target.value)} placeholder="Write your anonymous message..." value={body} />
+              <textarea
+                disabled={isSending}
+                onChange={(event) => setBody(event.target.value)}
+                placeholder="Write your anonymous message..."
+                value={body}
+              />
             </label>
           </div>
           {feedback ? <p className="status-feedback">{feedback}</p> : null}
           <div className="chapter-controls">
-            <button className="ghost-action" onClick={() => navigate("/anonymous")} type="button">
+            <button className="ghost-action" disabled={isSending} onClick={() => navigate("/anonymous")} type="button">
               CANCEL
             </button>
-            <button className="primary-action" onClick={() => void submitAnonymousMessage()} type="button">
-              SEND ANONYMOUS MESSAGE
+            <button className="primary-action" disabled={isSending} onClick={() => void submitAnonymousMessage()} type="button">
+              {isSending ? "SENDING..." : "SEND ANONYMOUS MESSAGE"}
               <IconComponent className="button-icon" name="arrow" />
             </button>
           </div>

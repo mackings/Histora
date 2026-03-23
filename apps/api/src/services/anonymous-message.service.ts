@@ -39,6 +39,9 @@ type AnonymousMessageResponseRecord = Pick<
   _id?: unknown;
 };
 
+type AnonymousInboxBroadcastRecord = AnonymousMessageResponseRecord &
+  Pick<AnonymousMessageDocument, "recipientUserId">;
+
 const toAnonymousResponse = (
   message: AnonymousMessageResponseRecord,
   options?: { includeHelperContact?: boolean; viewerRole?: "recipient" | "reader" | "sender" | null; includeHelpRequests?: boolean }
@@ -73,6 +76,24 @@ const toAnonymousResponse = (
   createdAt: message.createdAt
 });
 
+const broadcastAnonymousInboxUpsert = (message: AnonymousInboxBroadcastRecord) => {
+  broadcastAppEvent(getAnonymousInboxChannel(String(message.recipientUserId)), {
+    kind: "anonymous.inbox.upsert",
+    message: toAnonymousResponse(message, {
+      includeHelperContact: true,
+      includeHelpRequests: true,
+      viewerRole: "recipient"
+    })
+  });
+};
+
+const broadcastAnonymousInboxDeleted = (recipientUserId: string, messageId: string) => {
+  broadcastAppEvent(getAnonymousInboxChannel(recipientUserId), {
+    kind: "anonymous.inbox.deleted",
+    messageId
+  });
+};
+
 export async function createAnonymousMessage(
   payload: AnonymousMessageCreateInput,
   actorUserId?: string
@@ -93,17 +114,7 @@ export async function createAnonymousMessage(
     helpFee: 8
   });
 
-  broadcastAppEvent(getAnonymousInboxChannel(recipient.id), {
-    kind: "anonymous.inbox.received",
-      message: {
-        id: message.id,
-        shareSlug: message.shareSlug,
-        body: payload.body,
-        distribution: message.distribution,
-        commentsCount: message.commentsCount,
-        createdAt: message.createdAt
-    }
-  });
+  broadcastAnonymousInboxUpsert(message);
 
   if (message.distribution === "app") {
     broadcastAppEvent("anonymous:public", {
@@ -193,6 +204,7 @@ export async function updateAnonymousDistribution(userId: string, messageId: str
 
   message.distribution = distribution;
   await message.save();
+  broadcastAnonymousInboxUpsert(message);
 
   await recordAuditEvent({
     actorUserId: userId,
@@ -267,17 +279,7 @@ export async function requestAnonymousHelp(input: {
   ];
   await message.save();
 
-  broadcastAppEvent(getAnonymousInboxChannel(String(message.recipientUserId)), {
-    kind: "anonymous.inbox.received",
-    message: {
-      id: message.id,
-      shareSlug: message.shareSlug,
-      body: resolveDecryptedText(message.body, message.bodyEncrypted),
-      distribution: message.distribution,
-      commentsCount: message.commentsCount,
-      createdAt: message.createdAt
-    }
-  });
+  broadcastAnonymousInboxUpsert(message);
 
   await recordAuditEvent({
     actorUserId: input.actorUserId,
@@ -315,6 +317,7 @@ export async function acceptAnonymousHelpRequest(input: {
   message.helperContactNameEncrypted = encryptSensitiveValue(targetRequest.requesterName);
   message.helperContactPhoneEncrypted = encryptSensitiveValue(`@${targetRequest.requesterUsername}`);
   await message.save();
+  broadcastAnonymousInboxUpsert(message);
 
   await recordAuditEvent({
     actorUserId: input.actorUserId,
@@ -351,6 +354,7 @@ export async function unlockAnonymousHelperContact(input: {
   message.helperContactNameEncrypted = encryptSensitiveValue(input.helper.name);
   message.helperContactPhoneEncrypted = encryptSensitiveValue(input.helper.phone);
   await message.save();
+  broadcastAnonymousInboxUpsert(message);
 
   await recordAuditEvent({
     actorUserId: input.actorUserId,
@@ -380,6 +384,7 @@ export async function deleteAnonymousMessage(userId: string, messageId: string) 
     CommentModel.deleteMany({ targetType: "anonymousMessage", targetId: message.id }),
     message.deleteOne()
   ]);
+  broadcastAnonymousInboxDeleted(String(message.recipientUserId), message.id);
 
   await recordAuditEvent({
     actorUserId: userId,
