@@ -9,7 +9,7 @@ import { StoryInteractionModel } from "../models/story-interaction.model.js";
 import { FollowModel } from "../models/follow.model.js";
 import { readJsonCache, writeJsonCache, deleteCache, deleteCacheByPrefix } from "./cache.service.js";
 import { enqueueCounterSync } from "./queue.service.js";
-import { resolveStoredObjectUrl } from "./storage.service.js";
+import { extractOwnedObjectKey, resolveStoredObjectUrl } from "./storage.service.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
 import { sendGenericNotificationPush } from "./push.service.js";
 import { buildStoredStoryContent, resolveStoryTextContent } from "./story-content.service.js";
@@ -75,6 +75,29 @@ const applyEditAuditStamp = (
   lastEditedByName: changed ? actor.fullName : existing?.lastEditedByName ?? actor.fullName,
   lastEditedByUsername: changed ? actor.username : existing?.lastEditedByUsername ?? actor.username,
   lastEditedAt: changed ? occurredAt : existing?.lastEditedAt ?? occurredAt
+});
+
+const normalizeStoryMediaReference = (value?: string | null) => {
+  if (!value) {
+    return undefined;
+  }
+
+  return extractOwnedObjectKey(value) ?? value;
+};
+
+const normalizeStoryMediaInput = (input: StorySaveInput): StorySaveInput => ({
+  ...input,
+  coverImageUrl: normalizeStoryMediaReference(input.coverImageUrl),
+  chapters: input.chapters.map((chapter) => ({
+    ...chapter,
+    imageUrls: chapter.imageUrls.map((imageUrl) => normalizeStoryMediaReference(imageUrl) ?? imageUrl),
+    voiceNoteUrl: normalizeStoryMediaReference(chapter.voiceNoteUrl),
+    moments: chapter.moments.map((moment) => ({
+      ...moment,
+      imageUrls: moment.imageUrls.map((imageUrl) => normalizeStoryMediaReference(imageUrl) ?? imageUrl),
+      voiceNoteUrl: normalizeStoryMediaReference(moment.voiceNoteUrl)
+    }))
+  }))
 });
 
 function enforcePremiumLimits(input: StorySaveInput, tier: "free" | "premium") {
@@ -217,9 +240,9 @@ async function serializeStory(story: StoryDocument | null, viewerId?: string) {
       lastEditedByUsername: chapter.lastEditedByUsername ?? null,
       lastEditedAt: chapter.lastEditedAt ?? null,
       imageUrls: (await Promise.all(chapter.imageUrls.map((imageUrl) => resolveStoredObjectUrl(imageUrl)))).filter(Boolean) as string[],
-      imageKeys: chapter.imageUrls,
+      imageKeys: chapter.imageUrls.map((imageUrl) => extractOwnedObjectKey(imageUrl) ?? imageUrl),
       voiceNoteUrl: await resolveStoredObjectUrl(chapter.voiceNoteUrl ?? null),
-      voiceNoteKey: chapter.voiceNoteUrl ?? null,
+      voiceNoteKey: extractOwnedObjectKey(chapter.voiceNoteUrl ?? null) ?? chapter.voiceNoteUrl ?? null,
       moments: await Promise.all(
         chapter.moments.map(async (moment, momentIndex) => ({
           id: moment.id,
@@ -233,9 +256,9 @@ async function serializeStory(story: StoryDocument | null, viewerId?: string) {
           lastEditedByUsername: moment.lastEditedByUsername ?? null,
           lastEditedAt: moment.lastEditedAt ?? null,
           imageUrls: (await Promise.all(moment.imageUrls.map((imageUrl) => resolveStoredObjectUrl(imageUrl)))).filter(Boolean) as string[],
-          imageKeys: moment.imageUrls,
+          imageKeys: moment.imageUrls.map((imageUrl) => extractOwnedObjectKey(imageUrl) ?? imageUrl),
           voiceNoteUrl: await resolveStoredObjectUrl(moment.voiceNoteUrl ?? null),
-          voiceNoteKey: moment.voiceNoteUrl ?? null
+          voiceNoteKey: extractOwnedObjectKey(moment.voiceNoteUrl ?? null) ?? moment.voiceNoteUrl ?? null
         }))
       )
     }))
@@ -248,7 +271,7 @@ async function serializeStory(story: StoryDocument | null, viewerId?: string) {
     title: storyText.title,
     summary: storyText.summary,
     coverImageUrl,
-    coverImageKey: story.coverImageUrl ?? null,
+    coverImageKey: extractOwnedObjectKey(story.coverImageUrl ?? null) ?? story.coverImageUrl ?? null,
     visibility: story.visibility,
     anonymous: story.anonymous,
     authorName: story.authorName,
@@ -572,8 +595,9 @@ export async function saveStory(authorId: string, input: StorySaveInput, storyId
     throw new AppError("User not found", 404);
   }
 
-  enforcePremiumLimits(input, user.subscriptionTier);
-  const slug = await buildUniqueStorySlug(input.title, storyId);
+  const normalizedMediaInput = normalizeStoryMediaInput(input);
+  enforcePremiumLimits(normalizedMediaInput, user.subscriptionTier);
+  const slug = await buildUniqueStorySlug(normalizedMediaInput.title, storyId);
   const actor: StoryEditorIdentity = {
     userId: authorId,
     fullName: user.fullName,
@@ -592,14 +616,14 @@ export async function saveStory(authorId: string, input: StorySaveInput, storyId
   }
 
   const normalizedInput: StorySaveInput = {
-    ...input,
-    visibility: existingStory && String(existingStory.authorId) !== authorId ? existingStory.visibility : input.visibility,
-    anonymous: existingStory && String(existingStory.authorId) !== authorId ? existingStory.anonymous : input.anonymous,
+    ...normalizedMediaInput,
+    visibility: existingStory && String(existingStory.authorId) !== authorId ? existingStory.visibility : normalizedMediaInput.visibility,
+    anonymous: existingStory && String(existingStory.authorId) !== authorId ? existingStory.anonymous : normalizedMediaInput.anonymous,
     allowedViewerIds:
       existingStory && String(existingStory.authorId) !== authorId
         ? existingStory.allowedViewerIds.map((viewerId) => String(viewerId))
-        : input.allowedViewerIds,
-    chapters: normalizeCollaborativeChapters(input, existingStory, actor, occurredAt)
+        : normalizedMediaInput.allowedViewerIds,
+    chapters: normalizeCollaborativeChapters(normalizedMediaInput, existingStory, actor, occurredAt)
   };
   const storedStoryContent = buildStoredStoryContent(normalizedInput);
 

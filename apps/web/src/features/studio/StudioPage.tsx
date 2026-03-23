@@ -18,6 +18,28 @@ import {
 
 const isBlobUrl = (value: string) => value.startsWith("blob:");
 const isOwnedStorageObjectKey = (value: string) => /^users\/[^/]+\/.+/.test(value);
+const extractStudioOwnedObjectKey = (value?: string | null) => {
+  if (!value) {
+    return null;
+  }
+
+  if (isOwnedStorageObjectKey(value)) {
+    return value;
+  }
+
+  try {
+    const normalizedPath = new URL(value).pathname.replace(/^\/+/, "");
+    const usersPathIndex = normalizedPath.indexOf("users/");
+    if (usersPathIndex >= 0) {
+      const candidate = normalizedPath.slice(usersPathIndex);
+      return isOwnedStorageObjectKey(candidate) ? candidate : null;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+};
 const createEmptyStoryLink = (): StudioExternalLink => ({
   label: "",
   url: "",
@@ -25,10 +47,12 @@ const createEmptyStoryLink = (): StudioExternalLink => ({
 });
 
 const getStudioAttachmentStorageUrl = (attachment: { url: string; objectKey?: string }) =>
-  attachment.objectKey || (attachment.url && !isBlobUrl(attachment.url) ? attachment.url : "");
+  attachment.objectKey || extractStudioOwnedObjectKey(attachment.url) || (attachment.url && !isBlobUrl(attachment.url) ? attachment.url : "");
 
 async function resolveStudioAttachmentUrl(accessToken: string, attachment: StudioMediaAttachment) {
-  const storageKey = attachment.objectKey || (isOwnedStorageObjectKey(attachment.url) ? attachment.url : null);
+  const storageKey =
+    (attachment.objectKey && isOwnedStorageObjectKey(attachment.objectKey) ? attachment.objectKey : null) ||
+    extractStudioOwnedObjectKey(attachment.url);
   if (!storageKey) {
     return attachment;
   }
@@ -224,7 +248,7 @@ export function StudioPage({
     words: getChapterWordCount(sanitizeStudioRichText(chapter.body)),
     status: storyStatus === "published" ? "Published" : "Draft saved",
     moments: chapter.moments.length,
-    body: sanitizeStudioRichText(chapter.body),
+      body: sanitizeStudioRichText(chapter.body),
     createdByName: chapter.createdByName ?? null,
     createdByUsername: chapter.createdByUsername ?? null,
     createdAt: chapter.createdAt ?? null,
@@ -235,14 +259,20 @@ export function StudioPage({
       name: `${chapter.title} image ${index + 1}`,
       url: imageUrl,
       source: "Saved story",
-      objectKey: chapter.imageKeys?.[index]
+      objectKey:
+        chapter.imageKeys?.[index] && isOwnedStorageObjectKey(chapter.imageKeys[index])
+          ? chapter.imageKeys[index]
+          : extractStudioOwnedObjectKey(imageUrl) ?? undefined
     })),
     voiceNotes: chapter.voiceNoteUrl
       ? [{
           name: `Voice note ${chapter.order}`,
           url: chapter.voiceNoteUrl,
           source: "Saved story",
-          objectKey: chapter.voiceNoteKey ?? undefined
+          objectKey:
+            chapter.voiceNoteKey && isOwnedStorageObjectKey(chapter.voiceNoteKey)
+              ? chapter.voiceNoteKey
+              : extractStudioOwnedObjectKey(chapter.voiceNoteUrl) ?? undefined
         }]
       : [],
     timelineEntries:
@@ -2430,7 +2460,10 @@ export function StudioPage({
     return {
       title: storyTitle,
       summary: storySummary,
-      coverImageUrl: persistedChapters.flatMap((chapter) => chapter.imageAttachments)[0]?.objectKey,
+      coverImageUrl: (() => {
+        const firstImage = persistedChapters.flatMap((chapter) => chapter.imageAttachments)[0];
+        return firstImage?.objectKey ?? extractStudioOwnedObjectKey(firstImage?.url) ?? undefined;
+      })(),
       visibility: anonymous ? "public" : visibility,
       anonymous,
       allowedViewerIds: [],
@@ -2447,8 +2480,13 @@ export function StudioPage({
             ? "anonymous"
             : (chapter.type.toLowerCase() as "memory" | "reflection" | "milestone" | "anonymous"),
         order: index + 1,
-        imageUrls: chapter.imageAttachments.map((attachment) => attachment.objectKey ?? attachment.url),
-        voiceNoteUrl: chapter.voiceNotes[0]?.objectKey ?? chapter.voiceNotes[0]?.url,
+        imageUrls: chapter.imageAttachments
+          .map((attachment) => attachment.objectKey ?? extractStudioOwnedObjectKey(attachment.url) ?? attachment.url)
+          .filter(Boolean),
+        voiceNoteUrl: (() => {
+          const voice = chapter.voiceNotes[0];
+          return voice ? voice.objectKey ?? extractStudioOwnedObjectKey(voice.url) ?? voice.url : undefined;
+        })(),
         moments: chapter.timelineEntries
           .filter((entry) => entry.title.trim() || entry.body.trim())
           .map((entry) => ({
