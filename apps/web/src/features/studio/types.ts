@@ -1,5 +1,6 @@
 export type StudioMediaAttachment = {
   localId?: string;
+  replaceTargetUrl?: string;
   name: string;
   url: string;
   source: string;

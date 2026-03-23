@@ -83,6 +83,13 @@ async function hydrateStudioChaptersForMedia(accessToken: string, chapters: Stud
   );
 }
 
+const isRestorableStudioAttachment = (attachment: { url: string; objectKey?: string }) =>
+  Boolean(
+    (attachment.objectKey && isOwnedStorageObjectKey(attachment.objectKey)) ||
+    extractStudioOwnedObjectKey(attachment.url) ||
+    isBlobUrl(attachment.url)
+  );
+
 const playStudioNoticeTone = (audioContextRef: { current: AudioContext | null }) => {
   if (typeof window === "undefined") {
     return;
@@ -305,8 +312,16 @@ export function StudioPage({
       }
 
       const body = getChapterWordCount(localChapter.body) > 0 ? localChapter.body : fetchedChapter.body;
-      const imageAttachments = localChapter.imageAttachments.length ? localChapter.imageAttachments : fetchedChapter.imageAttachments;
-      const voiceNotes = localChapter.voiceNotes.length ? localChapter.voiceNotes : fetchedChapter.voiceNotes;
+      const imageAttachments =
+        localChapter.imageAttachments.length &&
+        localChapter.imageAttachments.every((attachment) => isRestorableStudioAttachment(attachment))
+          ? localChapter.imageAttachments
+          : fetchedChapter.imageAttachments;
+      const voiceNotes =
+        localChapter.voiceNotes.length &&
+        localChapter.voiceNotes.every((voice) => isRestorableStudioAttachment(voice))
+          ? localChapter.voiceNotes
+          : fetchedChapter.voiceNotes;
       const timelineEntries = hasTimelineContent(localChapter.timelineEntries)
         ? localChapter.timelineEntries
         : fetchedChapter.timelineEntries;
@@ -416,6 +431,7 @@ export function StudioPage({
   });
   const [imageAttachments, setImageAttachments] = useState<StudioMediaAttachment[]>([]);
   const [voiceNotes, setVoiceNotes] = useState<StudioMediaAttachment[]>([]);
+  const [imageReplaceTargetUrl, setImageReplaceTargetUrl] = useState<string | null>(null);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [isVoiceRecordingPaused, setIsVoiceRecordingPaused] = useState(false);
   const [isVoiceSheetOpen, setIsVoiceSheetOpen] = useState(false);
@@ -992,12 +1008,8 @@ export function StudioPage({
           .map((chapter) => ({
             ...chapter,
             body: sanitizeStudioRichText(chapter.body),
-            imageAttachments: (chapter.imageAttachments ?? []).filter(
-              (attachment) => Boolean(attachment.objectKey || (attachment.url && !isBlobUrl(attachment.url)))
-            ),
-            voiceNotes: (chapter.voiceNotes ?? []).filter(
-              (voice) => Boolean(voice.objectKey || (voice.url && !isBlobUrl(voice.url)))
-            ),
+            imageAttachments: (chapter.imageAttachments ?? []).filter((attachment) => isRestorableStudioAttachment(attachment)),
+            voiceNotes: (chapter.voiceNotes ?? []).filter((voice) => isRestorableStudioAttachment(voice)),
             timelineEntries: chapter.timelineEntries?.length ? chapter.timelineEntries : [createEmptyTimelineEntry()]
           }))
           .filter((chapter) => !isLegacySeedChapter(chapter));
@@ -1156,24 +1168,31 @@ export function StudioPage({
     };
   }, []);
 
-  const appendImages = async (files: FileList | null, source: string) => {
+  const appendImages = async (files: FileList | null, source: string, options?: { replaceTargetUrl?: string | null }) => {
     if (!files?.length) {
       return;
     }
 
     setMediaError(null);
-
-    const remainingSlots = imageLimit - imageAttachments.length;
+    const replaceTargetUrl = options?.replaceTargetUrl ?? null;
+    const replacementOriginal = replaceTargetUrl
+      ? imageAttachments.find((attachment) => attachment.url === replaceTargetUrl) ?? null
+      : null;
+    const occupiedSlots = replaceTargetUrl
+      ? imageAttachments.filter((attachment) => attachment.url !== replaceTargetUrl).length
+      : imageAttachments.length;
+    const remainingSlots = imageLimit - occupiedSlots;
 
     if (remainingSlots <= 0) {
       setMediaError("Image attachment limit reached. Upgrade to premium for more slots.");
       return;
     }
 
-    const nextFiles = Array.from(files).slice(0, remainingSlots);
-    setVoiceRecordingStatus("Uploading image attachments...");
+    const nextFiles = Array.from(files).slice(0, replaceTargetUrl ? 1 : remainingSlots);
+    setVoiceRecordingStatus(replaceTargetUrl ? "Replacing image attachment..." : "Uploading image attachments...");
     const optimisticImages = nextFiles.map((file, index) => ({
       localId: `${Date.now()}-${index}-${file.name}`,
+      replaceTargetUrl: replaceTargetUrl ?? undefined,
       name: file.name || `${source} image`,
       url: URL.createObjectURL(file),
       source: "Uploading image...",
@@ -1181,7 +1200,11 @@ export function StudioPage({
     }));
 
     setImageAttachments((current) => {
-      const updated = [...current, ...optimisticImages];
+      const updated = replaceTargetUrl
+        ? current.map((attachment) =>
+            attachment.url === replaceTargetUrl ? optimisticImages[0] ?? attachment : attachment
+          )
+        : [...current, ...optimisticImages];
       updateActiveChapterMedia("imageAttachments", updated);
       return updated;
     });
@@ -1218,7 +1241,7 @@ export function StudioPage({
           updateActiveChapterMedia("imageAttachments", updated);
           return updated;
         });
-        setVoiceRecordingStatus("Image attachments saved.");
+        setVoiceRecordingStatus(replaceTargetUrl ? "Image replaced." : "Image attachments saved.");
       })
       .catch((error) => {
         optimisticImages.forEach((attachment) => {
@@ -1227,14 +1250,26 @@ export function StudioPage({
           }
         });
         setImageAttachments((current) => {
-          const updated = current.filter(
+          let updated = current.filter(
             (attachment) => !optimisticImages.some((item) => item.localId === attachment.localId)
           );
+          if (replaceTargetUrl && replacementOriginal) {
+            const targetIndex = imageAttachments.findIndex((attachment) => attachment.url === replaceTargetUrl);
+            if (targetIndex >= 0) {
+              updated = [
+                ...updated.slice(0, targetIndex),
+                replacementOriginal,
+                ...updated.slice(targetIndex)
+              ];
+            } else {
+              updated = [replacementOriginal, ...updated];
+            }
+          }
           updateActiveChapterMedia("imageAttachments", updated);
           return updated;
         });
         setMediaError(getErrorMessage(error, "Could not save the selected images."));
-        setVoiceRecordingStatus("Image upload failed.");
+        setVoiceRecordingStatus(replaceTargetUrl ? "Image replacement failed." : "Image upload failed.");
       });
 
     if (files.length > remainingSlots) {
@@ -1243,7 +1278,9 @@ export function StudioPage({
   };
 
   const handleImageUpload = (event: ChangeEvent<HTMLInputElement>) => {
-    void appendImages(event.target.files, "Upload").catch((error) => {
+    const replaceTargetUrl = imageReplaceTargetUrl;
+    setImageReplaceTargetUrl(null);
+    void appendImages(event.target.files, "Upload", { replaceTargetUrl }).catch((error) => {
       setMediaError(getErrorMessage(error, "Could not save the selected images."));
     });
     event.target.value = "";
@@ -1393,6 +1430,12 @@ export function StudioPage({
   };
 
   const openImageSlot = () => {
+    setImageReplaceTargetUrl(null);
+    imageInputRef.current?.click();
+  };
+
+  const replaceImageAttachment = (url: string) => {
+    setImageReplaceTargetUrl(url);
     imageInputRef.current?.click();
   };
 
@@ -3468,7 +3511,10 @@ export function StudioPage({
                   <strong>{attachment.name}</strong>
                   <span>{attachment.source}</span>
                   <div className="media-card-footer">
-                    <small>Tap a free slot to replace or add more.</small>
+                    <button className="ghost-action slim-action" onClick={() => replaceImageAttachment(attachment.url)} type="button">
+                      REPLACE IMAGE
+                    </button>
+                    <small>Swap this image without using another slot.</small>
                   </div>
                 </article>
               ))}
