@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import {
+  collaborativeStoriesController,
   createStoryController,
   myStoriesController,
   myStoryController,
@@ -16,6 +17,7 @@ const storyRouter = Router();
 
 storyRouter.get("/feed", optionalAuth, publicFeedController);
 storyRouter.get("/mine", requireAuth, myStoriesController);
+storyRouter.get("/collaborative", requireAuth, collaborativeStoriesController);
 storyRouter.get("/mine/:storyId", requireAuth, myStoryController);
 storyRouter.get("/public/:slug", optionalAuth, publicStoryController);
 storyRouter.post("/", requireAuth, createStoryController);

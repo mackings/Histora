@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { type ApiStory, getEventsSocketUrl, type ProfileDashboard, type SignedReadResponse, apiRequest, uploadMediaAsset } from "../../lib/api-client";
+import { type ApiStory, type ProfileDashboard, type SignedReadResponse, apiRequest, subscribeToAppEvents, uploadMediaAsset } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
 import { sanitizeStudioRichText } from "../../lib/safe-content";
 import type { FeedIconComponent, FeedSectionLabelComponent } from "../feed/ui-types";
@@ -125,6 +125,14 @@ const getStoryAudienceHelp = (visibility: "private" | "selected" | "public") => 
   return "Anyone can discover and open this story.";
 };
 
+const formatStudioEditMeta = (name?: string | null, username?: string | null, editedAt?: string | Date | null) => {
+  if (!name || !username || !editedAt) {
+    return "";
+  }
+
+  return `Last edited by ${name} (@${username}) // ${new Date(editedAt).toLocaleString()}`;
+};
+
 type StudioGuideTarget =
   | "chapters"
   | "storySetup"
@@ -153,6 +161,7 @@ export function StudioPage({
   SectionLabelComponent: FeedSectionLabelComponent;
 }) {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const normalizeChapterTitle = (title: string) => title.replace(/^Chapter\s+\d+:\s*/i, "").trim();
   const monthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const currentYear = new Date().getFullYear();
@@ -209,12 +218,19 @@ export function StudioPage({
     chapter.voiceNotes.length > 0 ||
     hasTimelineContent(chapter.timelineEntries);
   const normalizeFetchedStoryChapter = (chapter: ApiStory["chapters"][number], storyStatus: ApiStory["status"]): StudioChapter => ({
+    id: chapter.id,
     title: chapter.title,
     type: chapter.type.toUpperCase(),
     words: getChapterWordCount(sanitizeStudioRichText(chapter.body)),
     status: storyStatus === "published" ? "Published" : "Draft saved",
     moments: chapter.moments.length,
     body: sanitizeStudioRichText(chapter.body),
+    createdByName: chapter.createdByName ?? null,
+    createdByUsername: chapter.createdByUsername ?? null,
+    createdAt: chapter.createdAt ?? null,
+    lastEditedByName: chapter.lastEditedByName ?? null,
+    lastEditedByUsername: chapter.lastEditedByUsername ?? null,
+    lastEditedAt: chapter.lastEditedAt ?? null,
     imageAttachments: (chapter.imageUrls ?? []).map((imageUrl, index) => ({
       name: `${chapter.title} image ${index + 1}`,
       url: imageUrl,
@@ -234,11 +250,18 @@ export function StudioPage({
         ? chapter.moments.map((moment) => {
             const momentDate = new Date(moment.happenedAt);
             return {
+              id: moment.id,
               year: String(momentDate.getFullYear()),
               month: String(momentDate.getMonth() + 1).padStart(2, "0"),
               day: String(momentDate.getDate()).padStart(2, "0"),
               title: moment.title,
-              body: moment.description
+              body: moment.description,
+              createdByName: moment.createdByName ?? null,
+              createdByUsername: moment.createdByUsername ?? null,
+              createdAt: moment.createdAt ?? null,
+              lastEditedByName: moment.lastEditedByName ?? null,
+              lastEditedByUsername: moment.lastEditedByUsername ?? null,
+              lastEditedAt: moment.lastEditedAt ?? null
             };
           })
         : [createEmptyTimelineEntry()]
@@ -337,7 +360,21 @@ export function StudioPage({
   const [draftHistory, setDraftHistory] = useState<string[]>(["Studio opened."]);
   const [studioNotice, setStudioNotice] = useState<StudioNoticeState | null>(null);
   const [storyLibrary, setStoryLibrary] = useState<ApiStory[]>([]);
+  const [collaborationLibrary, setCollaborationLibrary] = useState<ApiStory[]>([]);
   const [isStoryLibraryLoading, setIsStoryLibraryLoading] = useState(false);
+  const [currentStoryRevision, setCurrentStoryRevision] = useState(0);
+  const [currentStoryCanEdit, setCurrentStoryCanEdit] = useState(true);
+  const [currentStoryCollaborators, setCurrentStoryCollaborators] = useState<NonNullable<ApiStory["collaborators"]>>([]);
+  const [currentStoryLastEditedByName, setCurrentStoryLastEditedByName] = useState<string | null>(null);
+  const [currentStoryLastEditedByUsername, setCurrentStoryLastEditedByUsername] = useState<string | null>(null);
+  const [currentStoryLastEditedAt, setCurrentStoryLastEditedAt] = useState<string | null>(null);
+  const [currentStoryIsOwner, setCurrentStoryIsOwner] = useState(true);
+  const [remoteCollaborationUpdate, setRemoteCollaborationUpdate] = useState<{
+    revision: number;
+    updatedByName: string;
+    updatedByUsername: string;
+    updatedAt: string;
+  } | null>(null);
   const [timelineEntries, setTimelineEntries] = useState<StudioTimelineEntry[]>([]);
   const [activeFormats, setActiveFormats] = useState({
     bold: false,
@@ -394,6 +431,7 @@ export function StudioPage({
   const chaptersRef = useRef<StudioChapter[]>([]);
   const currentStoryIdRef = useRef<string | null>(null);
   const persistStoryQueueRef = useRef<Promise<ApiStory | null>>(Promise.resolve(null));
+  const collaborationRequestHandledRef = useRef(false);
 
   const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
   const studioStorageKey = "histora-studio-local-draft-v1";
@@ -431,6 +469,8 @@ export function StudioPage({
   const activeChapterNumberLabel = `Chapter ${activeChapterNumber}`;
   const liveChapterIndexSet = new Set(liveChapterIndexes);
   const activeChapterIsLive = liveChapterIndexSet.has(activeChapterIndex >= 0 ? activeChapterIndex : 0);
+  const requestedStudioStoryId = searchParams.get("storyId");
+  const isCollaborativeStudio = !currentStoryIsOwner && currentStoryCollaborators.length > 0;
   const storySetupComplete = storyTitle.trim().length >= 3 && summaryWordCount >= 20;
   const hasUnsavedLocalDraft =
     !currentStoryId &&
@@ -680,6 +720,14 @@ export function StudioPage({
 
     setCurrentStoryId(story.id);
     setCurrentStoryStatus(story.status);
+    setCurrentStoryRevision(story.collaborationRevision ?? 0);
+    setCurrentStoryCanEdit(story.canEdit ?? true);
+    setCurrentStoryCollaborators(story.collaborators ?? []);
+    setCurrentStoryLastEditedByName(story.lastEditedByName ?? null);
+    setCurrentStoryLastEditedByUsername(story.lastEditedByUsername ?? null);
+    setCurrentStoryLastEditedAt(story.lastEditedAt ?? null);
+    setCurrentStoryIsOwner(Boolean(story.isOwner ?? true));
+    setRemoteCollaborationUpdate(null);
     setLiveChapterIndexes(story.status === "published" ? fetchedChapters.map((_, index) => index) : []);
     setStoryTitle(story.title);
     setStorySummary(story.summary);
@@ -720,6 +768,14 @@ export function StudioPage({
 
     setCurrentStoryId(null);
     setCurrentStoryStatus("draft");
+    setCurrentStoryRevision(0);
+    setCurrentStoryCanEdit(true);
+    setCurrentStoryCollaborators([]);
+    setCurrentStoryLastEditedByName(null);
+    setCurrentStoryLastEditedByUsername(null);
+    setCurrentStoryLastEditedAt(null);
+    setCurrentStoryIsOwner(true);
+    setRemoteCollaborationUpdate(null);
     setLiveChapterIndexes([]);
     setStoryTitle("");
     setStorySummary("");
@@ -746,6 +802,9 @@ export function StudioPage({
       window.sessionStorage.removeItem("histora-studio-publish-payload");
       window.sessionStorage.removeItem("histora-studio-reviewed");
     }
+    if (requestedStudioStoryId) {
+      setSearchParams({}, { replace: true });
+    }
     invalidatePreviewReview();
   };
 
@@ -753,13 +812,17 @@ export function StudioPage({
     let cancelled = false;
     setIsStoryLibraryLoading(true);
 
-    void apiRequest<ApiStory[]>("/stories/mine", { accessToken })
-      .then((stories) => {
+    void Promise.all([
+      apiRequest<ApiStory[]>("/stories/mine", { accessToken }),
+      apiRequest<ApiStory[]>("/stories/collaborative", { accessToken }).catch(() => [])
+    ])
+      .then(([stories, collaborativeStories]) => {
         if (cancelled) {
           return;
         }
 
         setStoryLibrary(stories);
+        setCollaborationLibrary(collaborativeStories);
         setIsStoryLibraryLoading(false);
       })
       .catch(() => {
@@ -772,6 +835,30 @@ export function StudioPage({
       cancelled = true;
     };
   }, [accessToken]);
+
+  useEffect(() => {
+    if (requestedStudioStoryId) {
+      collaborationRequestHandledRef.current = false;
+    }
+  }, [requestedStudioStoryId]);
+
+  useEffect(() => {
+    if (!requestedStudioStoryId || collaborationRequestHandledRef.current) {
+      return;
+    }
+
+    const requestedStory =
+      storyLibrary.find((story) => story.id === requestedStudioStoryId) ??
+      collaborationLibrary.find((story) => story.id === requestedStudioStoryId);
+
+    if (!requestedStory) {
+      return;
+    }
+
+    collaborationRequestHandledRef.current = true;
+    loadStoryIntoStudio(requestedStory);
+    setSearchParams({}, { replace: true });
+  }, [requestedStudioStoryId, storyLibrary, collaborationLibrary, setSearchParams]);
 
   useEffect(() => {
     if (typeof window !== "undefined" && window.sessionStorage.getItem("histora-studio-reviewed") === "true") {
@@ -2334,7 +2421,9 @@ export function StudioPage({
       tags: [],
       links: storyLinks.filter((link) => link.label.trim() && link.url.trim()),
       status,
+      expectedRevision: currentStoryId ? currentStoryRevision : undefined,
       chapters: persistedChapters.map((chapter, index) => ({
+        id: chapter.id,
         title: chapter.title,
         body: sanitizeStudioRichText(chapter.body),
         type:
@@ -2347,6 +2436,7 @@ export function StudioPage({
         moments: chapter.timelineEntries
           .filter((entry) => entry.title.trim() || entry.body.trim())
           .map((entry) => ({
+            id: entry.id,
             title: entry.title,
             description: entry.body,
             happenedAt: new Date(
@@ -2410,6 +2500,14 @@ export function StudioPage({
         currentStoryIdRef.current = story.id;
         setCurrentStoryId(story.id);
         setCurrentStoryStatus(story.status);
+        setCurrentStoryRevision(story.collaborationRevision ?? 0);
+        setCurrentStoryCanEdit(story.canEdit ?? true);
+        setCurrentStoryCollaborators(story.collaborators ?? []);
+        setCurrentStoryLastEditedByName(story.lastEditedByName ?? null);
+        setCurrentStoryLastEditedByUsername(story.lastEditedByUsername ?? null);
+        setCurrentStoryLastEditedAt(story.lastEditedAt ?? null);
+        setCurrentStoryIsOwner(Boolean(story.isOwner ?? true));
+        setRemoteCollaborationUpdate(null);
         setLiveChapterIndexes(
           story.status === "published"
             ? story.chapters.map((_, index) => index)
@@ -2422,11 +2520,80 @@ export function StudioPage({
         setStudioMessage(successMessage);
         setDraftHistory((current) => [successMessage, ...current].slice(0, 6));
         return story;
+      })
+      .catch((error) => {
+        if (error instanceof Error && "code" in error && (error as { code?: string }).code === "STORY_REVISION_CONFLICT") {
+          setStudioMessage("A collaborator saved a newer version. Your local draft is still safe on this device.");
+          openStudioNotice(
+            "New collaborative version available",
+            "A collaborator saved a newer version before this save completed. Load the latest version to continue from their changes, or keep your local draft and merge carefully.",
+            { target: "publish" }
+          );
+        }
+        throw error;
       });
 
     persistStoryQueueRef.current = nextPersist;
     return await nextPersist;
   };
+
+  const loadLatestCollaborativeVersion = async () => {
+    if (!currentStoryId) {
+      return;
+    }
+
+    try {
+      const story = await apiRequest<ApiStory>(`/stories/mine/${currentStoryId}`, { accessToken });
+      loadStoryIntoStudio(story);
+      setStudioMessage("Loaded the latest collaborative version.");
+      setDraftHistory((current) => ["Latest collaborative version loaded.", ...current].slice(0, 6));
+    } catch (error) {
+      setStudioMessage(getErrorMessage(error, "Could not load the latest collaborative version."));
+    }
+  };
+
+  useEffect(() => {
+    const unsubscribe = subscribeToAppEvents(accessToken, [`user:${currentUser.id}`], (rawMessage) => {
+      const message = rawMessage as {
+        type?: string;
+        channel?: string;
+        payload?: {
+          kind?: string;
+          storyId?: string;
+          revision?: number;
+          updatedAt?: string;
+          updatedByName?: string;
+          updatedByUsername?: string;
+        };
+      };
+
+      if (
+        message.type !== "event" ||
+        message.channel !== `user:${currentUser.id}` ||
+        message.payload?.kind !== "story.collaboration.updated" ||
+        !currentStoryId ||
+        message.payload.storyId !== currentStoryId ||
+        (message.payload.updatedByUsername ?? "").toLowerCase() === currentUser.username.toLowerCase()
+      ) {
+        return;
+      }
+
+      const nextRevision = message.payload.revision ?? 0;
+      if (nextRevision <= currentStoryRevision) {
+        return;
+      }
+
+      setRemoteCollaborationUpdate({
+        revision: nextRevision,
+        updatedAt: message.payload.updatedAt ?? new Date().toISOString(),
+        updatedByName: message.payload.updatedByName ?? "A collaborator",
+        updatedByUsername: message.payload.updatedByUsername ?? "collaborator"
+      });
+      setStudioMessage(`${message.payload.updatedByName ?? "A collaborator"} updated this story. Your local draft is still safe.`);
+    });
+
+    return unsubscribe;
+  }, [accessToken, currentStoryId, currentStoryRevision, currentUser.id, currentUser.username]);
 
   const updateTimelineEntry = (index: number, field: "title" | "body", value: string) => {
     setTimelineEntries((current) => {
@@ -2711,6 +2878,7 @@ export function StudioPage({
           <button
             key={option}
             className={visibility === option ? "choice-button active-choice" : "choice-button"}
+            disabled={!currentStoryIsOwner}
             onClick={() => setVisibility(option as "private" | "selected" | "public")}
             type="button"
           >
@@ -2719,7 +2887,7 @@ export function StudioPage({
         ))}
       </div>
       <label className="toggle-row">
-        <input checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} type="checkbox" />
+        <input checked={anonymous} disabled={!currentStoryIsOwner} onChange={(event) => setAnonymous(event.target.checked)} type="checkbox" />
         <span>Post this chapter anonymously for advice</span>
       </label>
       <label className="toggle-row">
@@ -2757,7 +2925,7 @@ export function StudioPage({
             <strong>Loading your story library...</strong>
             <span>Checking drafts and published stories linked to this account.</span>
           </div>
-        ) : storyLibrary.length || hasUnsavedLocalDraft ? (
+        ) : storyLibrary.length || collaborationLibrary.length || hasUnsavedLocalDraft ? (
           <>
             {hasUnsavedLocalDraft ? (
               <button
@@ -2805,6 +2973,27 @@ export function StudioPage({
                 </div>
               </button>
             ))}
+            {collaborationLibrary.map((story) => (
+              <button
+                className={`studio-library-card${currentStoryId === story.id ? " studio-library-card-active" : ""}`}
+                key={story.id}
+                onClick={() => loadStoryIntoStudio(story)}
+                type="button"
+              >
+                <div className="studio-library-head">
+                  <strong>{story.title}</strong>
+                  <span className="story-tag">COLLAB</span>
+                </div>
+                <p>{story.summary}</p>
+                <span className="studio-library-action-chip">START COLLABORATING</span>
+                <div className="studio-library-meta">
+                  <span>{story.chapters.length} chapter{story.chapters.length === 1 ? "" : "s"}</span>
+                  <span>Revision {story.collaborationRevision ?? 0}</span>
+                  <span>{(story.collaborators ?? []).length + 1} editors</span>
+                  <span>{new Date(story.updatedAt).toLocaleDateString()}</span>
+                </div>
+              </button>
+            ))}
           </>
         ) : (
           <div className="studio-library-card studio-library-empty">
@@ -2820,9 +3009,13 @@ export function StudioPage({
     <main className="page-shell">
       <section className="studio-header card">
         <div>
-          <SectionLabelComponent>WRITING_STUDIO</SectionLabelComponent>
-          <h1>DRAFT LIKE AN EDITOR. PUBLISH LIKE A PLATFORM.</h1>
-          <p>Build chapters, attach images and voice notes, and control how every finished draft gets published.</p>
+          <SectionLabelComponent>{isCollaborativeStudio ? "COLLABORATIVE_STUDIO" : "WRITING_STUDIO"}</SectionLabelComponent>
+          <h1>{isCollaborativeStudio ? "WRITE TOGETHER WITHOUT LOSING THE STORY." : "DRAFT LIKE AN EDITOR. PUBLISH LIKE A PLATFORM."}</h1>
+          <p>
+            {isCollaborativeStudio
+              ? "This story is shared with collaborators. Track revisions, see who last edited each section, and reload newer versions safely."
+              : "Build chapters, attach images and voice notes, and control how every finished draft gets published."}
+          </p>
         </div>
         <div className="hero-actions">
           {isStudioEditorOpen ? (
@@ -2838,9 +3031,42 @@ export function StudioPage({
             ? "Auto-saving..."
             : isStudioEditorOpen
               ? `${wordCount} words in active chapter`
-              : `${storyLibrary.length} stor${storyLibrary.length === 1 ? "y" : "ies"} in your library`}
+              : `${storyLibrary.length + collaborationLibrary.length} stor${storyLibrary.length + collaborationLibrary.length === 1 ? "y" : "ies"} in your library`}
         </span>
       </section>
+      {currentStoryId && currentStoryCollaborators.length > 0 ? (
+        <section className="studio-notice card studio-collaboration-panel">
+          <div className="studio-notice-copy">
+            <span className="studio-notice-label">Collaborative studio</span>
+            <strong>
+              Revision {currentStoryRevision}
+              {currentStoryLastEditedByName && currentStoryLastEditedByUsername
+                ? ` // last update by ${currentStoryLastEditedByName} (@${currentStoryLastEditedByUsername})`
+                : ""}
+            </strong>
+            <p>
+              {currentStoryIsOwner
+                ? "You own this story. Collaborators can help write and edit, but only you control audience and anonymity settings."
+                : "You are collaborating on this story. Your local autosaves stay on this device, and you can load newer remote revisions when another editor saves first."}
+            </p>
+            <p>{currentStoryCanEdit ? "Editing access is active for this account." : "This account can view but cannot edit this story."}</p>
+          </div>
+          <div className="invite-stack">
+            {currentStoryCollaborators.map((collaborator) => (
+              <span className="story-tag" key={collaborator.id}>
+                @{collaborator.username}
+              </span>
+            ))}
+          </div>
+          {remoteCollaborationUpdate ? (
+            <div className="chapter-controls">
+              <button className="primary-action" onClick={() => void loadLatestCollaborativeVersion()} type="button">
+                LOAD LATEST VERSION
+              </button>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
       {!isStudioEditorOpen ? storyLibraryPanel : null}
 
       {isStudioEditorOpen ? (
@@ -2921,6 +3147,11 @@ export function StudioPage({
                 <p>Open any LIVE chapter to update it, then preview and republish when the changes are ready to replace the current version.</p>
               </div>
             ) : null}
+            {activeChapterEntry?.lastEditedByName && activeChapterEntry?.lastEditedByUsername && activeChapterEntry?.lastEditedAt ? (
+              <span className="section-meta studio-collaboration-meta">
+                {formatStudioEditMeta(activeChapterEntry.lastEditedByName, activeChapterEntry.lastEditedByUsername, activeChapterEntry.lastEditedAt)}
+              </span>
+            ) : null}
           </article>
 
           <article className="studio-panel card" ref={mediaSectionRef}>
@@ -2995,6 +3226,11 @@ export function StudioPage({
                     <IconComponent className="button-icon" name="write" />
                   </button>
                 </div>
+                {activeChapterEntry?.createdByName && activeChapterEntry?.createdByUsername ? (
+                  <span className="section-meta studio-collaboration-meta">
+                    Started by {activeChapterEntry.createdByName} (@{activeChapterEntry.createdByUsername})
+                  </span>
+                ) : null}
               </div>
               <div className="chapter-heading-statuses">
                 <span className="story-tag">{activeChapterIsLive ? "LIVE_CHAPTER" : "DRAFT_CHAPTER"}</span>
@@ -3330,8 +3566,13 @@ export function StudioPage({
                     </label>
                   </div>
                 </label>
-                <div className="timeline-editor-copy">
-                  <label>
+              <div className="timeline-editor-copy">
+                {moment.lastEditedByName && moment.lastEditedByUsername && moment.lastEditedAt ? (
+                  <span className="section-meta studio-collaboration-meta">
+                    {formatStudioEditMeta(moment.lastEditedByName, moment.lastEditedByUsername, moment.lastEditedAt)}
+                  </span>
+                ) : null}
+                <label>
                     Title
                     <input
                       onChange={(event) => updateTimelineEntry(index, "title", event.target.value)}

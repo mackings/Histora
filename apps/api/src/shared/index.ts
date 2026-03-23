@@ -86,6 +86,7 @@ const mediaReferenceSchema = z.string().refine(
 );
 
 export const momentSchema = z.object({
+  id: z.string().min(1).optional(),
   title: plainTextSchema(2, 120, "Timeline title"),
   description: plainTextSchema(10, 1000, "Timeline description"),
   happenedAt: z.string().datetime(),
@@ -94,6 +95,7 @@ export const momentSchema = z.object({
 });
 
 export const chapterSchema = z.object({
+  id: z.string().min(1).optional(),
   title: plainTextSchema(2, 120, "Chapter title"),
   body: richTextSchema,
   type: chapterTypeSchema.default("memory"),
@@ -120,7 +122,8 @@ export const storySchema = z.object({
 });
 
 export const storySaveSchema = storySchema.extend({
-  status: z.enum(["draft", "published"]).default("draft")
+  status: z.enum(["draft", "published"]).default("draft"),
+  expectedRevision: z.number().int().min(0).optional()
 });
 
 const disposableEmailDomains = new Set([

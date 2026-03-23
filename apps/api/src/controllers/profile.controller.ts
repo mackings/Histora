@@ -9,8 +9,10 @@ import { z } from "zod";
 import { profileUpdateSchema } from "../shared/index.js";
 import { asyncHandler } from "../utils/async-handler.js";
 import {
+  acceptContributorInvite,
   createContributorInvite,
   getProfileDashboard,
+  listIncomingContributorInvites,
   listContributorInvites,
   listFollowers,
   listSavedStories,
@@ -108,6 +110,17 @@ export const createInviteController = asyncHandler(async (request, response) => 
     contributorInviteSchema.parse(request.body)
   );
   response.status(201).json({ invite });
+});
+
+export const listIncomingInvitesController = asyncHandler(async (request, response) => {
+  const invites = await listIncomingContributorInvites(request.auth!.userId);
+  response.status(200).json({ invites });
+});
+
+export const acceptInviteController = asyncHandler(async (request, response) => {
+  const params = z.object({ inviteId: z.string().min(1) }).parse(request.params);
+  const invite = await acceptContributorInvite(request.auth!.userId, params.inviteId);
+  response.status(200).json({ invite });
 });
 
 export const revokeInviteController = asyncHandler(async (request, response) => {

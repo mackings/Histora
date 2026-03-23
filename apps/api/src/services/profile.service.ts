@@ -316,12 +316,13 @@ export async function listContributorInvites(userId: string) {
   const invites = await ContributorInviteModel.find({ ownerUserId: userId })
     .sort({ updatedAt: -1 })
     .limit(50)
-    .select("email circle storyTitle status createdAt");
+    .select("email circle storyTitle storyId status createdAt");
 
   return invites.map((invite) => ({
     id: invite.id,
     email: invite.email,
     circle: invite.circle,
+    storyId: String(invite.storyId),
     story: invite.storyTitle,
     status: invite.status[0].toUpperCase() + invite.status.slice(1),
     createdAt: invite.createdAt
@@ -329,17 +330,48 @@ export async function listContributorInvites(userId: string) {
 }
 
 export async function createContributorInvite(userId: string, input: ContributorInviteInput) {
-  const story = await StoryModel.findOne({ _id: input.storyId, authorId: userId }).select("title contentEncrypted");
+  const [owner, recipient, story] = await Promise.all([
+    UserModel.findById(userId).select("fullName username"),
+    UserModel.findOne({ email: input.email.toLowerCase() }).select("_id email"),
+    StoryModel.findOne({ _id: input.storyId, authorId: userId }).select("title slug contentEncrypted collaborators")
+  ]);
+
+  if (!owner) {
+    throw new AppError("User not found", 404);
+  }
+
   if (!story) {
     throw new AppError("Story not found", 404);
   }
 
-  const invite = await ContributorInviteModel.create({
+  if (recipient && String(recipient._id) === userId) {
+    throw new AppError("You cannot invite yourself to collaborate.", 400);
+  }
+
+  if (recipient && story.collaborators.some((collaborator) => String(collaborator.userId) === String(recipient._id))) {
+    throw new AppError("That user is already collaborating on this story.", 400);
+  }
+
+  const existingInvite = await ContributorInviteModel.findOne({
     ownerUserId: userId,
     email: input.email.toLowerCase(),
+    storyId: input.storyId,
+    status: { $in: ["pending", "accepted"] }
+  }).select("_id");
+  if (existingInvite) {
+    throw new AppError("A collaboration invite already exists for this person on this story.", 400);
+  }
+
+  const invite = await ContributorInviteModel.create({
+    ownerUserId: userId,
+    ownerName: owner.fullName,
+    ownerUsername: owner.username,
+    email: input.email.toLowerCase(),
+    recipientUserId: recipient?._id ?? null,
     circle: input.circle,
     storyId: input.storyId,
     storyTitle: resolveStoryTextContent(story).title,
+    storySlug: story.slug,
     status: "pending"
   });
 
@@ -347,6 +379,7 @@ export async function createContributorInvite(userId: string, input: Contributor
     id: invite.id,
     email: invite.email,
     circle: invite.circle,
+    storyId: String(invite.storyId),
     story: invite.storyTitle,
     status: "Pending",
     createdAt: invite.createdAt
@@ -368,9 +401,101 @@ export async function revokeContributorInvite(userId: string, inviteId: string) 
     id: invite.id,
     email: invite.email,
     circle: invite.circle,
+    storyId: String(invite.storyId),
     story: invite.storyTitle,
     status: "Revoked",
     createdAt: invite.createdAt
+  };
+}
+
+export async function listIncomingContributorInvites(userId: string) {
+  const user = await UserModel.findById(userId).select("email");
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  const invites = await ContributorInviteModel.find({
+    email: user.email.toLowerCase(),
+    status: { $in: ["pending", "accepted"] }
+  })
+    .sort({ updatedAt: -1 })
+    .limit(20)
+    .select("ownerName ownerUsername circle storyId storyTitle storySlug status createdAt acceptedAt");
+
+  return invites.map((invite) => ({
+    id: invite.id,
+    ownerName: invite.ownerName,
+    ownerUsername: invite.ownerUsername,
+    circle: invite.circle,
+    storyId: String(invite.storyId),
+    storyTitle: invite.storyTitle,
+    storySlug: invite.storySlug,
+    status: invite.status,
+    createdAt: invite.createdAt,
+    acceptedAt: invite.acceptedAt ?? null
+  }));
+}
+
+export async function acceptContributorInvite(userId: string, inviteId: string) {
+  const user = await UserModel.findById(userId).select("email fullName username");
+  if (!user) {
+    throw new AppError("User not found", 404);
+  }
+
+  const invite = await ContributorInviteModel.findOne({
+    _id: inviteId,
+    email: user.email.toLowerCase(),
+    status: { $in: ["pending", "accepted"] }
+  });
+  if (!invite) {
+    throw new AppError("Collaboration invite not found", 404);
+  }
+
+  const story = await StoryModel.findById(invite.storyId).select("title slug collaborators authorId");
+  if (!story) {
+    throw new AppError("Story not found", 404);
+  }
+
+  if (String(story.authorId) === userId) {
+    throw new AppError("You already own this story.", 400);
+  }
+
+  if (!story.collaborators.some((collaborator) => String(collaborator.userId) === userId)) {
+    story.collaborators = [
+      ...story.collaborators,
+      {
+        userId: userId as never,
+        fullName: user.fullName,
+        username: user.username,
+        invitedByUserId: invite.ownerUserId,
+        joinedAt: new Date()
+      }
+    ];
+    await story.save();
+  }
+
+  invite.recipientUserId = userId as never;
+  invite.status = "accepted";
+  invite.acceptedAt = invite.acceptedAt ?? new Date();
+  await invite.save();
+
+  broadcastAppEvent(`user:${invite.ownerUserId.toString()}`, {
+    kind: "notification.generic",
+    title: "Collaboration accepted",
+    body: `${user.fullName} (@${user.username}) accepted your collaboration invite for "${resolveStoryTextContent(story).title}".`
+  });
+
+  return {
+    id: invite.id,
+    ownerName: invite.ownerName,
+    ownerUsername: invite.ownerUsername,
+    circle: invite.circle,
+    storyId: String(invite.storyId),
+    storyTitle: invite.storyTitle,
+    storySlug: invite.storySlug,
+    status: invite.status,
+    createdAt: invite.createdAt,
+    acceptedAt: invite.acceptedAt ?? null
   };
 }
 

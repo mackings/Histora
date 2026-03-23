@@ -61,6 +61,19 @@ export type ApiAnonymousMessage = {
   createdAt: string;
 };
 
+export type ApiCollaborationInvite = {
+  id: string;
+  ownerName: string;
+  ownerUsername: string;
+  circle: "family" | "friend";
+  storyId: string;
+  storyTitle: string;
+  storySlug: string;
+  status: "pending" | "accepted";
+  createdAt: string;
+  acceptedAt?: string | null;
+};
+
 export type ApiStatus = {
   id: string;
   authorName: string;
@@ -90,6 +103,19 @@ export type ApiStory = {
   anonymous: boolean;
   authorName: string;
   authorUsername: string;
+  isOwner?: boolean;
+  canEdit?: boolean;
+  collaborative?: boolean;
+  collaborationRevision?: number;
+  collaborators?: Array<{
+    id: string;
+    fullName: string;
+    username: string;
+    joinedAt: string;
+  }>;
+  lastEditedByName?: string | null;
+  lastEditedByUsername?: string | null;
+  lastEditedAt?: string | null;
   authorVerified: boolean;
   tags: string[];
   links: Array<{
@@ -107,18 +133,32 @@ export type ApiStory = {
   bookmarked: boolean;
   following: boolean;
   chapters: Array<{
+    id?: string;
     title: string;
     body: string;
     type: "memory" | "reflection" | "milestone" | "anonymous";
     order: number;
+    createdByName?: string | null;
+    createdByUsername?: string | null;
+    createdAt?: string | null;
+    lastEditedByName?: string | null;
+    lastEditedByUsername?: string | null;
+    lastEditedAt?: string | null;
     imageUrls: string[];
     imageKeys?: string[];
     voiceNoteUrl?: string | null;
     voiceNoteKey?: string | null;
     moments: Array<{
+      id?: string;
       title: string;
       description: string;
       happenedAt: string;
+      createdByName?: string | null;
+      createdByUsername?: string | null;
+      createdAt?: string | null;
+      lastEditedByName?: string | null;
+      lastEditedByUsername?: string | null;
+      lastEditedAt?: string | null;
       imageUrls: string[];
       imageKeys?: string[];
       voiceNoteUrl?: string | null;

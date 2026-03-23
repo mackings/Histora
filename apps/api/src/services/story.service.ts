@@ -1,4 +1,5 @@
 import type { StorySaveInput } from "../shared/index.js";
+import crypto from "crypto";
 
 import { AppError } from "../utils/app-error.js";
 import { StoryModel, type StoryDocument } from "../models/story.model.js";
@@ -22,6 +23,59 @@ type StoryAuthorState = {
   authorVerified: boolean;
   following: boolean;
 };
+
+type StoryEditorIdentity = {
+  userId: string;
+  fullName: string;
+  username: string;
+};
+
+const buildStoryPartId = (prefix: "chapter" | "moment") =>
+  `${prefix}-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+
+const isStoryCollaborator = (story: Pick<StoryDocument, "collaborators">, userId?: string) =>
+  Boolean(userId && story.collaborators.some((collaborator) => String(collaborator.userId) === userId));
+
+const isStoryEditor = (story: Pick<StoryDocument, "authorId" | "collaborators">, userId?: string) =>
+  Boolean(userId && (String(story.authorId) === userId || isStoryCollaborator(story, userId)));
+
+const createAuditStamp = (actor: StoryEditorIdentity, occurredAt: Date) => ({
+  createdByUserId: actor.userId as never,
+  createdByName: actor.fullName,
+  createdByUsername: actor.username,
+  createdAt: occurredAt,
+  lastEditedByUserId: actor.userId as never,
+  lastEditedByName: actor.fullName,
+  lastEditedByUsername: actor.username,
+  lastEditedAt: occurredAt
+});
+
+const applyEditAuditStamp = (
+  existing:
+    | {
+        createdByUserId?: StoryDocument["chapters"][number]["createdByUserId"];
+        createdByName?: string | null;
+        createdByUsername?: string | null;
+        createdAt?: Date | null;
+        lastEditedByUserId?: StoryDocument["chapters"][number]["lastEditedByUserId"];
+        lastEditedByName?: string | null;
+        lastEditedByUsername?: string | null;
+        lastEditedAt?: Date | null;
+      }
+    | undefined,
+  actor: StoryEditorIdentity,
+  occurredAt: Date,
+  changed: boolean
+) => ({
+  createdByUserId: existing?.createdByUserId ?? (actor.userId as never),
+  createdByName: existing?.createdByName ?? actor.fullName,
+  createdByUsername: existing?.createdByUsername ?? actor.username,
+  createdAt: existing?.createdAt ?? occurredAt,
+  lastEditedByUserId: changed ? (actor.userId as never) : existing?.lastEditedByUserId ?? (actor.userId as never),
+  lastEditedByName: changed ? actor.fullName : existing?.lastEditedByName ?? actor.fullName,
+  lastEditedByUsername: changed ? actor.username : existing?.lastEditedByUsername ?? actor.username,
+  lastEditedAt: changed ? occurredAt : existing?.lastEditedAt ?? occurredAt
+});
 
 function enforcePremiumLimits(input: StorySaveInput, tier: "free" | "premium") {
   const totalImages = input.chapters.reduce<number>((sum, chapter) => sum + chapter.imageUrls.length, 0);
@@ -60,7 +114,89 @@ async function buildUniqueStorySlug(title: string, storyId?: string) {
   }
 }
 
-async function serializeStory(story: StoryDocument | null) {
+function normalizeCollaborativeChapters(
+  input: StorySaveInput,
+  existingStory: StoryDocument | null,
+  actor: StoryEditorIdentity,
+  occurredAt: Date
+) {
+  return input.chapters.map((chapter, chapterIndex) => {
+    const existingChapter =
+      existingStory?.chapters.find((entry) => entry.id === chapter.id) ??
+      existingStory?.chapters[chapterIndex];
+    const normalizedChapterId = chapter.id || existingChapter?.id || buildStoryPartId("chapter");
+    const normalizedMoments = chapter.moments.map((moment, momentIndex) => {
+      const existingMoment =
+        existingChapter?.moments.find((entry) => entry.id === moment.id) ??
+        existingChapter?.moments[momentIndex];
+      const normalizedMomentId = moment.id || existingMoment?.id || buildStoryPartId("moment");
+      const momentChanged =
+        !existingMoment ||
+        existingMoment.title !== moment.title ||
+        existingMoment.description !== moment.description ||
+        existingMoment.happenedAt.toISOString() !== moment.happenedAt ||
+        JSON.stringify(existingMoment.imageUrls) !== JSON.stringify(moment.imageUrls) ||
+        (existingMoment.voiceNoteUrl ?? null) !== (moment.voiceNoteUrl ?? null);
+
+      return {
+        ...moment,
+        id: normalizedMomentId,
+        ...(!existingMoment
+          ? createAuditStamp(actor, occurredAt)
+          : applyEditAuditStamp(existingMoment, actor, occurredAt, momentChanged))
+      };
+    });
+
+    const chapterChanged =
+      !existingChapter ||
+      existingChapter.title !== chapter.title ||
+      existingChapter.body !== chapter.body ||
+      existingChapter.type !== chapter.type ||
+      existingChapter.order !== chapter.order ||
+      JSON.stringify(existingChapter.imageUrls) !== JSON.stringify(chapter.imageUrls) ||
+      (existingChapter.voiceNoteUrl ?? null) !== (chapter.voiceNoteUrl ?? null) ||
+      JSON.stringify(
+        existingChapter.moments.map((moment) => ({
+          id: moment.id,
+          title: moment.title,
+          description: moment.description,
+          happenedAt: moment.happenedAt.toISOString(),
+          imageUrls: moment.imageUrls,
+          voiceNoteUrl: moment.voiceNoteUrl ?? null
+        }))
+      ) !==
+        JSON.stringify(
+          normalizedMoments.map((moment) => ({
+            id: moment.id,
+            title: moment.title,
+            description: moment.description,
+            happenedAt: moment.happenedAt,
+            imageUrls: moment.imageUrls,
+            voiceNoteUrl: moment.voiceNoteUrl ?? null
+          }))
+        );
+
+    return {
+      ...chapter,
+      id: normalizedChapterId,
+      moments: normalizedMoments,
+      ...(!existingChapter
+        ? createAuditStamp(actor, occurredAt)
+        : applyEditAuditStamp(existingChapter, actor, occurredAt, chapterChanged))
+    };
+  });
+}
+
+async function findEditableStory(storyId: string, userId: string) {
+  const story = await StoryModel.findById(storyId);
+  if (!story || !isStoryEditor(story, userId)) {
+    throw new AppError("Story not found", 404);
+  }
+
+  return story;
+}
+
+async function serializeStory(story: StoryDocument | null, viewerId?: string) {
   if (!story) {
     throw new AppError("Story not found", 404);
   }
@@ -69,19 +205,33 @@ async function serializeStory(story: StoryDocument | null) {
   const coverImageUrl = await resolveStoredObjectUrl(story.coverImageUrl ?? null);
   const chapters = await Promise.all(
     story.chapters.map(async (chapter, chapterIndex) => ({
+      id: chapter.id,
       title: storyText.chapters[chapterIndex]?.title ?? chapter.title,
       body: storyText.chapters[chapterIndex]?.body ?? chapter.body,
       type: chapter.type,
       order: chapter.order,
+      createdByName: chapter.createdByName ?? null,
+      createdByUsername: chapter.createdByUsername ?? null,
+      createdAt: chapter.createdAt ?? null,
+      lastEditedByName: chapter.lastEditedByName ?? null,
+      lastEditedByUsername: chapter.lastEditedByUsername ?? null,
+      lastEditedAt: chapter.lastEditedAt ?? null,
       imageUrls: (await Promise.all(chapter.imageUrls.map((imageUrl) => resolveStoredObjectUrl(imageUrl)))).filter(Boolean) as string[],
       imageKeys: chapter.imageUrls,
       voiceNoteUrl: await resolveStoredObjectUrl(chapter.voiceNoteUrl ?? null),
       voiceNoteKey: chapter.voiceNoteUrl ?? null,
       moments: await Promise.all(
         chapter.moments.map(async (moment, momentIndex) => ({
+          id: moment.id,
           title: storyText.chapters[chapterIndex]?.moments[momentIndex]?.title ?? moment.title,
           description: storyText.chapters[chapterIndex]?.moments[momentIndex]?.description ?? moment.description,
           happenedAt: moment.happenedAt,
+          createdByName: moment.createdByName ?? null,
+          createdByUsername: moment.createdByUsername ?? null,
+          createdAt: moment.createdAt ?? null,
+          lastEditedByName: moment.lastEditedByName ?? null,
+          lastEditedByUsername: moment.lastEditedByUsername ?? null,
+          lastEditedAt: moment.lastEditedAt ?? null,
           imageUrls: (await Promise.all(moment.imageUrls.map((imageUrl) => resolveStoredObjectUrl(imageUrl)))).filter(Boolean) as string[],
           imageKeys: moment.imageUrls,
           voiceNoteUrl: await resolveStoredObjectUrl(moment.voiceNoteUrl ?? null),
@@ -103,6 +253,19 @@ async function serializeStory(story: StoryDocument | null) {
     anonymous: story.anonymous,
     authorName: story.authorName,
     authorUsername: story.authorUsername,
+    isOwner: Boolean(viewerId && String(story.authorId) === viewerId),
+    canEdit: isStoryEditor(story, viewerId),
+    collaborators: story.collaborators.map((collaborator) => ({
+      id: String(collaborator.userId),
+      fullName: collaborator.fullName,
+      username: collaborator.username,
+      joinedAt: collaborator.joinedAt
+    })),
+    collaborationRevision: story.collaborationRevision ?? 0,
+    collaborative: story.collaborators.length > 0,
+    lastEditedByName: story.lastEditedByName ?? null,
+    lastEditedByUsername: story.lastEditedByUsername ?? null,
+    lastEditedAt: story.lastEditedAt ?? null,
     authorVerified: false,
     tags: storyText.tags,
     links: storyText.links.map((link) => ({
@@ -187,14 +350,14 @@ type PublicFeedStory = SerializedStory & {
 
 export async function assertStoryViewerAccess(storyId: string, viewerId?: string) {
   const story = await StoryModel.findById(storyId).select(
-    "authorId slug status visibility allowedViewerIds anonymous title contentEncrypted sharesCount"
+    "authorId slug status visibility allowedViewerIds anonymous title contentEncrypted sharesCount collaborators"
   );
 
   if (!story || story.status !== "published") {
     throw new AppError("Story not found", 404);
   }
 
-  if (viewerId && String(story.authorId) === viewerId) {
+  if (isStoryEditor(story, viewerId)) {
     return story;
   }
 
@@ -411,47 +574,105 @@ export async function saveStory(authorId: string, input: StorySaveInput, storyId
 
   enforcePremiumLimits(input, user.subscriptionTier);
   const slug = await buildUniqueStorySlug(input.title, storyId);
-  const storedStoryContent = buildStoredStoryContent(input);
+  const actor: StoryEditorIdentity = {
+    userId: authorId,
+    fullName: user.fullName,
+    username: user.username
+  };
+  const occurredAt = new Date();
+  const existingStory = storyId ? await findEditableStory(storyId, authorId) : null;
+
+  if (existingStory && typeof input.expectedRevision === "number" && input.expectedRevision !== (existingStory.collaborationRevision ?? 0)) {
+    throw new AppError(
+      "A newer collaborative version is available. Load the latest version before saving again.",
+      409,
+      "STORY_REVISION_CONFLICT",
+      { latestRevision: existingStory.collaborationRevision ?? 0 }
+    );
+  }
+
+  const normalizedInput: StorySaveInput = {
+    ...input,
+    visibility: existingStory && String(existingStory.authorId) !== authorId ? existingStory.visibility : input.visibility,
+    anonymous: existingStory && String(existingStory.authorId) !== authorId ? existingStory.anonymous : input.anonymous,
+    allowedViewerIds:
+      existingStory && String(existingStory.authorId) !== authorId
+        ? existingStory.allowedViewerIds.map((viewerId) => String(viewerId))
+        : input.allowedViewerIds,
+    chapters: normalizeCollaborativeChapters(input, existingStory, actor, occurredAt)
+  };
+  const storedStoryContent = buildStoredStoryContent(normalizedInput);
 
   if (!storyId) {
     const story = await StoryModel.create({
-      ...input,
+      ...normalizedInput,
       ...storedStoryContent,
       slug,
       authorId,
       authorName: input.anonymous ? "Anonymous" : user.fullName,
-      authorUsername: input.anonymous ? "anonymous" : user.username
+      authorUsername: input.anonymous ? "anonymous" : user.username,
+      collaborators: [],
+      collaborationRevision: 1,
+      lastEditedByUserId: authorId,
+      lastEditedByName: user.fullName,
+      lastEditedByUsername: user.username,
+      lastEditedAt: occurredAt
     });
     await deleteCache("stories:feed");
     await deleteCacheByPrefix(`stories:mine:${authorId}`);
-    return await serializeStory(story);
+    return await serializeStory(story, authorId);
   }
 
-  const story = await StoryModel.findOne({ _id: storyId, authorId });
-  if (!story) {
+  if (!existingStory) {
     throw new AppError("Story not found", 404);
   }
+
+  const story = existingStory;
 
   story.title = storedStoryContent.title;
   story.summary = storedStoryContent.summary;
   story.contentEncrypted = storedStoryContent.contentEncrypted;
-  story.coverImageUrl = input.coverImageUrl;
-  story.visibility = input.visibility;
-  story.anonymous = input.anonymous;
-  story.allowedViewerIds = input.allowedViewerIds.map((viewerId) => viewerId as never);
+  story.coverImageUrl = normalizedInput.coverImageUrl;
+  story.visibility = normalizedInput.visibility;
+  story.anonymous = normalizedInput.anonymous;
+  story.allowedViewerIds = normalizedInput.allowedViewerIds.map((viewerId) => viewerId as never);
   story.tags = storedStoryContent.tags;
   story.links = storedStoryContent.links as never;
   story.chapters = storedStoryContent.chapters as never;
   story.status = input.status;
   story.slug = slug;
-  story.authorName = input.anonymous ? "Anonymous" : user.fullName;
-  story.authorUsername = input.anonymous ? "anonymous" : user.username;
+  if (String(story.authorId) === authorId) {
+    story.authorName = normalizedInput.anonymous ? "Anonymous" : user.fullName;
+    story.authorUsername = normalizedInput.anonymous ? "anonymous" : user.username;
+  }
+  story.collaborationRevision = (story.collaborationRevision ?? 0) + 1;
+  story.lastEditedByUserId = authorId as never;
+  story.lastEditedByName = user.fullName;
+  story.lastEditedByUsername = user.username;
+  story.lastEditedAt = occurredAt;
   await story.save();
   await deleteCache("stories:feed");
-  await deleteCacheByPrefix(`stories:mine:${authorId}`);
+  await deleteCacheByPrefix(`stories:mine:${story.authorId.toString()}`);
   await deleteCache(`stories:public:${story.slug}`);
+  const participantIds = new Set([
+    story.authorId.toString(),
+    ...story.collaborators.map((collaborator) => String(collaborator.userId))
+  ]);
 
-  return await serializeStory(story);
+  for (const participantId of participantIds) {
+    broadcastAppEvent(`user:${participantId}`, {
+      kind: "story.collaboration.updated",
+      storyId: story.id,
+      title: resolveStoryTextContent(story).title,
+      revision: story.collaborationRevision,
+      status: story.status,
+      updatedAt: story.updatedAt,
+      updatedByName: user.fullName,
+      updatedByUsername: user.username
+    });
+  }
+
+  return await serializeStory(story, authorId);
 }
 
 export async function getMyStories(authorId: string) {
@@ -464,17 +685,30 @@ export async function getMyStories(authorId: string) {
   const stories = await StoryModel.find({ authorId })
     .sort({ updatedAt: -1 })
     .select(
-      "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+      "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorId authorName authorUsername collaborators collaborationRevision lastEditedByName lastEditedByUsername lastEditedAt tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
     );
 
-  const payload = await Promise.all(stories.map((story) => serializeStory(story)));
+  const payload = await Promise.all(stories.map((story) => serializeStory(story, authorId)));
   await writeJsonCache(cacheKey, payload, 30);
   return payload;
 }
 
 export async function getMyStory(authorId: string, storyId: string) {
-  const story = await StoryModel.findOne({ _id: storyId, authorId });
-  return await serializeStory(story);
+  const story = await findEditableStory(storyId, authorId);
+  return await serializeStory(story, authorId);
+}
+
+export async function getCollaborativeStories(userId: string) {
+  const stories = await StoryModel.find({
+    authorId: { $ne: userId },
+    "collaborators.userId": userId
+  })
+    .sort({ updatedAt: -1 })
+    .select(
+      "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorId authorName authorUsername collaborators collaborationRevision lastEditedByName lastEditedByUsername lastEditedAt tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+    );
+
+  return Promise.all(stories.map((story) => serializeStory(story, userId)));
 }
 
 export async function getStoryBySlug(shareSlug: string, viewerId?: string) {
@@ -492,7 +726,7 @@ export async function getStoryBySlug(shareSlug: string, viewerId?: string) {
   const viewerCanAccessNonPublicStory =
     Boolean(viewerId) &&
     (
-      story.authorId.toString() === viewerId ||
+      isStoryEditor(story, viewerId) ||
       (story.visibility === "selected" &&
         story.allowedViewerIds.some((allowedViewerId) => String(allowedViewerId) === viewerId))
     );
@@ -506,7 +740,7 @@ export async function getStoryBySlug(shareSlug: string, viewerId?: string) {
     await story.save();
   }
 
-  const payload = await serializeStory(story);
+  const payload = await serializeStory(story, viewerId);
   if (story.visibility === "public") {
     await writeJsonCache(`stories:public:${shareSlug}`, payload, 30);
   }
@@ -524,7 +758,7 @@ async function includeOwnPublishedStoriesInFeed(feedStories: PublicFeedStory[], 
   const ownStories = await StoryModel.find({ authorId: viewerId, status: "published" })
     .sort({ createdAt: -1 })
     .select(
-      "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+      "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorId authorName authorUsername collaborators collaborationRevision lastEditedByName lastEditedByUsername lastEditedAt tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
     );
 
   const publicStoryIdSet = new Set(feedStories.map((story) => story.id));
@@ -543,7 +777,7 @@ async function includeOwnPublishedStoriesInFeed(feedStories: PublicFeedStory[], 
   const ownCommentMap = new Map(ownStoryCommentCounts);
   const ownPayload = await Promise.all(
     ownStoriesMissingFromPublicFeed.map(async (story) => ({
-      ...(await serializeStory(story)),
+      ...(await serializeStory(story, viewerId)),
       commentCount: ownCommentMap.get(story.id) ?? 0,
       chapterCount: story.chapters.length
     }))
@@ -568,7 +802,7 @@ export async function getPublicFeed(viewerId?: string) {
     .sort({ createdAt: -1 })
     .limit(20)
     .select(
-      "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+      "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorId authorName authorUsername collaborators collaborationRevision lastEditedByName lastEditedByUsername lastEditedAt tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
     );
 
   const chapterCommentCounts = await Promise.all(
@@ -584,7 +818,7 @@ export async function getPublicFeed(viewerId?: string) {
 
   const commentMap = new Map(chapterCommentCounts);
   const payload = await Promise.all(stories.map(async (story) => ({
-    ...(await serializeStory(story)),
+    ...(await serializeStory(story, viewerId)),
     commentCount: commentMap.get(story.id) ?? 0,
     chapterCount: story.chapters.length
   })));
@@ -730,7 +964,7 @@ export async function listBookmarkedStories(userId: string) {
 
   const storyIds = bookmarks.map((bookmark) => bookmark.storyId);
   const stories = await StoryModel.find({ _id: { $in: storyIds } }).select(
-    "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorName authorUsername tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
+    "slug status title summary contentEncrypted coverImageUrl visibility anonymous authorId authorName authorUsername collaborators collaborationRevision lastEditedByName lastEditedByUsername lastEditedAt tags links readCount reactionsCount likesCount bookmarksCount sharesCount commentsCount chapters createdAt updatedAt"
   );
 
   const storiesById = new Map(stories.map((story) => [story.id, story]));
@@ -738,5 +972,5 @@ export async function listBookmarkedStories(userId: string) {
     .map((storyId) => storiesById.get(String(storyId)))
     .filter(Boolean);
 
-  return Promise.all(orderedStories.map((story) => serializeStory(story ?? null)));
+  return Promise.all(orderedStories.map((story) => serializeStory(story ?? null, userId)));
 }

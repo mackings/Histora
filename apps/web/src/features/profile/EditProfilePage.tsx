@@ -348,8 +348,8 @@ export function EditProfilePage({
             <span>Controls name, username, bio, and location shown to readers.</span>
           </div>
           <div className="profile-editor-note">
-            <strong>Contributor invites</strong>
-            <span>Invite family or friends by email and choose the exact story they can contribute to.</span>
+            <strong>Story collaboration</strong>
+            <span>Invite family or friends by email and choose the exact story they can collaborate on.</span>
           </div>
         </div>
       </section>
@@ -426,8 +426,8 @@ export function EditProfilePage({
             <div className="profile-panel-body">
               <div className="profile-section-copy">
                 <SectionLabelComponent>CONTRIBUTOR_INVITES</SectionLabelComponent>
-                <h2>Invite family or friends to contribute</h2>
-                <span>Choose a story, send the invite by email, and manage who can contribute.</span>
+                <h2>Invite family or friends to collaborate</h2>
+                <span>Choose a story, send the invite by email, and manage who can collaborate.</span>
               </div>
               <div className="profile-form-grid profile-invite-grid">
                 <label>
@@ -442,7 +442,7 @@ export function EditProfilePage({
                   </select>
                 </label>
                 <label>
-                  Story to contribute to
+                  Story to collaborate on
                   <select onChange={(event) => setInviteStoryId(event.target.value)} value={inviteStoryId}>
                     {stories.map((story) => (
                       <option key={story.id} value={story.id}>
@@ -474,8 +474,8 @@ export function EditProfilePage({
                   ))
                 ) : (
                   <div className="profile-setting-row">
-                    <strong>No contributor invites</strong>
-                    <span>Send an invite to let family or friends contribute to a story.</span>
+                    <strong>No collaboration invites</strong>
+                    <span>Send an invite to let family or friends collaborate on a story.</span>
                   </div>
                 )}
               </div>

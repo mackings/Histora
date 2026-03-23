@@ -1,10 +1,12 @@
 import { Router } from "express";
 
 import {
+  acceptInviteController,
   createInviteController,
   listDevicesController,
   listFollowersController,
   listFollowingController,
+  listIncomingInvitesController,
   listInvitesController,
   pushPublicKeyController,
   requestVerificationController,
@@ -36,7 +38,9 @@ profileRouter.get("/push/public-key", requireAuth, pushPublicKeyController);
 profileRouter.post("/push/subscriptions", requireAuth, savePushSubscriptionController);
 profileRouter.delete("/push/subscriptions", requireAuth, revokePushSubscriptionController);
 profileRouter.get("/invites", requireAuth, listInvitesController);
+profileRouter.get("/invites/incoming", requireAuth, listIncomingInvitesController);
 profileRouter.post("/invites", requireAuth, createInviteController);
+profileRouter.post("/invites/:inviteId/accept", requireAuth, acceptInviteController);
 profileRouter.delete("/invites/:inviteId", requireAuth, revokeInviteController);
 profileRouter.get("/saved", requireAuth, savedStoriesController);
 profileRouter.post("/verification/request", requireAuth, requestVerificationController);

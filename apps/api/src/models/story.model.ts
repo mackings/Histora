@@ -13,6 +13,18 @@ export interface StoryDocument extends mongoose.Document {
   visibility: "private" | "public" | "selected";
   anonymous: boolean;
   allowedViewerIds: mongoose.Types.ObjectId[];
+  collaborators: Array<{
+    userId: mongoose.Types.ObjectId;
+    fullName: string;
+    username: string;
+    invitedByUserId: mongoose.Types.ObjectId;
+    joinedAt: Date;
+  }>;
+  collaborationRevision: number;
+  lastEditedByUserId?: mongoose.Types.ObjectId | null;
+  lastEditedByName?: string | null;
+  lastEditedByUsername?: string | null;
+  lastEditedAt?: Date | null;
   tags: string[];
   links: Array<{
     label: string;
@@ -20,16 +32,34 @@ export interface StoryDocument extends mongoose.Document {
     kind: "website" | "social" | "drive" | "photos";
   }>;
   chapters: Array<{
+    id: string;
     title: string;
     body: string;
     type: "memory" | "reflection" | "milestone" | "anonymous";
     order: number;
+    createdByUserId?: mongoose.Types.ObjectId | null;
+    createdByName?: string | null;
+    createdByUsername?: string | null;
+    createdAt?: Date | null;
+    lastEditedByUserId?: mongoose.Types.ObjectId | null;
+    lastEditedByName?: string | null;
+    lastEditedByUsername?: string | null;
+    lastEditedAt?: Date | null;
     imageUrls: string[];
     voiceNoteUrl?: string;
     moments: Array<{
+      id: string;
       title: string;
       description: string;
       happenedAt: Date;
+      createdByUserId?: mongoose.Types.ObjectId | null;
+      createdByName?: string | null;
+      createdByUsername?: string | null;
+      createdAt?: Date | null;
+      lastEditedByUserId?: mongoose.Types.ObjectId | null;
+      lastEditedByName?: string | null;
+      lastEditedByUsername?: string | null;
+      lastEditedAt?: Date | null;
       imageUrls: string[];
       voiceNoteUrl?: string;
     }>;
@@ -46,9 +76,18 @@ export interface StoryDocument extends mongoose.Document {
 
 const momentSchema = new Schema(
   {
+    id: { type: String, required: true },
     title: { type: String, required: true, trim: true },
     description: { type: String, required: true, trim: true },
     happenedAt: { type: Date, required: true },
+    createdByUserId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    createdByName: { type: String, default: null },
+    createdByUsername: { type: String, default: null },
+    createdAt: { type: Date, default: null },
+    lastEditedByUserId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    lastEditedByName: { type: String, default: null },
+    lastEditedByUsername: { type: String, default: null },
+    lastEditedAt: { type: Date, default: null },
     imageUrls: [{ type: String }],
     voiceNoteUrl: { type: String }
   },
@@ -57,10 +96,19 @@ const momentSchema = new Schema(
 
 const chapterSchema = new Schema(
   {
+    id: { type: String, required: true },
     title: { type: String, required: true, trim: true },
     body: { type: String, required: true, trim: true },
     type: { type: String, enum: ["memory", "reflection", "milestone", "anonymous"], default: "memory" },
     order: { type: Number, required: true },
+    createdByUserId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    createdByName: { type: String, default: null },
+    createdByUsername: { type: String, default: null },
+    createdAt: { type: Date, default: null },
+    lastEditedByUserId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    lastEditedByName: { type: String, default: null },
+    lastEditedByUsername: { type: String, default: null },
+    lastEditedAt: { type: Date, default: null },
     imageUrls: [{ type: String }],
     voiceNoteUrl: { type: String },
     moments: [momentSchema]
@@ -91,6 +139,23 @@ const storySchema = new Schema(
     visibility: { type: String, enum: ["private", "public", "selected"], default: "private", index: true },
     anonymous: { type: Boolean, default: false, index: true },
     allowedViewerIds: [{ type: Schema.Types.ObjectId, ref: "User" }],
+    collaborators: [
+      new Schema(
+        {
+          userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+          fullName: { type: String, required: true, trim: true },
+          username: { type: String, required: true, trim: true, lowercase: true },
+          invitedByUserId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+          joinedAt: { type: Date, required: true, default: () => new Date() }
+        },
+        { _id: false }
+      )
+    ],
+    collaborationRevision: { type: Number, default: 0 },
+    lastEditedByUserId: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    lastEditedByName: { type: String, default: null },
+    lastEditedByUsername: { type: String, default: null },
+    lastEditedAt: { type: Date, default: null },
     tags: [{ type: String }],
     links: [storyLinkSchema],
     chapters: [chapterSchema],

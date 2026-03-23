@@ -8,11 +8,18 @@ export type StudioMediaAttachment = {
 };
 
 export type StudioTimelineEntry = {
+  id?: string;
   year: string;
   month: string;
   day: string;
   title: string;
   body: string;
+  createdByName?: string | null;
+  createdByUsername?: string | null;
+  createdAt?: string | null;
+  lastEditedByName?: string | null;
+  lastEditedByUsername?: string | null;
+  lastEditedAt?: string | null;
 };
 
 export type StudioExternalLink = {
@@ -30,12 +37,19 @@ export const createEmptyTimelineEntry = (): StudioTimelineEntry => ({
 });
 
 export type StudioChapter = {
+  id?: string;
   title: string;
   type: string;
   words: number;
   status: string;
   moments: number;
   body: string;
+  createdByName?: string | null;
+  createdByUsername?: string | null;
+  createdAt?: string | null;
+  lastEditedByName?: string | null;
+  lastEditedByUsername?: string | null;
+  lastEditedAt?: string | null;
   imageAttachments: StudioMediaAttachment[];
   voiceNotes: StudioMediaAttachment[];
   timelineEntries: StudioTimelineEntry[];
@@ -87,7 +101,9 @@ export type StudioPublishPayload = {
     tags: string[];
     links: StudioExternalLink[];
     status: "draft" | "published";
+    expectedRevision?: number;
     chapters: Array<{
+      id?: string;
       title: string;
       body: string;
       type: "memory" | "reflection" | "milestone" | "anonymous";
@@ -95,6 +111,7 @@ export type StudioPublishPayload = {
       imageUrls: string[];
       voiceNoteUrl?: string;
       moments: Array<{
+        id?: string;
         title: string;
         description: string;
         happenedAt: string;

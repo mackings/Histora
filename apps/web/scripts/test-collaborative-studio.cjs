@@ -1,0 +1,326 @@
+const { chromium } = require("playwright");
+const crypto = require("crypto");
+const path = require("path");
+
+const dotenv = require(path.resolve(__dirname, "../../../node_modules/dotenv"));
+const jwt = require(path.resolve(__dirname, "../../../node_modules/jsonwebtoken"));
+const mongoose = require(path.resolve(__dirname, "../../api/node_modules/mongoose"));
+
+const webBaseUrl = process.env.HISTORA_WEB_URL || "http://127.0.0.1:3000";
+const apiBaseUrl = process.env.HISTORA_API_URL || "http://127.0.0.1:4000/api";
+
+dotenv.config({ path: path.resolve(__dirname, "../../api/.env") });
+
+const ownerUser = {
+  email: "studioe2e@gmail.com",
+  username: "studioe2e",
+  displayName: "Studio E2E",
+  deviceIdentity: {
+    deviceId: "test-device-000000000001",
+    deviceName: "Playwright Test Device"
+  }
+};
+
+const collaboratorUser = {
+  email: "feedauthor@gmail.com",
+  username: "feedauthor",
+  displayName: "Feed Author",
+  deviceIdentity: {
+    deviceId: "test-device-000000000002",
+    deviceName: "Playwright Feed Author Device"
+  }
+};
+
+async function loadSession(email) {
+  if (!process.env.MONGODB_URI || !process.env.JWT_SECRET) {
+    throw new Error("Missing MONGODB_URI or JWT_SECRET for collaborative studio regression.");
+  }
+
+  if (mongoose.connection.readyState === 0) {
+    await mongoose.connect(process.env.MONGODB_URI);
+  }
+
+  const user = await mongoose.connection.collection("users").findOne(
+    { email },
+    {
+      projection: {
+        _id: 1,
+        fullName: 1,
+        username: 1,
+        email: 1,
+        subscriptionTier: 1
+      }
+    }
+  );
+
+  if (!user) {
+    throw new Error(`Seeded user not found for ${email}.`);
+  }
+
+  const session = await mongoose.connection.collection("sessions").insertOne({
+    userId: user._id,
+    tokenHash: crypto.randomUUID(),
+    family: crypto.randomUUID(),
+    parentSessionId: null,
+    deviceKeyHash: null,
+    deviceLabel: null,
+    userAgent: "Playwright",
+    ipAddress: "127.0.0.1",
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    lastSeenAt: new Date(),
+    revokedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date()
+  });
+
+  return {
+    accessToken: jwt.sign({ sub: String(user._id), sid: String(session.insertedId), typ: "access" }, process.env.JWT_SECRET, {
+      expiresIn: process.env.ACCESS_TOKEN_TTL || "15m"
+    }),
+    user: {
+      id: String(user._id),
+      fullName: user.fullName,
+      username: user.username,
+      email: user.email,
+      subscriptionTier: user.subscriptionTier || "free"
+    }
+  };
+}
+
+async function bootstrapSession(page, user, session, nextPath) {
+  await page.goto(`${webBaseUrl}/signin`, { waitUntil: "networkidle" });
+  await page.evaluate(
+    ({ identity, authSession, pathName }) => {
+      window.localStorage.setItem("histora-device-identity-v1", JSON.stringify(identity));
+      window.dispatchEvent(new CustomEvent("histora-auth-session", { detail: authSession }));
+      window.history.pushState({}, "", pathName);
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    },
+    { identity: user.deviceIdentity, authSession: session, pathName: nextPath }
+  );
+  await page.waitForURL(new RegExp(path.basename(nextPath) ? nextPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "/"), {
+    timeout: 10000
+  }).catch(() => undefined);
+  await page.waitForLoadState("networkidle");
+}
+
+async function apiRequest(pathname, accessToken, options = {}) {
+  const response = await fetch(`${apiBaseUrl}${pathname}`, {
+    method: options.method || "GET",
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      Authorization: `Bearer ${accessToken}`,
+      "X-Requested-With": "XMLHttpRequest"
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(`API ${pathname} failed ${response.status}: ${JSON.stringify(payload)}`);
+  }
+
+  return payload;
+}
+
+async function waitForEditor(page) {
+  await page.locator(".editor-surface").waitFor({ state: "visible", timeout: 15000 });
+  await page.locator(".studio-collaboration-panel").waitFor({ state: "visible", timeout: 15000 });
+}
+
+async function run() {
+  const [ownerSession, collaboratorSession] = await Promise.all([
+    loadSession(ownerUser.email),
+    loadSession(collaboratorUser.email)
+  ]);
+
+  const storyTitle = `Playwright collaborative story ${Date.now()}`;
+  const initialBody =
+    "<p>This collaborative story exists to verify invite acceptance, shared studio loading, safe version updates, and collaborator security controls.</p>";
+  const updatedBodyText = "Owner appended this sentence in collaborative studio to prove the latest version can be loaded safely.";
+
+  const createdStory = await apiRequest("/stories", ownerSession.accessToken, {
+    method: "POST",
+    body: {
+      title: storyTitle,
+      summary:
+        "This collaborative studio summary is long enough to satisfy validation while proving that one user can invite another into a shared story with safe version updates and no story loss during editing.",
+      visibility: "private",
+      anonymous: false,
+      allowedViewerIds: [],
+      tags: [],
+      links: [],
+      status: "draft",
+      chapters: [
+        {
+          title: "Chapter 1",
+          body: initialBody,
+          type: "memory",
+          order: 1,
+          imageUrls: [],
+          moments: [
+            {
+              title: "Starting point",
+              description: "The first collaborative moment to verify edit attribution in the studio timeline.",
+              happenedAt: new Date("2025-01-01T00:00:00.000Z").toISOString(),
+              imageUrls: []
+            }
+          ]
+        }
+      ]
+    }
+  });
+
+  const invitePayload = await apiRequest("/profile/invites", ownerSession.accessToken, {
+    method: "POST",
+    body: {
+      email: collaboratorUser.email,
+      circle: "family",
+      storyId: createdStory.id
+    }
+  });
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: ["--no-sandbox"]
+  });
+  const ownerContext = await browser.newContext();
+  const collaboratorContext = await browser.newContext();
+  const ownerPage = await ownerContext.newPage();
+  const collaboratorPage = await collaboratorContext.newPage();
+
+  await bootstrapSession(collaboratorPage, collaboratorUser, collaboratorSession, "/feed");
+  await collaboratorPage.locator(".collaboration-sheet-modal").waitFor({ state: "visible", timeout: 15000 });
+  await collaboratorPage.getByRole("button", { name: /accept and start/i }).click();
+  await collaboratorPage.waitForURL(/\/studio/, { timeout: 15000 });
+  await waitForEditor(collaboratorPage);
+
+  await bootstrapSession(ownerPage, ownerUser, ownerSession, `/studio?storyId=${createdStory.id}`);
+  await waitForEditor(ownerPage);
+
+  const initialCollaboratorMeta = await collaboratorPage.locator(".studio-collaboration-panel").innerText();
+  if (!initialCollaboratorMeta.includes("Revision")) {
+    throw new Error(`Collaborative panel did not load on collaborator side: ${initialCollaboratorMeta}`);
+  }
+
+  const ownerStory = await apiRequest(`/stories/mine/${createdStory.id}`, ownerSession.accessToken);
+  await apiRequest(`/stories/${createdStory.id}`, ownerSession.accessToken, {
+    method: "PATCH",
+    body: {
+      title: ownerStory.title,
+      summary: ownerStory.summary,
+      visibility: ownerStory.visibility,
+      anonymous: ownerStory.anonymous,
+      allowedViewerIds: [],
+      tags: ownerStory.tags || [],
+      links: ownerStory.links || [],
+      status: ownerStory.status,
+      expectedRevision: ownerStory.collaborationRevision,
+      chapters: ownerStory.chapters.map((chapter, index) => ({
+        id: chapter.id,
+        title: chapter.title,
+        body:
+          index === 0
+            ? `${chapter.body}<p>${updatedBodyText}</p>`
+            : chapter.body,
+        type: chapter.type,
+        order: index + 1,
+        imageUrls: chapter.imageKeys || [],
+        voiceNoteUrl: chapter.voiceNoteKey || undefined,
+        moments: (chapter.moments || []).map((moment) => ({
+          id: moment.id,
+          title: moment.title,
+          description: moment.description,
+          happenedAt: moment.happenedAt,
+          imageUrls: moment.imageKeys || [],
+          voiceNoteUrl: moment.voiceNoteKey || undefined
+        }))
+      }))
+    }
+  });
+
+  await collaboratorPage.getByRole("button", { name: /load latest version/i }).waitFor({ state: "visible", timeout: 15000 });
+  await collaboratorPage.getByRole("button", { name: /load latest version/i }).click();
+  await collaboratorPage.waitForTimeout(1200);
+
+  const collaboratorBody = await collaboratorPage.locator(".editor-surface").innerText();
+  if (!collaboratorBody.includes(updatedBodyText)) {
+    throw new Error(`Collaborator did not load the latest body version: ${collaboratorBody}`);
+  }
+
+  const collaboratorAudit = await collaboratorPage.locator(".studio-collaboration-meta").first().innerText();
+  if (!collaboratorAudit.toLowerCase().includes(ownerUser.username)) {
+    throw new Error(`Collaborative edit attribution did not mention the owner editor: ${collaboratorAudit}`);
+  }
+
+  const collaboratorStory = await apiRequest(`/stories/mine/${createdStory.id}`, collaboratorSession.accessToken);
+  const collaboratorPrivacyAttempt = await apiRequest(`/stories/${createdStory.id}`, collaboratorSession.accessToken, {
+    method: "PATCH",
+    body: {
+      title: collaboratorStory.title,
+      summary: collaboratorStory.summary,
+      visibility: "public",
+      anonymous: true,
+      allowedViewerIds: [],
+      tags: collaboratorStory.tags || [],
+      links: collaboratorStory.links || [],
+      status: collaboratorStory.status,
+      expectedRevision: collaboratorStory.collaborationRevision,
+      chapters: collaboratorStory.chapters.map((chapter, index) => ({
+        id: chapter.id,
+        title: chapter.title,
+        body: chapter.body,
+        type: chapter.type,
+        order: index + 1,
+        imageUrls: chapter.imageKeys || [],
+        voiceNoteUrl: chapter.voiceNoteKey || undefined,
+        moments: (chapter.moments || []).map((moment) => ({
+          id: moment.id,
+          title: moment.title,
+          description: moment.description,
+          happenedAt: moment.happenedAt,
+          imageUrls: moment.imageKeys || [],
+          voiceNoteUrl: moment.voiceNoteKey || undefined
+        }))
+      }))
+    }
+  });
+
+  if (collaboratorPrivacyAttempt.visibility !== "private" || collaboratorPrivacyAttempt.anonymous !== false) {
+    throw new Error(
+      `Collaborator was able to change protected story controls: ${JSON.stringify({
+        visibility: collaboratorPrivacyAttempt.visibility,
+        anonymous: collaboratorPrivacyAttempt.anonymous
+      })}`
+    );
+  }
+
+  console.log(
+    JSON.stringify(
+      {
+        storyId: createdStory.id,
+        inviteId: invitePayload.invite.id,
+        collaboratorRevision: collaboratorPrivacyAttempt.collaborationRevision,
+        collaboratorAudit,
+        latestBodyLoaded: collaboratorBody.includes(updatedBodyText),
+        privacyRemainedPrivate: collaboratorPrivacyAttempt.visibility === "private",
+        anonymousRemainedFalse: collaboratorPrivacyAttempt.anonymous === false
+      },
+      null,
+      2
+    )
+  );
+
+  await ownerContext.close();
+  await collaboratorContext.close();
+  await browser.close();
+  await mongoose.disconnect();
+}
+
+run().catch(async (error) => {
+  console.error(error);
+  if (mongoose.connection.readyState !== 0) {
+    await mongoose.disconnect();
+  }
+  process.exit(1);
+});

@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 
 import {
+  type ApiCollaborationInvite,
   type AuthSession,
   type ProfileDashboard,
   apiRequest,
@@ -107,9 +108,12 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const navigate = useNavigate();
   const [authSession, setAuthSession] = useState<AuthSession | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [liveNotification, setLiveNotification] = useState("");
+  const [collaborationInvite, setCollaborationInvite] = useState<ApiCollaborationInvite | null>(null);
+  const [isCollaborationInviteBusy, setIsCollaborationInviteBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,6 +171,37 @@ export default function App() {
   }, [authSession?.accessToken]);
 
   useEffect(() => {
+    if (!authSession?.accessToken || typeof window === "undefined") {
+      return;
+    }
+
+    let cancelled = false;
+    const isAcceptedInviteSeen = (invite: ApiCollaborationInvite) =>
+      window.localStorage.getItem(`histora-collaboration-invite-seen:${invite.id}:${invite.status}`) === "true";
+
+    void apiRequest<{ invites: ApiCollaborationInvite[] }>("/profile/invites/incoming", {
+      accessToken: authSession.accessToken
+    })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+
+        const nextInvite =
+          payload.invites.find((invite) => invite.status === "pending") ??
+          payload.invites.find((invite) => invite.status === "accepted" && !isAcceptedInviteSeen(invite)) ??
+          null;
+
+        setCollaborationInvite(nextInvite);
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authSession?.accessToken]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }
@@ -193,6 +228,42 @@ export default function App() {
 
   const handleAuthenticated = (session: AuthSession) => {
     setAuthSession(session);
+  };
+
+  const dismissCollaborationInvite = () => {
+    if (typeof window !== "undefined" && collaborationInvite?.status === "accepted") {
+      window.localStorage.setItem(`histora-collaboration-invite-seen:${collaborationInvite.id}:${collaborationInvite.status}`, "true");
+    }
+    setCollaborationInvite(null);
+  };
+
+  const startCollaborating = async () => {
+    if (!authSession?.accessToken || !collaborationInvite) {
+      return;
+    }
+
+    setIsCollaborationInviteBusy(true);
+    try {
+      const acceptedInvite =
+        collaborationInvite.status === "accepted"
+          ? collaborationInvite
+          : (
+              await apiRequest<{ invite: ApiCollaborationInvite }>(`/profile/invites/${collaborationInvite.id}/accept`, {
+                method: "POST",
+                accessToken: authSession.accessToken
+              })
+            ).invite;
+
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(`histora-collaboration-invite-seen:${acceptedInvite.id}:${acceptedInvite.status}`, "true");
+      }
+      setCollaborationInvite(null);
+      navigate(`/studio?storyId=${encodeURIComponent(acceptedInvite.storyId)}`);
+    } catch {
+      setLiveNotification("Could not open collaborative studio right now.");
+    } finally {
+      setIsCollaborationInviteBusy(false);
+    }
   };
 
   const isLoggedIn = Boolean(authSession?.accessToken && authSession.user);
@@ -368,6 +439,38 @@ export default function App() {
       {liveNotification ? (
         <div className="bottom-toast" role="status">
           {liveNotification}
+        </div>
+      ) : null}
+      {collaborationInvite ? (
+        <div className="status-viewer-backdrop collaboration-sheet-backdrop" onClick={dismissCollaborationInvite} role="presentation">
+          <article className="share-sheet-modal collaboration-sheet-modal card" onClick={(event) => event.stopPropagation()}>
+            <span className="story-tag">COLLABORATION</span>
+            <h3>
+              {collaborationInvite.status === "accepted"
+                ? `${collaborationInvite.ownerName} already added you to this story.`
+                : `${collaborationInvite.ownerName} invited you to collaborate.`}
+            </h3>
+            <p>
+              Story: {collaborationInvite.storyTitle} // {collaborationInvite.circle === "family" ? "Family" : "Friend"} circle
+            </p>
+            <p>
+              {collaborationInvite.status === "accepted"
+                ? "Open collaborative studio to keep writing with live revisions, safe local drafts, and shared chapter editing."
+                : "Accept this collaboration to open the shared studio and start writing on the same story without losing local drafts."}
+            </p>
+            <div className="share-sheet-actions">
+              <button className="ghost-action" disabled={isCollaborationInviteBusy} onClick={dismissCollaborationInvite} type="button">
+                MAYBE LATER
+              </button>
+              <button className="primary-action" disabled={isCollaborationInviteBusy} onClick={() => void startCollaborating()} type="button">
+                {isCollaborationInviteBusy
+                  ? "OPENING..."
+                  : collaborationInvite.status === "accepted"
+                    ? "START COLLABORATING"
+                    : "ACCEPT AND START"}
+              </button>
+            </div>
+          </article>
         </div>
       ) : null}
     </Fragment>

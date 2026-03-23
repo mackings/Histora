@@ -4,6 +4,7 @@ import { storyReactionSchema, storySaveSchema } from "../shared/index.js";
 
 import { asyncHandler } from "../utils/async-handler.js";
 import {
+  getCollaborativeStories,
   getMyStories,
   getMyStory,
   getPublicFeed,
@@ -26,6 +27,11 @@ export const updateStoryController = asyncHandler(async (request, response) => {
 
 export const myStoriesController = asyncHandler(async (request, response) => {
   const stories = await getMyStories(request.auth!.userId);
+  response.status(200).json(stories);
+});
+
+export const collaborativeStoriesController = asyncHandler(async (request, response) => {
+  const stories = await getCollaborativeStories(request.auth!.userId);
   response.status(200).json(stories);
 });
 
