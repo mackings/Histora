@@ -125,7 +125,16 @@ async function apiRequest(pathname, accessToken, options = {}) {
 
 async function waitForEditor(page) {
   await page.locator(".editor-surface").waitFor({ state: "visible", timeout: 15000 });
+}
+
+async function waitForCollaborativeEditor(page) {
+  await waitForEditor(page);
   await page.locator(".studio-collaboration-panel").waitFor({ state: "visible", timeout: 15000 });
+}
+
+async function delayRoute(route, ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+  await route.continue();
 }
 
 async function run() {
@@ -133,52 +142,7 @@ async function run() {
     loadSession(ownerUser.email),
     loadSession(collaboratorUser.email)
   ]);
-
-  const storyTitle = `Playwright collaborative story ${Date.now()}`;
-  const initialBody =
-    "<p>This collaborative story exists to verify invite acceptance, shared studio loading, safe version updates, and collaborator security controls.</p>";
   const updatedBodyText = "Owner appended this sentence in collaborative studio to prove the latest version can be loaded safely.";
-
-  const createdStory = await apiRequest("/stories", ownerSession.accessToken, {
-    method: "POST",
-    body: {
-      title: storyTitle,
-      summary:
-        "This collaborative studio summary is long enough to satisfy validation while proving that one user can invite another into a shared story with safe version updates and no story loss during editing.",
-      visibility: "private",
-      anonymous: false,
-      allowedViewerIds: [],
-      tags: [],
-      links: [],
-      status: "draft",
-      chapters: [
-        {
-          title: "Chapter 1",
-          body: initialBody,
-          type: "memory",
-          order: 1,
-          imageUrls: [],
-          moments: [
-            {
-              title: "Starting point",
-              description: "The first collaborative moment to verify edit attribution in the studio timeline.",
-              happenedAt: new Date("2025-01-01T00:00:00.000Z").toISOString(),
-              imageUrls: []
-            }
-          ]
-        }
-      ]
-    }
-  });
-
-  const invitePayload = await apiRequest("/profile/invites", ownerSession.accessToken, {
-    method: "POST",
-    body: {
-      email: collaboratorUser.email,
-      circle: "family",
-      storyId: createdStory.id
-    }
-  });
 
   const browser = await chromium.launch({
     headless: true,
@@ -189,22 +153,70 @@ async function run() {
   const ownerPage = await ownerContext.newPage();
   const collaboratorPage = await collaboratorContext.newPage();
 
+  await ownerPage.route(`${apiBaseUrl}/stories`, async (route) => {
+    if (route.request().method() === "POST") {
+      await delayRoute(route, 350);
+      return;
+    }
+
+    await route.continue();
+  });
+
+  await ownerPage.route(`${apiBaseUrl}/profile/invites`, async (route) => {
+    if (route.request().method() === "POST") {
+      await delayRoute(route, 350);
+      return;
+    }
+
+    await route.continue();
+  });
+
+  await bootstrapSession(ownerPage, ownerUser, ownerSession, "/profile");
+  await ownerPage.getByRole("button", { name: /create collab draft/i }).waitFor({ state: "visible", timeout: 15000 });
+
+  await ownerPage.getByRole("button", { name: /create collab draft/i }).click();
+  await ownerPage.getByRole("button", { name: /^creating\.\.\.$/i }).waitFor({ state: "visible", timeout: 5000 });
+  await ownerPage.getByRole("button", { name: /^create collab draft$/i }).waitFor({ state: "visible", timeout: 15000 });
+
+  const selectedStoryId = await ownerPage.getByLabel(/story to collaborate on/i).inputValue();
+  if (!selectedStoryId) {
+    throw new Error("Profile collaboration card did not select a created draft story.");
+  }
+
+  await ownerPage.getByRole("button", { name: /open selected story/i }).click();
+  await ownerPage.waitForURL(/\/studio\?storyId=/, { timeout: 15000 });
+  await waitForEditor(ownerPage);
+
+  if (await ownerPage.locator(".studio-collaboration-panel").count()) {
+    throw new Error("Fresh collaboration draft should open in normal studio before any collaborator accepts.");
+  }
+
+  await bootstrapSession(ownerPage, ownerUser, ownerSession, "/profile");
+  await ownerPage.getByLabel(/invite email/i).fill(collaboratorUser.email);
+  await ownerPage.getByRole("button", { name: /^send invite$/i }).click();
+  await ownerPage.getByRole("button", { name: /^sending\.\.\.$/i }).waitFor({ state: "visible", timeout: 5000 });
+  await ownerPage.getByRole("button", { name: /^send invite$/i }).waitFor({ state: "visible", timeout: 15000 });
+  await ownerPage.locator(".profile-settings-list .profile-setting-row").filter({ hasText: collaboratorUser.email }).first().waitFor({
+    state: "visible",
+    timeout: 15000
+  });
+
   await bootstrapSession(collaboratorPage, collaboratorUser, collaboratorSession, "/feed");
   await collaboratorPage.locator(".collaboration-sheet-modal").waitFor({ state: "visible", timeout: 15000 });
   await collaboratorPage.getByRole("button", { name: /accept and start/i }).click();
   await collaboratorPage.waitForURL(/\/studio/, { timeout: 15000 });
-  await waitForEditor(collaboratorPage);
+  await waitForCollaborativeEditor(collaboratorPage);
 
-  await bootstrapSession(ownerPage, ownerUser, ownerSession, `/studio?storyId=${createdStory.id}`);
-  await waitForEditor(ownerPage);
+  await bootstrapSession(ownerPage, ownerUser, ownerSession, `/studio?storyId=${selectedStoryId}`);
+  await waitForCollaborativeEditor(ownerPage);
 
   const initialCollaboratorMeta = await collaboratorPage.locator(".studio-collaboration-panel").innerText();
   if (!initialCollaboratorMeta.includes("Revision")) {
     throw new Error(`Collaborative panel did not load on collaborator side: ${initialCollaboratorMeta}`);
   }
 
-  const ownerStory = await apiRequest(`/stories/mine/${createdStory.id}`, ownerSession.accessToken);
-  await apiRequest(`/stories/${createdStory.id}`, ownerSession.accessToken, {
+  const ownerStory = await apiRequest(`/stories/mine/${selectedStoryId}`, ownerSession.accessToken);
+  await apiRequest(`/stories/${selectedStoryId}`, ownerSession.accessToken, {
     method: "PATCH",
     body: {
       title: ownerStory.title,
@@ -253,8 +265,8 @@ async function run() {
     throw new Error(`Collaborative edit attribution did not mention the owner editor: ${collaboratorAudit}`);
   }
 
-  const collaboratorStory = await apiRequest(`/stories/mine/${createdStory.id}`, collaboratorSession.accessToken);
-  const collaboratorPrivacyAttempt = await apiRequest(`/stories/${createdStory.id}`, collaboratorSession.accessToken, {
+  const collaboratorStory = await apiRequest(`/stories/mine/${selectedStoryId}`, collaboratorSession.accessToken);
+  const collaboratorPrivacyAttempt = await apiRequest(`/stories/${selectedStoryId}`, collaboratorSession.accessToken, {
     method: "PATCH",
     body: {
       title: collaboratorStory.title,
@@ -298,11 +310,11 @@ async function run() {
   console.log(
     JSON.stringify(
       {
-        storyId: createdStory.id,
-        inviteId: invitePayload.invite.id,
+        storyId: selectedStoryId,
         collaboratorRevision: collaboratorPrivacyAttempt.collaborationRevision,
         collaboratorAudit,
         latestBodyLoaded: collaboratorBody.includes(updatedBodyText),
+        ownerOpenedNormalStudioBeforeAccept: true,
         privacyRemainedPrivate: collaboratorPrivacyAttempt.visibility === "private",
         anonymousRemainedFalse: collaboratorPrivacyAttempt.anonymous === false
       },

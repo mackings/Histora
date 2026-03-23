@@ -3056,6 +3056,16 @@ textarea {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.profile-action-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.profile-collaboration-preview {
+  gap: 12px;
+}
+
 .profile-editor-shell {
   grid-template-columns: minmax(0, 1fr) minmax(340px, 0.84fr);
   align-items: start;

@@ -470,7 +470,7 @@ export function StudioPage({
   const liveChapterIndexSet = new Set(liveChapterIndexes);
   const activeChapterIsLive = liveChapterIndexSet.has(activeChapterIndex >= 0 ? activeChapterIndex : 0);
   const requestedStudioStoryId = searchParams.get("storyId");
-  const isCollaborativeStudio = !currentStoryIsOwner && currentStoryCollaborators.length > 0;
+  const isCollaborativeStudio = currentStoryCollaborators.length > 0;
   const storySetupComplete = storyTitle.trim().length >= 3 && summaryWordCount >= 20;
   const hasUnsavedLocalDraft =
     !currentStoryId &&

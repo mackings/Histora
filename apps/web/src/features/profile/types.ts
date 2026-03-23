@@ -6,4 +6,5 @@ export type ContributorInviteRecord = {
   story: string;
   status: string;
   createdAt: string;
+  deliveryState?: "sent" | "app_only";
 };

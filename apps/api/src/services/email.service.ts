@@ -27,6 +27,10 @@ async function getTransporter() {
   return transporterPromise;
 }
 
+export function isEmailDeliveryConfigured() {
+  return Boolean(env.SMTP_USER && env.SMTP_PASSWORD);
+}
+
 export async function sendVerificationOtpEmail(email: string, otp: string) {
   const transporter = await getTransporter();
 
@@ -71,6 +75,49 @@ export async function sendDeviceVerificationEmail(email: string, otp: string, de
             ${otp}
           </div>
           <p style="margin: 16px 0 0;">This code expires in 10 minutes. If this was not you, ignore this email.</p>
+        </div>
+      </div>
+    `
+  });
+}
+
+export async function sendCollaborationInviteEmail({
+  email,
+  ownerName,
+  ownerUsername,
+  storyTitle,
+  circle
+}: {
+  email: string;
+  ownerName: string;
+  ownerUsername: string;
+  storyTitle: string;
+  circle: "family" | "friend";
+}) {
+  const transporter = await getTransporter();
+  const appUrl = env.CLIENT_ORIGIN ?? env.APP_BASE_URL ?? null;
+  const signInUrl = appUrl ? `${appUrl.replace(/\/$/, "")}/signin` : null;
+
+  await transporter.sendMail({
+    from: `"${env.SMTP_FROM_NAME}" <${env.SMTP_USER}>`,
+    to: email,
+    subject: `${ownerName} invited you to collaborate on Histora`,
+    text: [
+      `${ownerName} (@${ownerUsername}) invited you to collaborate on "${storyTitle}" as ${circle}.`,
+      signInUrl ? `Sign in here to accept the collaboration: ${signInUrl}` : "Sign in to Histora with this email address to accept the collaboration."
+    ].join("\n\n"),
+    html: `
+      <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; color: #1f2937;">
+        <div style="padding: 24px; border-radius: 18px; background: linear-gradient(180deg, #eef4ff 0%, #ffffff 100%); border: 1px solid #d9e4ff;">
+          <p style="margin: 0 0 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: #315efb;">Histora Collaboration</p>
+          <h1 style="font-size: 24px; margin: 0 0 12px;">You were invited to collaborate</h1>
+          <p style="margin: 0 0 16px;">${ownerName} (@${ownerUsername}) invited you to join the story <strong>${storyTitle}</strong> as ${circle}.</p>
+          <p style="margin: 0 0 16px;">Sign in with this email address and Histora will show the collaboration invite immediately.</p>
+          ${
+            signInUrl
+              ? `<a href="${signInUrl}" style="display: inline-block; padding: 14px 18px; border-radius: 999px; background: #315efb; color: #ffffff; text-decoration: none; font-weight: 700;">Open Histora</a>`
+              : ""
+          }
         </div>
       </div>
     `

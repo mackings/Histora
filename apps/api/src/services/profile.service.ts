@@ -13,6 +13,7 @@ import { resolveStoredObjectUrl } from "./storage.service.js";
 import { broadcastAppEvent } from "../realtime/app-events.js";
 import { sendFollowNotificationPush } from "./push.service.js";
 import { resolveStoryTextContent } from "./story-content.service.js";
+import { isEmailDeliveryConfigured, sendCollaborationInviteEmail } from "./email.service.js";
 
 type ProfileRelationshipUser = {
   id: string;
@@ -375,6 +376,22 @@ export async function createContributorInvite(userId: string, input: Contributor
     status: "pending"
   });
 
+  let deliveryState: "sent" | "app_only" = "app_only";
+  if (isEmailDeliveryConfigured()) {
+    try {
+      await sendCollaborationInviteEmail({
+        email: invite.email,
+        ownerName: owner.fullName,
+        ownerUsername: owner.username,
+        storyTitle: invite.storyTitle,
+        circle: invite.circle
+      });
+      deliveryState = "sent";
+    } catch (error) {
+      console.error("Could not send collaboration invite email", error);
+    }
+  }
+
   return {
     id: invite.id,
     email: invite.email,
@@ -382,7 +399,8 @@ export async function createContributorInvite(userId: string, input: Contributor
     storyId: String(invite.storyId),
     story: invite.storyTitle,
     status: "Pending",
-    createdAt: invite.createdAt
+    createdAt: invite.createdAt,
+    deliveryState
   };
 }
 

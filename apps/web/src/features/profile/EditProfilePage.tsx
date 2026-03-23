@@ -2,7 +2,6 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
 import {
-  type ApiStory,
   apiRequest,
   type ProfileDashboard,
   type ProfileSession,
@@ -18,7 +17,6 @@ import {
   syncPushAlerts
 } from "../../lib/browser-client";
 import { type FeedIconComponent, type FeedSectionLabelComponent } from "../feed/ui-types";
-import type { ContributorInviteRecord } from "./types";
 
 export function EditProfilePage({
   accessToken,
@@ -34,11 +32,6 @@ export function EditProfilePage({
   const [sessions, setSessions] = useState<ProfileSession[]>([]);
   const [devices, setDevices] = useState<ProfileTrustedDevice[]>([]);
   const [formFeedback, setFormFeedback] = useState("");
-  const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteCircle, setInviteCircle] = useState<"family" | "friend">("family");
-  const [stories, setStories] = useState<ApiStory[]>([]);
-  const [inviteStoryId, setInviteStoryId] = useState("");
-  const [contributorInvites, setContributorInvites] = useState<ContributorInviteRecord[]>([]);
   const [pushState, setPushState] = useState<PushSyncResult>({
     supported: false,
     enabled: false,
@@ -86,23 +79,6 @@ export function EditProfilePage({
       })
       .catch(() => undefined);
 
-    void apiRequest<ApiStory[]>("/stories/mine", { accessToken })
-      .then((payload) => {
-        if (!cancelled) {
-          setStories(payload);
-          setInviteStoryId(payload[0]?.id ?? "");
-        }
-      })
-      .catch(() => undefined);
-
-    void apiRequest<{ invites: ContributorInviteRecord[] }>("/profile/invites", { accessToken })
-      .then((payload) => {
-        if (!cancelled) {
-          setContributorInvites(payload.invites);
-        }
-      })
-      .catch(() => undefined);
-
     void apiRequest<{ sessions: ProfileSession[] }>("/profile/sessions", { accessToken })
       .then((payload) => {
         if (!cancelled) {
@@ -139,48 +115,6 @@ export function EditProfilePage({
       cancelled = true;
     };
   }, [accessToken]);
-
-  const handleInviteContributor = () => {
-    const trimmedEmail = inviteEmail.trim();
-
-    if (!trimmedEmail || !inviteStoryId) {
-      return;
-    }
-
-    void apiRequest<{ invite: ContributorInviteRecord }>("/profile/invites", {
-      method: "POST",
-      accessToken,
-      body: {
-        email: trimmedEmail,
-        circle: inviteCircle,
-        storyId: inviteStoryId
-      }
-    })
-      .then((payload) => {
-        setContributorInvites((current) => [payload.invite, ...current]);
-        setInviteEmail("");
-        setInviteCircle("family");
-        setInviteStoryId(stories[0]?.id ?? inviteStoryId);
-      })
-      .catch((error) => {
-        setFormFeedback(getErrorMessage(error, "Could not create invite."));
-      });
-  };
-
-  const handleRemoveInvite = (inviteId: string) => {
-    void apiRequest<{ invite: ContributorInviteRecord }>(`/profile/invites/${inviteId}`, {
-      method: "DELETE",
-      accessToken
-    })
-      .then((payload) => {
-        setContributorInvites((current) =>
-          current.map((invite) => (invite.id === inviteId ? payload.invite : invite))
-        );
-      })
-      .catch((error) => {
-        setFormFeedback(getErrorMessage(error, "Could not revoke invite."));
-      });
-  };
 
   const handleProfileInput = (field: keyof typeof profileForm, value: string | boolean) => {
     setProfileForm((current) => ({ ...current, [field]: value }));
@@ -339,8 +273,8 @@ export function EditProfilePage({
       <section className="profile-editor-stage card">
         <div className="profile-editor-stage-copy">
           <SectionLabelComponent>IDENTITY_AND_ACCESS</SectionLabelComponent>
-          <h1>Update identity, privacy, invites, and archive defaults.</h1>
-          <p>Use this page to manage what readers see, how stories open to others, and who can help you write by invitation.</p>
+          <h1>Update identity, privacy, and archive defaults.</h1>
+          <p>Use this page to manage what readers see, how stories open to others, and how your account behaves across trusted devices.</p>
         </div>
         <div className="profile-editor-stage-notes">
           <div className="profile-editor-note">
@@ -349,7 +283,7 @@ export function EditProfilePage({
           </div>
           <div className="profile-editor-note">
             <strong>Story collaboration</strong>
-            <span>Invite family or friends by email and choose the exact story they can collaborate on.</span>
+            <span>Invites now live on your main profile page, where you can create a collaboration draft and send it immediately.</span>
           </div>
         </div>
       </section>
@@ -425,59 +359,15 @@ export function EditProfilePage({
           <article className="profile-panel card profile-editor-card">
             <div className="profile-panel-body">
               <div className="profile-section-copy">
-                <SectionLabelComponent>CONTRIBUTOR_INVITES</SectionLabelComponent>
-                <h2>Invite family or friends to collaborate</h2>
-                <span>Choose a story, send the invite by email, and manage who can collaborate.</span>
-              </div>
-              <div className="profile-form-grid profile-invite-grid">
-                <label>
-                  Invite email
-                  <input onChange={(event) => setInviteEmail(event.target.value)} placeholder="friend@example.com" value={inviteEmail} />
-                </label>
-                <label>
-                  Invite type
-                  <select onChange={(event) => setInviteCircle(event.target.value as "family" | "friend")} value={inviteCircle}>
-                    <option value="family">Family</option>
-                    <option value="friend">Friend</option>
-                  </select>
-                </label>
-                <label>
-                  Story to collaborate on
-                  <select onChange={(event) => setInviteStoryId(event.target.value)} value={inviteStoryId}>
-                    {stories.map((story) => (
-                      <option key={story.id} value={story.id}>
-                        {story.title}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <SectionLabelComponent>STORY_COLLABORATION</SectionLabelComponent>
+                <h2>Story collaboration moved</h2>
+                <span>Create collaboration drafts and send invites directly from your main profile page.</span>
               </div>
               <div className="chapter-controls profile-editor-actions">
-                <button className="primary-action" onClick={handleInviteContributor} type="button">
-                  SEND INVITE
+                <button className="primary-action" onClick={() => navigate("/profile")} type="button">
+                  OPEN PROFILE COLLABORATION
                   <IconComponent className="button-icon" name="arrow" />
                 </button>
-              </div>
-              <div className="profile-settings-list">
-                {contributorInvites.length ? (
-                  contributorInvites.map((invite) => (
-                    <div className="profile-setting-row" key={invite.id}>
-                      <strong>{invite.email}</strong>
-                      <span>
-                        {invite.circle === "family" ? "Family" : "Friend"} // {invite.story}
-                      </span>
-                      <small>{invite.status}</small>
-                      <button className="ghost-action slim-action" onClick={() => handleRemoveInvite(invite.id)} type="button">
-                        REVOKE
-                      </button>
-                    </div>
-                  ))
-                ) : (
-                  <div className="profile-setting-row">
-                    <strong>No collaboration invites</strong>
-                    <span>Send an invite to let family or friends collaborate on a story.</span>
-                  </div>
-                )}
               </div>
             </div>
           </article>
