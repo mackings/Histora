@@ -1,16 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { type ApiAnonymousMessage, type ApiStatus, type ApiStory, type AuthUser, apiRequest } from "../../lib/api-client";
+import { type ApiAnonymousMessage, type AuthUser, apiRequest } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
-import {
-  type StoredAnonymousStatus,
-  roundRect,
-  toStoredAnonymousStatus,
-  toStoredAnonymousStoryEntry,
-  toStoredAnonymousStatusEntry,
-  wrapCanvasText
-} from "../feed/support";
+import { formatAnonymousMeta, wrapCanvasText } from "../feed/support";
 import { type FeedIconComponent, type FeedSectionLabelComponent } from "../feed/ui-types";
 
 export function AnonymousHubPage({
@@ -25,39 +18,36 @@ export function AnonymousHubPage({
   SectionLabelComponent: FeedSectionLabelComponent;
 }) {
   const navigate = useNavigate();
-  const [statuses, setStatuses] = useState<StoredAnonymousStatus[]>([]);
+  const [messages, setMessages] = useState<ApiAnonymousMessage[]>([]);
   const [shareFeedback, setShareFeedback] = useState("");
-  const [showAllMessages, setShowAllMessages] = useState(false);
   const inboxLink =
     typeof window === "undefined"
       ? `/anonymous/write/${currentUser.username}`
       : `${window.location.origin}/anonymous/write/${currentUser.username}`;
-  const receivedMessages = statuses.filter((status) => status.source === "received");
-  const postedMessages = statuses.filter((status) => status.source === "posted");
-  const visibleReceivedMessages = showAllMessages ? receivedMessages : receivedMessages.slice(0, 5);
+
+  const helpRequests = useMemo(
+    () =>
+      messages.flatMap((message) =>
+        (message.helpRequests ?? []).map((request) => ({
+          ...request,
+          shareSlug: message.shareSlug,
+          messageId: message.id,
+          excerpt: message.body
+        }))
+      ),
+    [messages]
+  );
 
   useEffect(() => {
     let cancelled = false;
 
-    const loadStatuses = async () => {
+    const loadMessages = async () => {
       try {
-        const [inboxMessages, sentMessages, postedStatuses, postedStories] = await Promise.all([
-          apiRequest<ApiAnonymousMessage[]>("/anonymous-messages/inbox", { accessToken }),
-          apiRequest<ApiAnonymousMessage[]>("/anonymous-messages/sent", { accessToken }),
-          apiRequest<ApiStatus[]>("/statuses/mine", { accessToken }),
-          apiRequest<ApiStory[]>("/stories/mine", { accessToken })
-        ]);
+        const inboxMessages = await apiRequest<ApiAnonymousMessage[]>("/anonymous-messages/inbox", { accessToken });
 
-        if (cancelled) {
-          return;
+        if (!cancelled) {
+          setMessages(inboxMessages);
         }
-
-        setStatuses([
-          ...inboxMessages.map((message) => toStoredAnonymousStatus(message, "received")),
-          ...sentMessages.map((message) => toStoredAnonymousStatus(message, "posted")),
-          ...postedStatuses.filter((status) => status.anonymous && status.shareSlug).map((status) => toStoredAnonymousStatusEntry(status)),
-          ...postedStories.filter((story) => story.anonymous && story.status === "published").map((story) => toStoredAnonymousStoryEntry(story))
-        ]);
       } catch (error) {
         if (!cancelled) {
           setShareFeedback(getErrorMessage(error, "Could not load anonymous messages."));
@@ -65,31 +55,12 @@ export function AnonymousHubPage({
       }
     };
 
-    void loadStatuses();
+    void loadMessages();
 
     return () => {
       cancelled = true;
     };
   }, [accessToken]);
-
-  const copyAnonymousLink = async (status: StoredAnonymousStatus) => {
-    if (typeof window === "undefined" || typeof navigator === "undefined") {
-      return;
-    }
-
-    try {
-      const sharePath =
-        status.kind === "status"
-          ? `/anonymous/status/${status.shareSlug}`
-          : status.kind === "story"
-            ? `/feed/story/${status.shareSlug}`
-            : `/anonymous/${status.shareSlug}`;
-      await navigator.clipboard.writeText(`${window.location.origin}${sharePath}`);
-      setShareFeedback("Anonymous link copied.");
-    } catch {
-      setShareFeedback("Could not copy the anonymous link on this device.");
-    }
-  };
 
   const copyInboxLink = async () => {
     if (typeof navigator === "undefined") {
@@ -104,31 +75,7 @@ export function AnonymousHubPage({
     }
   };
 
-  const deletePostedItem = async (status: StoredAnonymousStatus) => {
-    try {
-      if (status.kind === "status") {
-        await apiRequest<{ ok: boolean }>(`/statuses/${status.id}`, {
-          method: "DELETE",
-          accessToken
-        });
-      } else if (status.kind === "message") {
-        await apiRequest<{ ok: boolean }>(`/anonymous-messages/${status.id}`, {
-          method: "DELETE",
-          accessToken
-        });
-      } else {
-        setShareFeedback("Anonymous stories can be updated from the studio.");
-        return;
-      }
-
-      setStatuses((current) => current.filter((entry) => !(entry.id === status.id && entry.kind === status.kind)));
-      setShareFeedback(status.kind === "status" ? "Anonymous status deleted." : "Anonymous message deleted.");
-    } catch (error) {
-      setShareFeedback(getErrorMessage(error, "Could not delete this anonymous post."));
-    }
-  };
-
-  const downloadPostedStatusImage = (status: StoredAnonymousStatus) => {
+  const downloadInboxPoster = (message: ApiAnonymousMessage) => {
     if (typeof document === "undefined") {
       return;
     }
@@ -139,7 +86,7 @@ export function AnonymousHubPage({
     const context = canvas.getContext("2d");
 
     if (!context) {
-      setShareFeedback("Could not prepare the anonymous status image.");
+      setShareFeedback("Could not prepare the anonymous message poster.");
       return;
     }
 
@@ -150,39 +97,25 @@ export function AnonymousHubPage({
     context.fillRect(0, 0, 1080, 1350);
     context.fillStyle = "#1b2440";
     context.font = "700 46px Space Grotesk, sans-serif";
-    context.fillText("HISTORA // ANONYMOUS STATUS", 80, 120);
+    context.fillText("HISTORA // ANONYMOUS MESSAGE", 80, 120);
     context.font = "700 72px Space Grotesk, sans-serif";
-    context.fillText("Anonymous advice status", 80, 240);
+    context.fillText("Anonymous message", 80, 240);
     context.font = "400 42px Manrope, sans-serif";
 
-    const words = status.body.split(" ");
-    const lines: string[] = [];
-    let currentLine = "";
-    for (const word of words) {
-      const nextLine = currentLine ? `${currentLine} ${word}` : word;
-      if (context.measureText(nextLine).width > 880) {
-        lines.push(currentLine);
-        currentLine = word;
-      } else {
-        currentLine = nextLine;
-      }
-    }
-    if (currentLine) {
-      lines.push(currentLine);
-    }
-
+    const lines = wrapCanvasText(context, message.body, 880);
     lines.slice(0, 10).forEach((line, index) => {
       context.fillText(line, 80, 360 + index * 60);
     });
+
     context.font = "700 36px Space Grotesk, sans-serif";
     context.fillStyle = "#cc5a24";
-    context.fillText(`Advice replies stay anonymous // ${status.meta}`, 80, 1160);
+    context.fillText(`Replies stay anonymous // ${formatAnonymousMeta(message.createdAt)}`, 80, 1160);
 
     const link = document.createElement("a");
     link.href = canvas.toDataURL("image/png");
-    link.download = `${status.shareSlug}.png`;
+    link.download = `${message.shareSlug}.png`;
     link.click();
-    setShareFeedback("Anonymous status image saved to your device.");
+    setShareFeedback("Anonymous message poster saved to your device.");
   };
 
   return (
@@ -207,10 +140,6 @@ export function AnonymousHubPage({
             <button className="ghost-action" onClick={copyInboxLink} type="button">
               COPY LINK
             </button>
-            <button className="primary-action" onClick={() => setShowAllMessages((current) => !current)} type="button">
-              {showAllMessages ? "SHOW RECENT" : "SEE ALL MESSAGES"}
-              <IconComponent className="button-icon" name="arrow" />
-            </button>
           </div>
         </div>
       </section>
@@ -223,24 +152,24 @@ export function AnonymousHubPage({
             <div className="profile-section-copy anonymous-section-copy">
               <SectionLabelComponent>MESSAGES</SectionLabelComponent>
               <h2>Anonymous messages</h2>
-              <span>{receivedMessages.length} total message{receivedMessages.length === 1 ? "" : "s"} in your inbox.</span>
+              <span>{messages.length} total message{messages.length === 1 ? "" : "s"} in your inbox.</span>
             </div>
             <div className="anonymous-hub-list">
-              {visibleReceivedMessages.length ? (
-                visibleReceivedMessages.map((status) => (
-                  <article className="anonymous-hub-card" key={status.shareSlug}>
+              {messages.length ? (
+                messages.map((message) => (
+                  <article className="anonymous-hub-card" key={message.shareSlug}>
                     <div className="anonymous-hub-card-top">
                       <div className="anonymous-hub-card-copy">
                         <strong>Anonymous message</strong>
-                        <span>{status.meta}</span>
+                        <span>{formatAnonymousMeta(message.createdAt)}</span>
                       </div>
                     </div>
-                    <p>{status.body}</p>
+                    <p>{message.body}</p>
                     <div className="anonymous-hub-actions">
-                      <button className="ghost-action" onClick={() => copyAnonymousLink(status)} type="button">
-                        COPY MESSAGE LINK
+                      <button className="ghost-action" onClick={() => downloadInboxPoster(message)} type="button">
+                        SAVE POSTER
                       </button>
-                      <button className="primary-action" onClick={() => navigate(`/anonymous/${status.shareSlug}`)} type="button">
+                      <button className="primary-action" onClick={() => navigate(`/anonymous/${message.shareSlug}`)} type="button">
                         OPEN MESSAGE
                         <IconComponent className="button-icon" name="arrow" />
                       </button>
@@ -259,93 +188,48 @@ export function AnonymousHubPage({
                 </article>
               )}
             </div>
-            {receivedMessages.length > 5 ? (
-              <div className="anonymous-hub-actions">
-                <button className="ghost-action" onClick={() => setShowAllMessages((current) => !current)} type="button">
-                  {showAllMessages ? "SHOW LESS" : "SEE ALL ANONYMOUS"}
-                </button>
-              </div>
-            ) : null}
           </div>
         </article>
 
-        {postedMessages.length ? (
-          <article className="chapter-reader-card card anonymous-hub-panel">
-            <div className="anonymous-panel-body">
-              <div className="profile-section-copy anonymous-section-copy">
-                <SectionLabelComponent>POSTED</SectionLabelComponent>
-                <h2>Your anonymous posts</h2>
-                <span>{postedMessages.length} anonymous post{postedMessages.length === 1 ? "" : "s"} created by you.</span>
-              </div>
-              <div className="anonymous-hub-list">
-                {postedMessages.map((status) => (
-                  <article className="anonymous-hub-card" key={`${status.kind ?? "message"}-${status.id}`}>
+        <article className="chapter-reader-card card anonymous-hub-panel">
+          <div className="anonymous-panel-body">
+            <div className="profile-section-copy anonymous-section-copy">
+              <SectionLabelComponent>HELP</SectionLabelComponent>
+              <h2>Readers who want to help</h2>
+              <span>{helpRequests.length} help request{helpRequests.length === 1 ? "" : "s"} from readers.</span>
+            </div>
+            <div className="anonymous-hub-list">
+              {helpRequests.length ? (
+                helpRequests.map((request) => (
+                  <article className="anonymous-hub-card" key={request.id}>
                     <div className="anonymous-hub-card-top">
                       <div className="anonymous-hub-card-copy">
-                        <strong>
-                          {status.kind === "story"
-                            ? status.title
-                            : status.kind === "status"
-                              ? "Anonymous status"
-                              : "Anonymous message"}
-                        </strong>
-                        <span>
-                          {status.kind === "story"
-                            ? `Anonymous story // ${status.meta}`
-                            : status.meta}
-                        </span>
-                      </div>
-                      <div className="story-viewer-top-actions">
-                        {status.kind === "status" ? (
-                          <button
-                            aria-label="Save anonymous status image"
-                            className="icon-chip icon-chip-dark"
-                            onClick={() => downloadPostedStatusImage(status)}
-                            type="button"
-                          >
-                            <IconComponent className="button-icon" name="download" />
-                          </button>
-                        ) : null}
-                        {status.kind !== "story" ? (
-                          <button
-                            aria-label="Delete anonymous post"
-                            className="icon-chip icon-chip-dark"
-                            onClick={() => void deletePostedItem(status)}
-                            type="button"
-                          >
-                            <IconComponent className="button-icon" name="trash" />
-                          </button>
-                        ) : null}
+                        <strong>{request.accepted ? "Help accepted" : "Reader wants to help"}</strong>
+                        <span>{formatAnonymousMeta(request.createdAt)}</span>
                       </div>
                     </div>
-                    <p>{status.body}</p>
+                    <p>
+                      {request.accepted
+                        ? `${request.helperName} (@${request.helperUsername}) was accepted to help on this anonymous message.`
+                        : "A reader requested to help on this anonymous message. Open the thread to review or accept the request."}
+                    </p>
                     <div className="anonymous-hub-actions">
-                      <button className="ghost-action" onClick={() => copyAnonymousLink(status)} type="button">
-                        COPY LINK
-                      </button>
-                      <button
-                        className="primary-action"
-                        onClick={() =>
-                          navigate(
-                            status.kind === "status"
-                              ? `/anonymous/status/${status.shareSlug}`
-                              : status.kind === "story"
-                                ? `/feed/story/${status.shareSlug}`
-                                : `/anonymous/${status.shareSlug}`
-                          )
-                        }
-                        type="button"
-                      >
-                        {status.kind === "story" ? "OPEN STORY" : "OPEN"}
+                      <button className="primary-action" onClick={() => navigate(`/anonymous/${request.shareSlug}`)} type="button">
+                        OPEN MESSAGE
                         <IconComponent className="button-icon" name="arrow" />
                       </button>
                     </div>
                   </article>
-                ))}
-              </div>
+                ))
+              ) : (
+                <article className="anonymous-empty">
+                  <strong>No help requests yet</strong>
+                  <p>Readers who want to help will appear here after they open a message and request to help.</p>
+                </article>
+              )}
             </div>
-          </article>
-        ) : null}
+          </div>
+        </article>
       </section>
     </main>
   );

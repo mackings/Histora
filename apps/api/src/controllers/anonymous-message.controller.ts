@@ -2,18 +2,18 @@ import { z } from "zod";
 
 import {
   anonymousDistributionUpdateSchema,
-  anonymousHelpUnlockSchema,
   anonymousMessageCreateSchema
 } from "../shared/index.js";
 import { asyncHandler } from "../utils/async-handler.js";
 import {
+  acceptAnonymousHelpRequest,
   createAnonymousMessage,
   deleteAnonymousMessage,
   getAnonymousMessageForRecipient,
   getAnonymousMessageBySlug,
   listAnonymousInbox,
   listSentAnonymousMessages,
-  unlockAnonymousHelperContact,
+  requestAnonymousHelp,
   updateAnonymousDistribution
 } from "../services/anonymous-message.service.js";
 
@@ -37,7 +37,7 @@ export const listSentAnonymousMessagesController = asyncHandler(async (request, 
 
 export const getAnonymousMessageController = asyncHandler(async (request, response) => {
   const params = z.object({ shareSlug: z.string().min(1) }).parse(request.params);
-  const message = await getAnonymousMessageBySlug(params.shareSlug);
+  const message = await getAnonymousMessageBySlug(params.shareSlug, request.auth?.userId);
   response.status(200).json(message);
 });
 
@@ -54,16 +54,31 @@ export const updateAnonymousDistributionController = asyncHandler(async (request
   response.status(200).json(message);
 });
 
-export const unlockAnonymousHelperContactController = asyncHandler(async (request, response) => {
-  const params = z.object({ messageId: z.string().min(1) }).parse(request.params);
-  const body = anonymousHelpUnlockSchema.parse(request.body);
-  const message = await unlockAnonymousHelperContact({
+export const requestAnonymousHelpController = asyncHandler(async (request, response) => {
+  const params = z.object({ shareSlug: z.string().min(1) }).parse(request.params);
+  const message = await requestAnonymousHelp({
+    actorUserId: request.auth!.userId,
+    shareSlug: params.shareSlug
+  });
+  response.status(200).json(message);
+});
+
+export const acceptAnonymousHelpRequestController = asyncHandler(async (request, response) => {
+  const params = z.object({ messageId: z.string().min(1), requestId: z.string().min(1) }).parse(request.params);
+  const message = await acceptAnonymousHelpRequest({
     actorUserId: request.auth!.userId,
     messageId: params.messageId,
-    helper: {
-      name: body.helperName,
-      phone: body.helperPhone
-    }
+    requestId: params.requestId
+  });
+  response.status(200).json(message);
+});
+
+export const unlockAnonymousHelperContactController = asyncHandler(async (request, response) => {
+  const params = z.object({ messageId: z.string().min(1) }).parse(request.params);
+  const message = await acceptAnonymousHelpRequest({
+    actorUserId: request.auth!.userId,
+    messageId: params.messageId,
+    requestId: String(request.body?.requestId ?? "")
   });
   response.status(200).json(message);
 });

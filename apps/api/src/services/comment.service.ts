@@ -38,6 +38,26 @@ const toCommentResponse = (comment: {
   createdAt: comment.createdAt
 });
 
+const toAnonymousCommentResponse = (comment: {
+  id?: string;
+  _id?: unknown;
+  targetType: "status" | "storyChapter" | "anonymousMessage";
+  targetId: string;
+  body: string;
+  bodyEncrypted?: string | null;
+  replyToCommentId?: string;
+  createdAt: Date;
+}) => ({
+  id: comment.id ?? String(comment._id ?? ""),
+  targetType: comment.targetType,
+  targetId: comment.targetId,
+  authorName: "Anonymous",
+  authorUsername: "anonymous",
+  body: resolveDecryptedText(comment.body, comment.bodyEncrypted),
+  replyToCommentId: comment.replyToCommentId,
+  createdAt: comment.createdAt
+});
+
 async function assertStatusCommentAccess(statusId: string, viewerId?: string, shareSlug?: string) {
   return assertStatusViewerAccess(statusId, viewerId, shareSlug);
 }
@@ -89,8 +109,10 @@ export async function createComment(userId: string, payload: CommentCreateInput)
   let notificationTag = "";
   let notificationUrl = "/feed";
 
+  let anonymousResponse = false;
   if (payload.targetType === "status") {
     const status = await assertStatusCommentAccess(payload.targetId, userId, payload.shareSlug);
+    anonymousResponse = Boolean(status.anonymous && payload.shareSlug);
 
     status.commentsCount = Math.max(0, Number(status.commentsCount ?? 0) + 1);
     await status.save();
@@ -120,6 +142,7 @@ export async function createComment(userId: string, payload: CommentCreateInput)
     }
   } else {
     const message = await assertAnonymousMessageCommentAccess(payload.targetId, userId, payload.shareSlug);
+    anonymousResponse = true;
 
     message.commentsCount = Math.max(0, Number(message.commentsCount ?? 0) + 1);
     await message.save();
@@ -147,7 +170,7 @@ export async function createComment(userId: string, payload: CommentCreateInput)
 
   broadcastAppEvent(broadcastChannel, {
     kind: "comment.created",
-    comment: toCommentResponse({
+    comment: (anonymousResponse ? toAnonymousCommentResponse : toCommentResponse)({
       ...comment.toObject(),
       body: payload.body
     })
@@ -166,7 +189,7 @@ export async function createComment(userId: string, payload: CommentCreateInput)
       url: notificationUrl
     }).catch(() => undefined);
   }
-  return toCommentResponse(comment);
+  return (anonymousResponse ? toAnonymousCommentResponse : toCommentResponse)(comment);
 }
 
 export async function listComments(
@@ -175,12 +198,15 @@ export async function listComments(
   viewerId?: string,
   shareSlug?: string
 ) {
+  let anonymousResponse = false;
   if (targetType === "status") {
-    await assertStatusCommentAccess(targetId, viewerId, shareSlug);
+    const status = await assertStatusCommentAccess(targetId, viewerId, shareSlug);
+    anonymousResponse = Boolean(status.anonymous && shareSlug);
   } else if (targetType === "storyChapter") {
     await assertStoryChapterCommentAccess(targetId, viewerId);
   } else {
     await assertAnonymousMessageCommentAccess(targetId, viewerId, shareSlug);
+    anonymousResponse = true;
   }
 
   const comments = await CommentModel.find({ targetType, targetId })
@@ -188,5 +214,5 @@ export async function listComments(
     .limit(100)
     .select("targetType targetId authorName authorUsername body bodyEncrypted replyToCommentId createdAt");
 
-  return comments.map((comment) => toCommentResponse(comment));
+  return comments.map((comment) => (anonymousResponse ? toAnonymousCommentResponse : toCommentResponse)(comment));
 }

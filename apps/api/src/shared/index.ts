@@ -289,6 +289,10 @@ export const anonymousHelpUnlockSchema = z.object({
   helperPhone: plainTextSchema(7, 32, "Helper phone")
 });
 
+export const anonymousHelpRequestSchema = z.object({
+  shareSlug: z.string().min(1).max(120)
+});
+
 export const signedUploadSchema = z.object({
   fileName: z.string().min(1).max(240),
   contentType: z

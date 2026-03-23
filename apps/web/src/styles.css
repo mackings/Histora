@@ -3703,6 +3703,56 @@ textarea {
   gap: 18px;
 }
 
+.anonymous-help-requests-card,
+.anonymous-help-request-list,
+.anonymous-help-request-card,
+.anonymous-thread-list,
+.anonymous-thread-card {
+  display: grid;
+}
+
+.anonymous-help-requests-card,
+.anonymous-thread-list {
+  gap: 14px;
+}
+
+.anonymous-help-request-list {
+  gap: 12px;
+}
+
+.anonymous-help-request-card,
+.anonymous-thread-card {
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid #dbe7ff;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.anonymous-help-request-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.anonymous-help-request-card strong,
+.anonymous-thread-card p {
+  margin: 0;
+}
+
+.anonymous-help-request-card span,
+.anonymous-thread-card p,
+.anonymous-thread-copy p {
+  color: var(--muted);
+}
+
+.anonymous-reply-bar {
+  margin-top: 6px;
+}
+
+.anonymous-thread-copy {
+  gap: 0;
+}
+
 .status-composer-top,
 .status-composer-footer,
 .status-toolbar,
@@ -4297,6 +4347,10 @@ textarea {
   .anonymous-hub-card p {
     overflow-wrap: anywhere;
     word-break: break-word;
+  }
+
+  .anonymous-help-request-card {
+    grid-template-columns: 1fr;
   }
 
   .anonymous-hero-copy h1 {

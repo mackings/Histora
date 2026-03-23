@@ -17,7 +17,7 @@ export function AnonymousStatusPage({
   const { shareSlug = "" } = useParams();
   const navigate = useNavigate();
   const [status, setStatus] = useState<ApiStatus | null>(null);
-  const [comments, setComments] = useState<Array<{ author: string; text: string }>>([]);
+  const [comments, setComments] = useState<Array<{ text: string }>>([]);
   const [replyDraft, setReplyDraft] = useState("");
   const [feedback, setFeedback] = useState("");
 
@@ -52,7 +52,6 @@ export function AnonymousStatusPage({
       .then((statusComments) => {
         setComments(
           statusComments.map((comment) => ({
-            author: comment.authorName,
             text: comment.body
           }))
         );
@@ -77,7 +76,7 @@ export function AnonymousStatusPage({
         }
       });
 
-      setComments((current) => [{ author: createdComment.authorName, text: createdComment.body }, ...current]);
+      setComments((current) => [{ text: createdComment.body }, ...current]);
       setReplyDraft("");
       setFeedback("Reply posted.");
     } catch (error) {
@@ -115,12 +114,9 @@ export function AnonymousStatusPage({
           </div>
           <div className="feed-thread-list">
             {comments.map((comment, index) => (
-              <article className="feed-thread-item" key={`${comment.author}-${index}`}>
+              <article className="feed-thread-item" key={`anonymous-${index}`}>
                 <div className="feed-thread-line" aria-hidden="true" />
-                <div className="feed-thread-copy">
-                  <div className="feed-thread-head">
-                    <strong>{comment.author}</strong>
-                  </div>
+                <div className="feed-thread-copy anonymous-thread-copy">
                   <p>{comment.text}</p>
                 </div>
               </article>

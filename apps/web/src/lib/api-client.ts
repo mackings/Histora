@@ -45,6 +45,15 @@ export type ApiAnonymousMessage = {
   distribution: "app" | "external";
   commentsCount: number;
   helpFee: number;
+  viewerRole?: "recipient" | "reader" | "sender" | null;
+  canRequestHelp?: boolean;
+  helpRequests?: Array<{
+    id: string;
+    createdAt: string;
+    accepted: boolean;
+    helperName?: string | null;
+    helperUsername?: string | null;
+  }>;
   helperContact?: {
     name: string;
     phone: string;

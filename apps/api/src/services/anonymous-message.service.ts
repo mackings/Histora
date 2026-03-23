@@ -19,6 +19,7 @@ import {
 import { AppError } from "../utils/app-error.js";
 
 const buildShareSlug = () => `anon-${Date.now().toString(36)}-${crypto.randomBytes(6).toString("base64url")}`;
+const buildHelpRequestId = () => `help-${Date.now().toString(36)}-${crypto.randomBytes(5).toString("base64url")}`;
 const getAnonymousInboxChannel = (recipientUserId: string) => `anonymous:inbox:${recipientUserId}`;
 type AnonymousMessageResponseRecord = Pick<
   AnonymousMessageDocument,
@@ -29,6 +30,7 @@ type AnonymousMessageResponseRecord = Pick<
   | "distribution"
   | "commentsCount"
   | "helpFee"
+  | "helpRequests"
   | "helperContactNameEncrypted"
   | "helperContactPhoneEncrypted"
   | "createdAt"
@@ -39,7 +41,7 @@ type AnonymousMessageResponseRecord = Pick<
 
 const toAnonymousResponse = (
   message: AnonymousMessageResponseRecord,
-  options?: { includeHelperContact?: boolean }
+  options?: { includeHelperContact?: boolean; viewerRole?: "recipient" | "reader" | "sender" | null; includeHelpRequests?: boolean }
 ) => ({
   id: message.id ?? String(message._id ?? ""),
   recipientUsername: message.recipientUsername,
@@ -48,6 +50,18 @@ const toAnonymousResponse = (
   distribution: message.distribution,
   commentsCount: message.commentsCount,
   helpFee: message.helpFee,
+  viewerRole: options?.viewerRole ?? null,
+  canRequestHelp: options?.viewerRole === "reader",
+  helpRequests:
+    options?.includeHelpRequests
+      ? (message.helpRequests ?? []).map((request) => ({
+          id: request.id,
+          createdAt: request.createdAt,
+          accepted: Boolean(request.acceptedAt),
+          helperName: request.acceptedAt ? request.requesterName : null,
+          helperUsername: request.acceptedAt ? request.requesterUsername : null
+        }))
+      : [],
   helperContact:
     options?.includeHelperContact &&
     message.helperContactNameEncrypted && message.helperContactPhoneEncrypted
@@ -124,10 +138,16 @@ export async function listAnonymousInbox(userId: string) {
     .sort({ createdAt: -1 })
     .limit(100)
     .select(
-      "recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
+      "recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helpRequests helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
     );
 
-  return messages.map((message) => toAnonymousResponse(message));
+  return messages.map((message) =>
+    toAnonymousResponse(message, {
+      includeHelperContact: true,
+      includeHelpRequests: true,
+      viewerRole: "recipient"
+    })
+  );
 }
 
 export async function listSentAnonymousMessages(userId: string) {
@@ -135,22 +155,33 @@ export async function listSentAnonymousMessages(userId: string) {
     .sort({ createdAt: -1 })
     .limit(100)
     .select(
-      "recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
+      "recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helpRequests helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
     );
 
-  return messages.map((message) => toAnonymousResponse(message));
+  return messages.map((message) => toAnonymousResponse(message, { viewerRole: "sender" }));
 }
 
-export async function getAnonymousMessageBySlug(shareSlug: string) {
+export async function getAnonymousMessageBySlug(shareSlug: string, viewerUserId?: string) {
   const message = await AnonymousMessageModel.findOne({ shareSlug }).select(
-    "recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
+    "senderUserId recipientUserId recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helpRequests helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
   );
 
   if (!message) {
     throw new AppError("Anonymous message not found", 404);
   }
 
-  return toAnonymousResponse(message);
+  const viewerRole =
+    viewerUserId && String(message.recipientUserId) === viewerUserId
+      ? "recipient"
+      : viewerUserId && String(message.senderUserId ?? "") === viewerUserId
+        ? "sender"
+        : "reader";
+
+  return toAnonymousResponse(message, {
+    viewerRole,
+    includeHelperContact: viewerRole === "recipient",
+    includeHelpRequests: viewerRole === "recipient"
+  });
 }
 
 export async function updateAnonymousDistribution(userId: string, messageId: string, distribution: "app" | "external") {
@@ -182,14 +213,126 @@ export async function getAnonymousMessageForRecipient(userId: string, shareSlug:
     shareSlug,
     recipientUserId: userId
   }).select(
-    "recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
+    "recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helpRequests helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
   );
 
   if (!message) {
     throw new AppError("Anonymous message not found", 404);
   }
 
-  return toAnonymousResponse(message, { includeHelperContact: true });
+  return toAnonymousResponse(message, {
+    includeHelperContact: true,
+    includeHelpRequests: true,
+    viewerRole: "recipient"
+  });
+}
+
+export async function requestAnonymousHelp(input: {
+  actorUserId: string;
+  shareSlug: string;
+}) {
+  const [actor, message] = await Promise.all([
+    UserModel.findById(input.actorUserId).select("fullName username"),
+    AnonymousMessageModel.findOne({ shareSlug: input.shareSlug }).select(
+      "recipientUserId senderUserId recipientUsername body bodyEncrypted shareSlug distribution commentsCount helpFee helpRequests helperContactNameEncrypted helperContactPhoneEncrypted createdAt"
+    )
+  ]);
+
+  if (!actor || !message) {
+    throw new AppError("Anonymous message not found", 404);
+  }
+
+  if (String(message.recipientUserId) === input.actorUserId) {
+    throw new AppError("You cannot request to help your own anonymous message.", 400);
+  }
+
+  const existingPending = (message.helpRequests ?? []).find(
+    (request) => String(request.requesterUserId) === input.actorUserId && !request.acceptedAt
+  );
+  if (existingPending) {
+    return toAnonymousResponse(message, { viewerRole: "reader" });
+  }
+
+  const requesterUserId = actor._id as typeof message.helpRequests[number]["requesterUserId"];
+  message.helpRequests = [
+    ...(message.helpRequests ?? []),
+    {
+      id: buildHelpRequestId(),
+      requesterUserId,
+      requesterName: actor.fullName,
+      requesterUsername: actor.username,
+      createdAt: new Date(),
+      acceptedAt: null
+    }
+  ];
+  await message.save();
+
+  broadcastAppEvent(getAnonymousInboxChannel(String(message.recipientUserId)), {
+    kind: "anonymous.inbox.received",
+    message: {
+      id: message.id,
+      shareSlug: message.shareSlug,
+      body: resolveDecryptedText(message.body, message.bodyEncrypted),
+      distribution: message.distribution,
+      commentsCount: message.commentsCount,
+      createdAt: message.createdAt
+    }
+  });
+
+  await recordAuditEvent({
+    actorUserId: input.actorUserId,
+    targetUserId: String(message.recipientUserId),
+    entityType: "anonymousMessage",
+    entityId: message.id,
+    action: "anonymous-message.help-requested",
+    metadata: {
+      shareSlug: message.shareSlug
+    }
+  });
+
+  return toAnonymousResponse(message, { viewerRole: "reader" });
+}
+
+export async function acceptAnonymousHelpRequest(input: {
+  actorUserId: string;
+  messageId: string;
+  requestId: string;
+}) {
+  const message = await AnonymousMessageModel.findOne({
+    _id: input.messageId,
+    recipientUserId: input.actorUserId
+  });
+  if (!message) {
+    throw new AppError("Anonymous message not found", 404);
+  }
+
+  const targetRequest = (message.helpRequests ?? []).find((request) => request.id === input.requestId);
+  if (!targetRequest) {
+    throw new AppError("Help request not found", 404);
+  }
+
+  targetRequest.acceptedAt = targetRequest.acceptedAt ?? new Date();
+  message.helperContactNameEncrypted = encryptSensitiveValue(targetRequest.requesterName);
+  message.helperContactPhoneEncrypted = encryptSensitiveValue(`@${targetRequest.requesterUsername}`);
+  await message.save();
+
+  await recordAuditEvent({
+    actorUserId: input.actorUserId,
+    targetUserId: String(targetRequest.requesterUserId),
+    entityType: "anonymousMessage",
+    entityId: message.id,
+    action: "anonymous-message.help-request.accepted",
+    metadata: {
+      shareSlug: message.shareSlug,
+      requestId: input.requestId
+    }
+  });
+
+  return toAnonymousResponse(message, {
+    includeHelperContact: true,
+    includeHelpRequests: true,
+    viewerRole: "recipient"
+  });
 }
 
 export async function unlockAnonymousHelperContact(input: {

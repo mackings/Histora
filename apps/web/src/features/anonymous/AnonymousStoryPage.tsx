@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { type ApiAnonymousMessage, type ApiComment, apiRequest } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
 import { formatAnonymousMeta } from "../feed/support";
 import { type FeedIconComponent, type FeedSectionLabelComponent } from "../feed/ui-types";
-import { sampleHelperContacts } from "./support";
 
 export function AnonymousStoryPage({
   accessToken,
@@ -19,33 +18,43 @@ export function AnonymousStoryPage({
   const { shareSlug = "" } = useParams();
   const navigate = useNavigate();
   const [status, setStatus] = useState<ApiAnonymousMessage | null>(null);
-  const [comments, setComments] = useState<Array<{ author: string; text: string }>>([]);
+  const [comments, setComments] = useState<Array<{ text: string }>>([]);
   const [replyDraft, setReplyDraft] = useState("");
   const [shareFeedback, setShareFeedback] = useState("");
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [showHelpDialog, setShowHelpDialog] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const pendingHelpRequests = useMemo(
+    () => (status?.helpRequests ?? []).filter((request) => !request.accepted),
+    [status]
+  );
 
   useEffect(() => {
     let cancelled = false;
 
     const loadMessage = async () => {
+      setLoading(true);
+
       try {
-        const [publicMessage, privateMessage] = await Promise.all([
-          apiRequest<ApiAnonymousMessage>(`/anonymous-messages/${shareSlug}`),
-          apiRequest<ApiAnonymousMessage>(`/anonymous-messages/${shareSlug}/private`, { accessToken }).catch(
-            () => null
-          )
-        ]);
+        const privateMessage = accessToken
+          ? await apiRequest<ApiAnonymousMessage>(`/anonymous-messages/${shareSlug}/private`, { accessToken }).catch(() => null)
+          : null;
 
-        if (cancelled) {
-          return;
+        const activeMessage = privateMessage ?? (await apiRequest<ApiAnonymousMessage>(`/anonymous-messages/${shareSlug}`, { accessToken }));
+
+        if (!cancelled) {
+          setStatus(activeMessage);
+          setShareFeedback("");
         }
-
-        const activeMessage = privateMessage ?? publicMessage;
-        setStatus(activeMessage);
       } catch (error) {
         if (!cancelled) {
+          setStatus(null);
           setShareFeedback(getErrorMessage(error, "Could not load this anonymous message."));
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
         }
       }
     };
@@ -63,18 +72,14 @@ export function AnonymousStoryPage({
     }
 
     void apiRequest<ApiComment[]>(
-      `/comments?targetType=anonymousMessage&targetId=${encodeURIComponent(status.id)}&shareSlug=${encodeURIComponent(status.shareSlug)}`
+      `/comments?targetType=anonymousMessage&targetId=${encodeURIComponent(status.id)}&shareSlug=${encodeURIComponent(status.shareSlug)}`,
+      { accessToken }
     )
       .then((messageComments) => {
-        setComments(
-          messageComments.map((comment) => ({
-            author: comment.authorName,
-            text: comment.body
-          }))
-        );
+        setComments(messageComments.map((comment) => ({ text: comment.body })));
       })
       .catch(() => undefined);
-  }, [status?.id]);
+  }, [accessToken, status?.id, status?.shareSlug]);
 
   const submitReply = async () => {
     if (!status || !replyDraft.trim()) {
@@ -93,10 +98,7 @@ export function AnonymousStoryPage({
         }
       });
 
-      setComments((current) => [
-        { author: createdComment.authorName, text: createdComment.body },
-        ...current
-      ]);
+      setComments((current) => [{ text: createdComment.body }, ...current]);
       setStatus((current) =>
         current
           ? {
@@ -112,52 +114,65 @@ export function AnonymousStoryPage({
     }
   };
 
-  const confirmHelpRequest = async () => {
+  const submitHelpRequest = async () => {
     if (!status || !consentAccepted) {
       setShareFeedback("Accept the consent fee first to continue.");
       return;
     }
 
-    const helperContact = sampleHelperContacts[Math.abs(status.shareSlug.length) % sampleHelperContacts.length];
-
     try {
       const updatedMessage = await apiRequest<ApiAnonymousMessage>(
-        `/anonymous-messages/${status.id}/helper-contact/unlock`,
+        `/anonymous-messages/${status.shareSlug}/help-requests`,
         {
           method: "POST",
-          accessToken,
-          body: {
-            helperName: helperContact.name,
-            helperPhone: helperContact.phone
-          }
+          accessToken
         }
       );
 
       setStatus(updatedMessage);
       setShowHelpDialog(false);
       setConsentAccepted(false);
-      setShareFeedback(`Consent fee confirmed. ${helperContact.name} is now available to help.`);
+      setShareFeedback("Help request sent to the poster.");
     } catch (error) {
-      setShareFeedback(getErrorMessage(error, "Could not unlock helper contact."));
+      setShareFeedback(getErrorMessage(error, "Could not send your help request."));
     }
   };
 
-  const copyAnonymousLink = async () => {
-    if (!status || typeof window === "undefined" || typeof navigator === "undefined") {
+  const acceptHelpRequest = async (requestId: string) => {
+    if (!status) {
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(`${window.location.origin}/anonymous/${status.shareSlug}`);
-      setShareFeedback("Anonymous link copied.");
-    } catch {
-      setShareFeedback("Could not copy the anonymous link on this device.");
+      const updatedMessage = await apiRequest<ApiAnonymousMessage>(
+        `/anonymous-messages/${status.id}/help-requests/${requestId}/accept`,
+        {
+          method: "POST",
+          accessToken
+        }
+      );
+
+      setStatus(updatedMessage);
+      setShareFeedback("Help request accepted.");
+    } catch (error) {
+      setShareFeedback(getErrorMessage(error, "Could not accept the help request."));
     }
   };
 
+  if (loading) {
+    return (
+      <main className="feed-reader-shell anonymous-story-shell">
+        <article className="story-reader-stage card">
+          <SectionLabelComponent>ANONYMOUS_MESSAGE</SectionLabelComponent>
+          <h1>Loading anonymous message...</h1>
+        </article>
+      </main>
+    );
+  }
+
   if (!status) {
     return (
-      <main className="feed-reader-shell">
+      <main className="feed-reader-shell anonymous-story-shell">
         <article className="story-reader-stage card">
           <SectionLabelComponent>ANONYMOUS_MESSAGE</SectionLabelComponent>
           <h1>This anonymous message was not found.</h1>
@@ -180,9 +195,11 @@ export function AnonymousStoryPage({
           <button className="ghost-action" onClick={() => navigate("/anonymous")} type="button">
             BACK
           </button>
-          <button className="primary-action" onClick={() => setShowHelpDialog(true)} type="button">
-            RENDER HELP
-          </button>
+          {status.viewerRole === "reader" && status.canRequestHelp ? (
+            <button className="primary-action" onClick={() => setShowHelpDialog(true)} type="button">
+              REQUEST TO HELP
+            </button>
+          ) : null}
         </div>
       </section>
 
@@ -197,12 +214,6 @@ export function AnonymousStoryPage({
               <span>{formatAnonymousMeta(status.createdAt)}</span>
             </div>
           </div>
-          <div className="story-reader-stage-actions">
-            <button className="feed-action-pill" onClick={copyAnonymousLink} type="button">
-              <IconComponent className="inline-icon" name="share" />
-              Copy link
-            </button>
-          </div>
         </div>
 
         <div className="chapter-reader-head">
@@ -211,12 +222,42 @@ export function AnonymousStoryPage({
         <p className="chapter-reader-summary">{status.body}</p>
 
         {shareFeedback ? <p className="status-feedback">{shareFeedback}</p> : null}
-        {status.helperContact ? (
+        {status.viewerRole === "recipient" && status.helperContact ? (
           <div className="anonymous-helper-card">
-            <strong>Helper unlocked</strong>
+            <strong>Accepted helper</strong>
             <span>{status.helperContact.name}</span>
             <small>{status.helperContact.phone}</small>
           </div>
+        ) : null}
+
+        {status.viewerRole === "recipient" ? (
+          <section className="story-reader-footer-card anonymous-help-requests-card">
+            <div className="profile-section-copy">
+              <SectionLabelComponent>HELP</SectionLabelComponent>
+              <h2>Readers who want to help</h2>
+              <span>{pendingHelpRequests.length} pending request{pendingHelpRequests.length === 1 ? "" : "s"}.</span>
+            </div>
+            <div className="anonymous-help-request-list">
+              {pendingHelpRequests.length ? (
+                pendingHelpRequests.map((request) => (
+                  <article className="anonymous-help-request-card" key={request.id}>
+                    <div>
+                      <strong>Reader wants to help</strong>
+                      <span>{formatAnonymousMeta(request.createdAt)}</span>
+                    </div>
+                    <button className="primary-action" onClick={() => void acceptHelpRequest(request.id)} type="button">
+                      ACCEPT HELP
+                    </button>
+                  </article>
+                ))
+              ) : (
+                <article className="anonymous-empty">
+                  <strong>No help requests yet</strong>
+                  <p>Readers can request to help from this message page after they open it.</p>
+                </article>
+              )}
+            </div>
+          </section>
         ) : null}
 
         <section className="story-reader-footer-card">
@@ -224,15 +265,14 @@ export function AnonymousStoryPage({
             <SectionLabelComponent>THREAD</SectionLabelComponent>
             <h2>Anonymous advice thread</h2>
           </div>
-          <div className="story-comment-list">
+          <div className="anonymous-thread-list">
             {comments.map((comment, index) => (
-              <div className="story-comment-card" key={`${comment.author}-${index}`}>
-                <strong>{comment.author}</strong>
+              <div className="anonymous-thread-card" key={`comment-${index}`}>
                 <p>{comment.text}</p>
               </div>
             ))}
           </div>
-          <div className="story-reply-bar">
+          <div className="story-reply-bar anonymous-reply-bar">
             <input onChange={(event) => setReplyDraft(event.target.value)} placeholder="Reply anonymously..." value={replyDraft} />
             <button className="primary-action" onClick={() => void submitReply()} type="button">
               Send anonymous reply
@@ -247,20 +287,20 @@ export function AnonymousStoryPage({
             <div className="status-composer-top">
               <div>
                 <SectionLabelComponent>CONSENT_FEE</SectionLabelComponent>
-                <h3>Render help for this anonymous message</h3>
+                <h3>Request to help this anonymous poster</h3>
               </div>
               <button aria-label="Close help dialog" className="icon-chip" onClick={() => setShowHelpDialog(false)} type="button">
                 <IconComponent className="button-icon" name="close" />
               </button>
             </div>
-            <p>To protect privacy, helpers pay a consent fee of ${status.helpFee} before any contact request can be passed to the poster.</p>
+            <p>You are requesting to help the poster. Your identity stays hidden until the poster accepts your help request.</p>
             <label className="toggle-row">
               <input checked={consentAccepted} onChange={(event) => setConsentAccepted(event.target.checked)} type="checkbox" />
               <span>I accept the consent fee and privacy terms for this help request.</span>
             </label>
             <div className="status-composer-footer">
               <button className="ghost-action" onClick={() => setShowHelpDialog(false)} type="button">Cancel</button>
-              <button className="primary-action" onClick={() => void confirmHelpRequest()} type="button">Pay consent fee</button>
+              <button className="primary-action" onClick={() => void submitHelpRequest()} type="button">Send help request</button>
             </div>
           </article>
         </div>
