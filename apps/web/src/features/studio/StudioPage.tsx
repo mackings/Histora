@@ -430,8 +430,10 @@ export function StudioPage({
   const restoredLocalDraftRef = useRef(false);
   const chaptersRef = useRef<StudioChapter[]>([]);
   const currentStoryIdRef = useRef<string | null>(null);
+  const currentStoryRevisionRef = useRef(0);
   const persistStoryQueueRef = useRef<Promise<ApiStory | null>>(Promise.resolve(null));
   const collaborationRequestHandledRef = useRef(false);
+  const suppressAutoSavePassesRef = useRef(0);
 
   const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
   const studioStorageKey = "histora-studio-local-draft-v1";
@@ -703,6 +705,10 @@ export function StudioPage({
   }, [currentStoryId]);
 
   useEffect(() => {
+    currentStoryRevisionRef.current = currentStoryRevision;
+  }, [currentStoryRevision]);
+
+  useEffect(() => {
     setImageAttachments(activeChapterEntry?.imageAttachments ?? []);
     setVoiceNotes(activeChapterEntry?.voiceNotes ?? []);
     setTimelineEntries(activeChapterEntry?.timelineEntries?.length ? activeChapterEntry.timelineEntries : [createEmptyTimelineEntry()]);
@@ -718,9 +724,11 @@ export function StudioPage({
         ? mergeFetchedDraftChapters(chaptersRef.current, fetchedChapters)
         : fetchedChapters;
 
+    suppressAutoSavePassesRef.current += 1;
     setCurrentStoryId(story.id);
     setCurrentStoryStatus(story.status);
     setCurrentStoryRevision(story.collaborationRevision ?? 0);
+    currentStoryRevisionRef.current = story.collaborationRevision ?? 0;
     setCurrentStoryCanEdit(story.canEdit ?? true);
     setCurrentStoryCollaborators(story.collaborators ?? []);
     setCurrentStoryLastEditedByName(story.lastEditedByName ?? null);
@@ -742,6 +750,7 @@ export function StudioPage({
     invalidatePreviewReview();
     void hydrateStudioChaptersForMedia(accessToken, nextChapters)
       .then((hydratedChapters) => {
+        suppressAutoSavePassesRef.current += 1;
         setChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)]);
       })
       .catch(() => undefined);
@@ -758,6 +767,7 @@ export function StudioPage({
 
     restoredLocalDraftRef.current = false;
     lastAutoSavedSignatureRef.current = "";
+    currentStoryRevisionRef.current = 0;
     currentStoryIdRef.current = null;
     chaptersRef.current = [initialChapter];
     imageAttachmentsRef.current = [];
@@ -2217,6 +2227,12 @@ export function StudioPage({
     }
 
     const timer = window.setTimeout(() => {
+      if (suppressAutoSavePassesRef.current > 0) {
+        lastAutoSavedSignatureRef.current = autoSaveSignature;
+        suppressAutoSavePassesRef.current -= 1;
+        return;
+      }
+
       if (autoSaveSignature === lastAutoSavedSignatureRef.current) {
         return;
       }
@@ -2501,6 +2517,7 @@ export function StudioPage({
         setCurrentStoryId(story.id);
         setCurrentStoryStatus(story.status);
         setCurrentStoryRevision(story.collaborationRevision ?? 0);
+        currentStoryRevisionRef.current = story.collaborationRevision ?? 0;
         setCurrentStoryCanEdit(story.canEdit ?? true);
         setCurrentStoryCollaborators(story.collaborators ?? []);
         setCurrentStoryLastEditedByName(story.lastEditedByName ?? null);
@@ -2579,7 +2596,7 @@ export function StudioPage({
       }
 
       const nextRevision = message.payload.revision ?? 0;
-      if (nextRevision <= currentStoryRevision) {
+      if (nextRevision <= currentStoryRevisionRef.current) {
         return;
       }
 

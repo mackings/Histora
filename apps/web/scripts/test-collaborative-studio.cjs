@@ -253,7 +253,12 @@ async function run() {
 
   await collaboratorPage.getByRole("button", { name: /load latest version/i }).waitFor({ state: "visible", timeout: 15000 });
   await collaboratorPage.getByRole("button", { name: /load latest version/i }).click();
-  await collaboratorPage.waitForTimeout(1200);
+  await collaboratorPage.waitForTimeout(2600);
+
+  const ownerFalseUpdateSignal = await ownerPage.getByRole("button", { name: /load latest version/i }).isVisible().catch(() => false);
+  if (ownerFalseUpdateSignal) {
+    throw new Error("Owner received a false collaborative update prompt after the collaborator only loaded the latest version.");
+  }
 
   const collaboratorBody = await collaboratorPage.locator(".editor-surface").innerText();
   if (!collaboratorBody.includes(updatedBodyText)) {
@@ -314,6 +319,7 @@ async function run() {
         collaboratorRevision: collaboratorPrivacyAttempt.collaborationRevision,
         collaboratorAudit,
         latestBodyLoaded: collaboratorBody.includes(updatedBodyText),
+        ownerReceivedFalseUpdatePrompt: ownerFalseUpdateSignal,
         ownerOpenedNormalStudioBeforeAccept: true,
         privacyRemainedPrivate: collaboratorPrivacyAttempt.visibility === "private",
         anonymousRemainedFalse: collaboratorPrivacyAttempt.anonymous === false
