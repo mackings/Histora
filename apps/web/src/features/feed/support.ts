@@ -41,6 +41,7 @@ export type AnonymousFeedSource = {
   slug: string;
   title: string;
   excerpt: string;
+  createdAt?: string;
   imageUrl?: string | null;
   meta: string;
   comments: Array<{ author: string; text: string }>;

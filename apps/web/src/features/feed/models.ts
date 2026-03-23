@@ -28,6 +28,7 @@ export type FeedStoryRecord = (typeof feedPreview)[number] & {
   slug: string;
   coverImageUrl?: string | null;
   anonymous: boolean;
+  updatedAt?: string;
   authorVerified: boolean;
   shares: number;
   likes: number;
@@ -86,6 +87,7 @@ export const toFeedStoryRecord = (story: ApiFeedStory): FeedStoryRecord => ({
   saves: String(story.bookmarksCount),
   slug: story.slug,
   anonymous: story.anonymous,
+  updatedAt: story.updatedAt,
   authorVerified: story.authorVerified,
   shares: story.sharesCount,
   likes: story.likesCount,
@@ -124,6 +126,7 @@ export const buildFeedStories = (): FeedStoryRecord[] =>
     coverImageUrl: null,
     slug: slugifyStoryTitle(post.title),
     anonymous: post.visibility === "ANON",
+    updatedAt: undefined,
     authorVerified: false,
     shares: [48, 31, 66][index] ?? 12,
     likes: [428, 213, 689][index] ?? 120,

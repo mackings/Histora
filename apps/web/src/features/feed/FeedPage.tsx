@@ -828,6 +828,7 @@ export function FeedPage({
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [pendingFeedActions, setPendingFeedActions] = useState<Record<string, boolean>>({});
   const [shareFeedback, setShareFeedback] = useState("");
+  const anonymousStripRef = useRef<HTMLDivElement | null>(null);
   const anonymousFeedPosts = feedPosts.filter((post) => post.anonymous);
 
   const openStory = (story: FeedStoryRecord) => navigate(`/feed/story/${story.slug}`, { state: { prefetchedStory: story } });
@@ -887,6 +888,7 @@ export function FeedPage({
       slug: status.shareSlug ?? status.id,
       title: "Anonymous status",
       excerpt: status.body,
+      createdAt: status.createdAt,
       imageUrl: status.imageUrl ?? null,
       meta: formatAnonymousMeta(status.createdAt),
       comments: [],
@@ -901,6 +903,7 @@ export function FeedPage({
       slug: post.slug,
       title: post.title,
       excerpt: post.excerpt,
+      createdAt: post.updatedAt,
       imageUrl: post.coverImageUrl ?? null,
       meta: `${post.reads} reads`,
       comments: (post.chapters[0]?.comments ?? []).map((comment) => ({ author: comment.author, text: comment.text })),
@@ -909,7 +912,11 @@ export function FeedPage({
       sourceType: "story" as const,
       targetType: "storyChapter" as const
     }))
-  ];
+  ].sort((left, right) => {
+    const rightTime = right.createdAt ? new Date(right.createdAt).getTime() : 0;
+    const leftTime = left.createdAt ? new Date(left.createdAt).getTime() : 0;
+    return rightTime - leftTime;
+  });
   const anonymousFeedMessages = anonymousFeedSources.flatMap((source) => {
     const chapterReplies =
       source.comments.slice(0, 2).map((comment, index) => ({
@@ -939,6 +946,17 @@ export function FeedPage({
   });
   const activeAnonymousMessage = activeAnonymousIndex === null ? null : anonymousFeedMessages[activeAnonymousIndex] ?? null;
   const activeAnonymousPost = activeAnonymousMessage ? anonymousFeedSources.find((source) => source.slug === activeAnonymousMessage.postSlug) ?? null : null;
+
+  useEffect(() => {
+    if (!anonymousStripRef.current || !anonymousFeedMessages.length) {
+      return;
+    }
+
+    anonymousStripRef.current.scrollTo({
+      left: 0,
+      behavior: "smooth"
+    });
+  }, [anonymousFeedMessages[0]?.id, anonymousFeedMessages.length]);
 
   const toggleFeedLike = (slug: string) => {
     const targetPost = feedPosts.find((post) => post.slug === slug);
@@ -1219,7 +1237,7 @@ export function FeedPage({
                     </div>
                     <span aria-label="Scroll sideways" className="section-meta">↔</span>
                   </div>
-                  <div className="status-scroll anonymous-status-strip">
+                  <div className="status-scroll anonymous-status-strip" ref={anonymousStripRef}>
                     {anonymousFeedMessages.map((message, messageIndex) => (
                       <button
                         className="anonymous-message-card"
