@@ -1882,7 +1882,18 @@ export function StudioPage({
           return updated;
         });
         lastLocalMediaActivityAtRef.current = Date.now();
-        queueCollaborativeDraftUpdate(replaceTargetUrl ? "image-replaced" : "image-uploaded", { immediate: true });
+        const nextReason = replaceTargetUrl ? "image-replaced" : "image-uploaded";
+        if (currentStoryIdRef.current && currentStoryCollaborators.length > 0 && currentStoryCanEdit) {
+          void persistCollaborativeMediaDraft()
+            .then(() => {
+              queueCollaborativeDraftUpdate(nextReason, { immediate: true });
+            })
+            .catch((error) => {
+              setStudioMessage(getErrorMessage(error, "Could not sync collaborative media yet."));
+            });
+        } else {
+          queueCollaborativeDraftUpdate(nextReason, { immediate: true });
+        }
         setVoiceRecordingStatus(replaceTargetUrl ? "Image replaced." : "Image attachments saved.");
       })
       .catch((error) => {
@@ -2005,7 +2016,17 @@ export function StudioPage({
               return updated;
             });
             lastLocalMediaActivityAtRef.current = Date.now();
-            queueCollaborativeDraftUpdate("voice-uploaded", { immediate: true });
+            if (currentStoryIdRef.current && currentStoryCollaborators.length > 0 && currentStoryCanEdit) {
+              void persistCollaborativeMediaDraft()
+                .then(() => {
+                  queueCollaborativeDraftUpdate("voice-uploaded", { immediate: true });
+                })
+                .catch((error) => {
+                  setStudioMessage(getErrorMessage(error, "Could not sync collaborative media yet."));
+                });
+            } else {
+              queueCollaborativeDraftUpdate("voice-uploaded", { immediate: true });
+            }
             setVoiceRecordingStatus("Recording stopped. Voice note saved.");
           })
           .catch((error) => {
@@ -3440,6 +3461,81 @@ export function StudioPage({
       }
     }
 
+    const activeStoryId = currentStoryIdRef.current;
+    if (activeStoryId && !protectActiveMedia) {
+      void hydrateStudioChaptersForMedia(accessToken, [sanitizedRemoteChapter], { storyId: activeStoryId })
+        .then(([hydratedRemoteChapter]) => {
+          if (!hydratedRemoteChapter || currentStoryIdRef.current !== activeStoryId) {
+            return;
+          }
+
+          setChapters((current) => {
+            const hydratedTargetIndex = findCollaborativeChapterIndex(current, snapshot);
+            if (hydratedTargetIndex < 0) {
+              return current;
+            }
+
+            const currentChapter = current[hydratedTargetIndex];
+            if (!currentChapter) {
+              return current;
+            }
+
+            const imageCollectionStillPendingHydration = attachmentCollectionsMatch(
+              currentChapter.imageAttachments,
+              sanitizedRemoteChapter.imageAttachments
+            );
+            const voiceCollectionStillPendingHydration = attachmentCollectionsMatch(
+              currentChapter.voiceNotes,
+              sanitizedRemoteChapter.voiceNotes
+            );
+
+            if (!imageCollectionStillPendingHydration && !voiceCollectionStillPendingHydration) {
+              return current;
+            }
+
+            const nextChapters = [...current];
+            nextChapters[hydratedTargetIndex] = {
+              ...currentChapter,
+              imageAttachments: imageCollectionStillPendingHydration
+                ? hydratedRemoteChapter.imageAttachments
+                : currentChapter.imageAttachments,
+              voiceNotes: voiceCollectionStillPendingHydration
+                ? hydratedRemoteChapter.voiceNotes
+                : currentChapter.voiceNotes
+            };
+            return nextChapters;
+          });
+
+          const latestActiveIndex = Math.max(
+            chaptersRef.current.findIndex((chapter) => chapter.title === activeChapterRef.current),
+            0
+          );
+          const latestTargetIndex = findCollaborativeChapterIndex(chaptersRef.current, snapshot);
+          if ((latestTargetIndex >= 0 ? latestTargetIndex : snapshot.activeChapterIndex) === latestActiveIndex) {
+            setImageAttachments((current) =>
+              attachmentCollectionsMatch(current, sanitizedRemoteChapter.imageAttachments)
+                ? hydratedRemoteChapter.imageAttachments
+                : current
+            );
+            setVoiceNotes((current) =>
+              attachmentCollectionsMatch(current, sanitizedRemoteChapter.voiceNotes)
+                ? hydratedRemoteChapter.voiceNotes
+                : current
+            );
+          }
+
+          logStudioCollaboration("hydrated draft media", {
+            storyId: activeStoryId,
+            updatedByName: options?.updatedByName,
+            updatedByUsername: options?.updatedByUsername,
+            reason: options?.reason ?? "draft-update",
+            imageCount: hydratedRemoteChapter.imageAttachments.length,
+            voiceCount: hydratedRemoteChapter.voiceNotes.length
+          });
+        })
+        .catch(() => undefined);
+    }
+
     logStudioCollaboration("applied draft update", {
       storyId: currentStoryIdRef.current,
       updatedByName: options?.updatedByName,
@@ -3647,6 +3743,40 @@ export function StudioPage({
 
     persistStoryQueueRef.current = nextPersist;
     return await nextPersist;
+  };
+
+  const persistCollaborativeMediaDraft = async () => {
+    if (!currentStoryIdRef.current || currentStoryCollaborators.length === 0 || !currentStoryCanEdit) {
+      return null;
+    }
+
+    if (!hasRemoteStudioBaselineLoaded()) {
+      return null;
+    }
+
+    const latestBody = getLatestChapterBody();
+    const targetIndex = Math.max(
+      chaptersRef.current.findIndex((chapter) => chapter.title === activeChapterRef.current),
+      0
+    );
+    const collaborativeSnapshotChapters = chaptersRef.current.map((chapter, index) =>
+      index === targetIndex
+        ? {
+            ...chapter,
+            body: latestBody,
+            words: getChapterWordCount(latestBody),
+            imageAttachments: sanitizeStudioAttachments([...imageAttachmentsRef.current]),
+            voiceNotes: sanitizeStudioAttachments([...voiceNotesRef.current], "Recorded in studio"),
+            timelineEntries: [...timelineEntriesRef.current].length ? [...timelineEntriesRef.current] : [createEmptyTimelineEntry()]
+          }
+        : chapter
+    );
+
+    if (!canPersistStoryRemotely(collaborativeSnapshotChapters)) {
+      return null;
+    }
+
+    return await persistStory(buildStoryPayload("draft", collaborativeSnapshotChapters), "Autosaved.");
   };
 
   const loadLatestCollaborativeVersion = async () => {
