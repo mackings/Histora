@@ -1582,9 +1582,6 @@ export function StudioPage({
       if (savedDraft.activeChapter) {
         setActiveChapter(savedDraft.activeChapter);
       }
-      if (savedDraft.currentStoryId || (Array.isArray(savedDraft.chapters) && savedDraft.chapters.length > 0)) {
-        setIsStudioEditorOpen(true);
-      }
       if (savedDraft.currentStoryId) {
         setCurrentStoryId(savedDraft.currentStoryId);
       }
