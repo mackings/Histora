@@ -7,8 +7,8 @@ import { asyncHandler } from "../utils/async-handler.js";
 import { recordAuditEvent } from "../services/audit.service.js";
 import { AppError } from "../utils/app-error.js";
 import { env } from "../config/env.js";
+import { canReadStoryMediaObject } from "../services/story.service.js";
 import {
-  assertOwnedObjectKey,
   createSignedReadUrl,
   createSignedUploadUrl,
   uploadObjectDirect
@@ -152,8 +152,19 @@ export const createSignedUploadController = asyncHandler(async (request, respons
 });
 
 export const createSignedReadController = asyncHandler(async (request, response) => {
-  const query = z.object({ objectKey: z.string().min(1).max(500) }).parse(request.query);
-  assertOwnedObjectKey(request.auth!.userId, query.objectKey);
+  const query = z.object({
+    objectKey: z.string().min(1).max(500),
+    storyId: z.string().min(1).max(120).optional()
+  }).parse(request.query);
+  const isOwnedByRequester = query.objectKey.startsWith(`users/${request.auth!.userId}/`);
+  const canReadViaStory = !isOwnedByRequester && query.storyId
+    ? await canReadStoryMediaObject(request.auth!.userId, query.storyId, query.objectKey)
+    : false;
+
+  if (!isOwnedByRequester && !canReadViaStory) {
+    throw new AppError("You do not have access to this media object.", 403);
+  }
+
   const result = await createSignedReadUrl({
     objectKey: query.objectKey
   });
@@ -162,7 +173,8 @@ export const createSignedReadController = asyncHandler(async (request, response)
     actorUserId: request.auth!.userId,
     entityType: "mediaUpload",
     entityId: query.objectKey,
-    action: "signed-read.created"
+    action: "signed-read.created",
+    metadata: query.storyId ? { storyId: query.storyId } : undefined
   });
 
   response.status(200).json(result);

@@ -49,7 +49,91 @@ const createEmptyStoryLink = (): StudioExternalLink => ({
 const getStudioAttachmentStorageUrl = (attachment: { url: string; objectKey?: string }) =>
   attachment.objectKey || extractStudioOwnedObjectKey(attachment.url) || (attachment.url && !isBlobUrl(attachment.url) ? attachment.url : "");
 
-async function resolveStudioAttachmentUrl(accessToken: string, attachment: StudioMediaAttachment) {
+const normalizeStudioMediaReference = (value?: string | null) =>
+  extractStudioOwnedObjectKey(value) ?? value ?? undefined;
+
+const toComparableStoryPayload = (
+  payload: StudioPublishPayload["payload"]
+): Omit<StudioPublishPayload["payload"], "expectedRevision"> => ({
+  title: payload.title,
+  summary: payload.summary,
+  coverImageUrl: normalizeStudioMediaReference(payload.coverImageUrl),
+  visibility: payload.visibility,
+  anonymous: payload.anonymous,
+  allowedViewerIds: [...payload.allowedViewerIds].map(String).sort(),
+  tags: [...payload.tags],
+  links: payload.links.map((link) => ({
+    label: link.label,
+    url: link.url,
+    kind: link.kind
+  })),
+  status: payload.status,
+  chapters: payload.chapters.map((chapter) => ({
+    id: chapter.id,
+    title: chapter.title,
+    body: sanitizeStudioRichText(chapter.body),
+    type: chapter.type,
+    order: chapter.order,
+    imageUrls: chapter.imageUrls.map((imageUrl) => normalizeStudioMediaReference(imageUrl) ?? imageUrl).filter(Boolean),
+    voiceNoteUrl: normalizeStudioMediaReference(chapter.voiceNoteUrl),
+    moments: chapter.moments.map((moment) => ({
+      id: moment.id,
+      title: moment.title,
+      description: moment.description,
+      happenedAt: new Date(moment.happenedAt).toISOString(),
+      imageUrls: moment.imageUrls.map((imageUrl) => normalizeStudioMediaReference(imageUrl) ?? imageUrl).filter(Boolean),
+      voiceNoteUrl: normalizeStudioMediaReference(moment.voiceNoteUrl)
+    }))
+  }))
+});
+
+const serializeComparableStoryPayload = (payload: Omit<StudioPublishPayload["payload"], "expectedRevision">) =>
+  JSON.stringify(payload);
+
+const buildComparableApiStoryPayload = (
+  story: ApiStory
+): Omit<StudioPublishPayload["payload"], "expectedRevision"> => ({
+  title: story.title,
+  summary: story.summary,
+  coverImageUrl: normalizeStudioMediaReference(story.coverImageKey ?? story.coverImageUrl ?? undefined),
+  visibility: story.visibility,
+  anonymous: story.anonymous,
+  allowedViewerIds: [],
+  tags: [...story.tags],
+  links: (story.links ?? []).map((link) => ({
+    label: link.label,
+    url: link.url,
+    kind: link.kind
+  })),
+  status: story.status,
+  chapters: story.chapters.map((chapter, index) => ({
+    id: chapter.id,
+    title: chapter.title,
+    body: sanitizeStudioRichText(chapter.body),
+    type: chapter.type,
+    order: chapter.order ?? index + 1,
+    imageUrls: (chapter.imageKeys ?? chapter.imageUrls ?? [])
+      .map((imageUrl) => normalizeStudioMediaReference(imageUrl) ?? imageUrl)
+      .filter(Boolean),
+    voiceNoteUrl: normalizeStudioMediaReference(chapter.voiceNoteKey ?? chapter.voiceNoteUrl ?? undefined),
+    moments: (chapter.moments ?? []).map((moment) => ({
+      id: moment.id,
+      title: moment.title,
+      description: moment.description,
+      happenedAt: new Date(moment.happenedAt).toISOString(),
+      imageUrls: (moment.imageKeys ?? moment.imageUrls ?? [])
+        .map((imageUrl) => normalizeStudioMediaReference(imageUrl) ?? imageUrl)
+        .filter(Boolean),
+      voiceNoteUrl: normalizeStudioMediaReference(moment.voiceNoteKey ?? moment.voiceNoteUrl ?? undefined)
+    }))
+  }))
+});
+
+async function resolveStudioAttachmentUrl(
+  accessToken: string,
+  attachment: StudioMediaAttachment,
+  options?: { storyId?: string | null }
+) {
   const storageKey =
     (attachment.objectKey && isOwnedStorageObjectKey(attachment.objectKey) ? attachment.objectKey : null) ||
     extractStudioOwnedObjectKey(attachment.url);
@@ -57,8 +141,13 @@ async function resolveStudioAttachmentUrl(accessToken: string, attachment: Studi
     return attachment;
   }
 
+  const query = new URLSearchParams({ objectKey: storageKey });
+  if (options?.storyId) {
+    query.set("storyId", options.storyId);
+  }
+
   const signedRead = await apiRequest<SignedReadResponse>(
-    `/media/signed-read?objectKey=${encodeURIComponent(storageKey)}`,
+    `/media/signed-read?${query.toString()}`,
     { accessToken }
   );
 
@@ -69,15 +158,23 @@ async function resolveStudioAttachmentUrl(accessToken: string, attachment: Studi
   };
 }
 
-async function hydrateStudioChaptersForMedia(accessToken: string, chapters: StudioChapter[]) {
+async function hydrateStudioChaptersForMedia(
+  accessToken: string,
+  chapters: StudioChapter[],
+  options?: { storyId?: string | null }
+) {
   return Promise.all(
     chapters.map(async (chapter) => ({
       ...chapter,
       imageAttachments: await Promise.all(
-        chapter.imageAttachments.map((attachment) => resolveStudioAttachmentUrl(accessToken, attachment))
+        chapter.imageAttachments.map((attachment) =>
+          resolveStudioAttachmentUrl(accessToken, attachment, options).catch(() => attachment)
+        )
       ),
       voiceNotes: await Promise.all(
-        chapter.voiceNotes.map((voice) => resolveStudioAttachmentUrl(accessToken, voice))
+        chapter.voiceNotes.map((voice) =>
+          resolveStudioAttachmentUrl(accessToken, voice, options).catch(() => voice)
+        )
       )
     }))
   );
@@ -477,6 +574,8 @@ export function StudioPage({
   const chaptersRef = useRef<StudioChapter[]>([]);
   const currentStoryIdRef = useRef<string | null>(null);
   const currentStoryRevisionRef = useRef(0);
+  const currentStoryStatusRef = useRef<"draft" | "published">("draft");
+  const localComparableStorySignatureRef = useRef<string | null>(null);
   const persistStoryQueueRef = useRef<Promise<ApiStory | null>>(Promise.resolve(null));
   const collaborationRequestHandledRef = useRef(false);
   const suppressAutoSavePassesRef = useRef(0);
@@ -755,6 +854,10 @@ export function StudioPage({
   }, [currentStoryRevision]);
 
   useEffect(() => {
+    currentStoryStatusRef.current = currentStoryStatus;
+  }, [currentStoryStatus]);
+
+  useEffect(() => {
     setImageAttachments(activeChapterEntry?.imageAttachments ?? []);
     setVoiceNotes(activeChapterEntry?.voiceNotes ?? []);
     setTimelineEntries(activeChapterEntry?.timelineEntries?.length ? activeChapterEntry.timelineEntries : [createEmptyTimelineEntry()]);
@@ -794,7 +897,7 @@ export function StudioPage({
     setStudioMessage(`Loaded ${story.title}.`);
     setStudioNotice(null);
     invalidatePreviewReview();
-    void hydrateStudioChaptersForMedia(accessToken, nextChapters)
+    void hydrateStudioChaptersForMedia(accessToken, nextChapters, { storyId: story.id })
       .then((hydratedChapters) => {
         suppressAutoSavePassesRef.current += 1;
         setChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)]);
@@ -813,7 +916,9 @@ export function StudioPage({
 
     restoredLocalDraftRef.current = false;
     lastAutoSavedSignatureRef.current = "";
+    localComparableStorySignatureRef.current = null;
     currentStoryRevisionRef.current = 0;
+    currentStoryStatusRef.current = "draft";
     currentStoryIdRef.current = null;
     chaptersRef.current = [initialChapter];
     imageAttachmentsRef.current = [];
@@ -1015,7 +1120,7 @@ export function StudioPage({
           .filter((chapter) => !isLegacySeedChapter(chapter));
 
         setChapters(restoredChapters);
-        void hydrateStudioChaptersForMedia(accessToken, restoredChapters)
+        void hydrateStudioChaptersForMedia(accessToken, restoredChapters, { storyId: savedDraft.currentStoryId ?? null })
           .then((hydratedChapters) => {
             if (!cancelled) {
               setChapters(hydratedChapters);
@@ -2546,6 +2651,34 @@ export function StudioPage({
     };
   };
 
+  const buildLocalComparableStorySignature = () =>
+    serializeComparableStoryPayload(
+      toComparableStoryPayload(buildStoryPayload(currentStoryStatusRef.current, getLiveChaptersSnapshot()))
+    );
+
+  useEffect(() => {
+    if (!currentStoryId) {
+      localComparableStorySignatureRef.current = null;
+      return;
+    }
+
+    localComparableStorySignatureRef.current = buildLocalComparableStorySignature();
+  }, [
+    activeChapter,
+    anonymous,
+    chapters,
+    currentStoryId,
+    currentStoryStatus,
+    imageAttachments,
+    liveEditorBody,
+    storyLinks,
+    storySummary,
+    storyTitle,
+    timelineEntries,
+    visibility,
+    voiceNotes
+  ]);
+
   const validateStoryBeforePersist = () => {
     const summaryWords = storySummary.trim().split(/\s+/).filter(Boolean).length;
 
@@ -2681,13 +2814,50 @@ export function StudioPage({
         return;
       }
 
-      setRemoteCollaborationUpdate({
-        revision: nextRevision,
-        updatedAt: message.payload.updatedAt ?? new Date().toISOString(),
-        updatedByName: message.payload.updatedByName ?? "A collaborator",
-        updatedByUsername: message.payload.updatedByUsername ?? "collaborator"
-      });
-      setStudioMessage(`${message.payload.updatedByName ?? "A collaborator"} updated this story. Your local draft is still safe.`);
+      const targetStoryId = currentStoryIdRef.current;
+      if (!targetStoryId) {
+        return;
+      }
+
+      void apiRequest<ApiStory>(`/stories/mine/${targetStoryId}`, { accessToken })
+        .then((latestStory) => {
+          if (currentStoryIdRef.current !== targetStoryId) {
+            return;
+          }
+
+          const remoteComparableSignature = serializeComparableStoryPayload(buildComparableApiStoryPayload(latestStory));
+          if (remoteComparableSignature === localComparableStorySignatureRef.current) {
+            setCurrentStoryStatus(latestStory.status);
+            currentStoryStatusRef.current = latestStory.status;
+            setCurrentStoryRevision(latestStory.collaborationRevision ?? nextRevision);
+            currentStoryRevisionRef.current = latestStory.collaborationRevision ?? nextRevision;
+            setCurrentStoryCanEdit(latestStory.canEdit ?? true);
+            setCurrentStoryCollaborators(latestStory.collaborators ?? []);
+            setCurrentStoryLastEditedByName(latestStory.lastEditedByName ?? null);
+            setCurrentStoryLastEditedByUsername(latestStory.lastEditedByUsername ?? null);
+            setCurrentStoryLastEditedAt(latestStory.lastEditedAt ?? null);
+            setCurrentStoryIsOwner(Boolean(latestStory.isOwner ?? true));
+            setRemoteCollaborationUpdate(null);
+            return;
+          }
+
+          setRemoteCollaborationUpdate({
+            revision: latestStory.collaborationRevision ?? nextRevision,
+            updatedAt: latestStory.lastEditedAt ?? message.payload?.updatedAt ?? new Date().toISOString(),
+            updatedByName: latestStory.lastEditedByName ?? message.payload?.updatedByName ?? "A collaborator",
+            updatedByUsername: latestStory.lastEditedByUsername ?? message.payload?.updatedByUsername ?? "collaborator"
+          });
+          setStudioMessage(`${latestStory.lastEditedByName ?? "A collaborator"} updated this story. Your local draft is still safe.`);
+        })
+        .catch(() => {
+          setRemoteCollaborationUpdate({
+            revision: nextRevision,
+            updatedAt: message.payload?.updatedAt ?? new Date().toISOString(),
+            updatedByName: message.payload?.updatedByName ?? "A collaborator",
+            updatedByUsername: message.payload?.updatedByUsername ?? "collaborator"
+          });
+          setStudioMessage(`${message.payload?.updatedByName ?? "A collaborator"} updated this story. Your local draft is still safe.`);
+        });
     });
 
     return unsubscribe;

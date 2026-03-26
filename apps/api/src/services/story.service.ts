@@ -30,6 +30,39 @@ type StoryEditorIdentity = {
   username: string;
 };
 
+type ComparableStorySnapshot = {
+  status: "draft" | "published";
+  title: string;
+  summary: string;
+  coverImageUrl: string | null;
+  visibility: "private" | "public" | "selected";
+  anonymous: boolean;
+  allowedViewerIds: string[];
+  tags: string[];
+  links: Array<{
+    label: string;
+    url: string;
+    kind: "website" | "social" | "drive" | "photos";
+  }>;
+  chapters: Array<{
+    id: string | null;
+    title: string;
+    body: string;
+    type: "memory" | "reflection" | "milestone" | "anonymous";
+    order: number;
+    imageUrls: string[];
+    voiceNoteUrl: string | null;
+    moments: Array<{
+      id: string | null;
+      title: string;
+      description: string;
+      happenedAt: string;
+      imageUrls: string[];
+      voiceNoteUrl: string | null;
+    }>;
+  }>;
+};
+
 const buildStoryPartId = (prefix: "chapter" | "moment") =>
   `${prefix}-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
 
@@ -84,6 +117,90 @@ const normalizeStoryMediaReference = (value?: string | null) => {
 
   return extractOwnedObjectKey(value) ?? value;
 };
+
+const normalizeComparableMediaReference = (value?: string | null) =>
+  normalizeStoryMediaReference(value) ?? null;
+
+const buildComparableStorySnapshotFromInput = (
+  input: StorySaveInput,
+  status: "draft" | "published"
+): ComparableStorySnapshot => ({
+  status,
+  title: input.title,
+  summary: input.summary,
+  coverImageUrl: normalizeComparableMediaReference(input.coverImageUrl),
+  visibility: input.visibility,
+  anonymous: input.anonymous,
+  allowedViewerIds: [...input.allowedViewerIds].map(String).sort(),
+  tags: [...input.tags],
+  links: input.links.map((link) => ({
+    label: link.label,
+    url: link.url,
+    kind: link.kind
+  })),
+  chapters: input.chapters.map((chapter) => ({
+    id: chapter.id ?? null,
+    title: chapter.title,
+    body: chapter.body,
+    type: chapter.type,
+    order: chapter.order,
+    imageUrls: chapter.imageUrls.map((imageUrl) => normalizeComparableMediaReference(imageUrl) ?? imageUrl),
+    voiceNoteUrl: normalizeComparableMediaReference(chapter.voiceNoteUrl),
+    moments: chapter.moments.map((moment) => ({
+      id: moment.id ?? null,
+      title: moment.title,
+      description: moment.description,
+      happenedAt: new Date(moment.happenedAt).toISOString(),
+      imageUrls: moment.imageUrls.map((imageUrl) => normalizeComparableMediaReference(imageUrl) ?? imageUrl),
+      voiceNoteUrl: normalizeComparableMediaReference(moment.voiceNoteUrl)
+    }))
+  }))
+});
+
+const buildComparableStorySnapshotFromDocument = (story: StoryDocument): ComparableStorySnapshot => {
+  const storyText = resolveStoryTextContent(story);
+
+  return {
+    status: story.status,
+    title: storyText.title,
+    summary: storyText.summary,
+    coverImageUrl: normalizeComparableMediaReference(story.coverImageUrl ?? null),
+    visibility: story.visibility,
+    anonymous: story.anonymous,
+    allowedViewerIds: story.allowedViewerIds.map((viewerId) => String(viewerId)).sort(),
+    tags: [...storyText.tags],
+    links: storyText.links.map((link) => ({
+      label: link.label,
+      url: link.url,
+      kind: link.kind
+    })),
+    chapters: story.chapters.map((chapter, chapterIndex) => ({
+      id: chapter.id ?? null,
+      title: storyText.chapters[chapterIndex]?.title ?? chapter.title,
+      body: storyText.chapters[chapterIndex]?.body ?? chapter.body,
+      type: chapter.type,
+      order: chapter.order,
+      imageUrls: chapter.imageUrls.map((imageUrl) => normalizeComparableMediaReference(imageUrl) ?? imageUrl),
+      voiceNoteUrl: normalizeComparableMediaReference(chapter.voiceNoteUrl ?? null),
+      moments: chapter.moments.map((moment, momentIndex) => ({
+        id: moment.id ?? null,
+        title: storyText.chapters[chapterIndex]?.moments[momentIndex]?.title ?? moment.title,
+        description: storyText.chapters[chapterIndex]?.moments[momentIndex]?.description ?? moment.description,
+        happenedAt: moment.happenedAt.toISOString(),
+        imageUrls: moment.imageUrls.map((imageUrl) => normalizeComparableMediaReference(imageUrl) ?? imageUrl),
+        voiceNoteUrl: normalizeComparableMediaReference(moment.voiceNoteUrl ?? null)
+      }))
+    }))
+  };
+};
+
+const storySnapshotsMatch = (
+  currentStory: StoryDocument,
+  nextInput: StorySaveInput,
+  nextStatus: "draft" | "published"
+) =>
+  JSON.stringify(buildComparableStorySnapshotFromDocument(currentStory)) ===
+  JSON.stringify(buildComparableStorySnapshotFromInput(nextInput, nextStatus));
 
 const normalizeStoryMediaInput = (input: StorySaveInput): StorySaveInput => ({
   ...input,
@@ -217,6 +334,47 @@ async function findEditableStory(storyId: string, userId: string) {
   }
 
   return story;
+}
+
+export async function canReadStoryMediaObject(userId: string, storyId: string, objectKey: string) {
+  const story = await StoryModel.findById(storyId).select(
+    "authorId collaborators coverImageUrl chapters.imageUrls chapters.voiceNoteUrl chapters.moments.imageUrls chapters.moments.voiceNoteUrl"
+  );
+
+  if (!story || !isStoryEditor(story, userId)) {
+    return false;
+  }
+
+  const normalizedObjectKey = normalizeComparableMediaReference(objectKey);
+  if (!normalizedObjectKey) {
+    return false;
+  }
+
+  if (normalizeComparableMediaReference(story.coverImageUrl ?? null) === normalizedObjectKey) {
+    return true;
+  }
+
+  for (const chapter of story.chapters) {
+    if (chapter.imageUrls.some((imageUrl) => normalizeComparableMediaReference(imageUrl) === normalizedObjectKey)) {
+      return true;
+    }
+
+    if (normalizeComparableMediaReference(chapter.voiceNoteUrl ?? null) === normalizedObjectKey) {
+      return true;
+    }
+
+    for (const moment of chapter.moments) {
+      if (moment.imageUrls.some((imageUrl) => normalizeComparableMediaReference(imageUrl) === normalizedObjectKey)) {
+        return true;
+      }
+
+      if (normalizeComparableMediaReference(moment.voiceNoteUrl ?? null) === normalizedObjectKey) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 async function serializeStory(story: StoryDocument | null, viewerId?: string) {
@@ -606,15 +764,6 @@ export async function saveStory(authorId: string, input: StorySaveInput, storyId
   const occurredAt = new Date();
   const existingStory = storyId ? await findEditableStory(storyId, authorId) : null;
 
-  if (existingStory && typeof input.expectedRevision === "number" && input.expectedRevision !== (existingStory.collaborationRevision ?? 0)) {
-    throw new AppError(
-      "A newer collaborative version is available. Load the latest version before saving again.",
-      409,
-      "STORY_REVISION_CONFLICT",
-      { latestRevision: existingStory.collaborationRevision ?? 0 }
-    );
-  }
-
   const normalizedInput: StorySaveInput = {
     ...normalizedMediaInput,
     visibility: existingStory && String(existingStory.authorId) !== authorId ? existingStory.visibility : normalizedMediaInput.visibility,
@@ -652,6 +801,19 @@ export async function saveStory(authorId: string, input: StorySaveInput, storyId
   }
 
   const story = existingStory;
+
+  if (storySnapshotsMatch(story, normalizedInput, input.status)) {
+    return await serializeStory(story, authorId);
+  }
+
+  if (typeof input.expectedRevision === "number" && input.expectedRevision !== (story.collaborationRevision ?? 0)) {
+    throw new AppError(
+      "A newer collaborative version is available. Load the latest version before saving again.",
+      409,
+      "STORY_REVISION_CONFLICT",
+      { latestRevision: story.collaborationRevision ?? 0 }
+    );
+  }
 
   story.title = storedStoryContent.title;
   story.summary = storedStoryContent.summary;
