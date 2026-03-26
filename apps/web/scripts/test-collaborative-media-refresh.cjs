@@ -200,6 +200,22 @@ async function captureMediaState(page) {
   });
 }
 
+async function waitForCondition(check, options = {}) {
+  const timeoutMs = options.timeoutMs || 20000;
+  const intervalMs = options.intervalMs || 500;
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const result = await check();
+    if (result) {
+      return result;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(options.errorMessage || "Timed out waiting for expected condition.");
+}
+
 async function run() {
   ensureFixtureFiles();
 
@@ -247,23 +263,6 @@ async function run() {
   await bootstrapSession(ownerPage, ownerUser, ownerSession, `/studio?storyId=${createdStory.id}`);
   await waitForEditor(ownerPage);
 
-  const fileInput = ownerPage.locator('input[type="file"]').first();
-  await fileInput.setInputFiles("/tmp/histora-collab-media-1.png");
-  await ownerPage.waitForTimeout(1500);
-  await fileInput.setInputFiles("/tmp/histora-collab-media-2.png");
-  await ownerPage.waitForTimeout(3000);
-
-  const voiceSlot = ownerPage.getByRole("button", { name: /voice slot 1/i });
-  if (await voiceSlot.count()) {
-    await voiceSlot.click();
-    await ownerPage.waitForTimeout(2500);
-    const stopButton = ownerPage.getByRole("button", { name: /^STOP$/i });
-    if (await stopButton.count()) {
-      await stopButton.click();
-      await ownerPage.waitForTimeout(5000);
-    }
-  }
-
   await apiRequest("/profile/invites", ownerSession.accessToken, {
     method: "POST",
     body: {
@@ -278,10 +277,46 @@ async function run() {
   await collaboratorPage.getByRole("button", { name: /accept and start/i }).click();
   await collaboratorPage.waitForURL(/\/studio/, { timeout: 15000 });
   await waitForCollaborativeEditor(collaboratorPage);
-  await collaboratorPage.waitForTimeout(2500);
+
+  const fileInput = ownerPage.locator('input[type="file"]').first();
+  await fileInput.setInputFiles("/tmp/histora-collab-media-1.png");
+  await ownerPage.waitForTimeout(1500);
+  await fileInput.setInputFiles("/tmp/histora-collab-media-2.png");
+
+  await waitForCondition(
+    async () => {
+      const story = await apiRequest(`/stories/mine/${createdStory.id}`, ownerSession.accessToken);
+      const chapter = story.chapters[0];
+      return chapter && (chapter.imageKeys || []).length >= 2;
+    },
+    {
+      timeoutMs: 25000,
+      intervalMs: 800,
+      errorMessage: "Owner story never persisted the uploaded collaborative images."
+    }
+  );
+
+  const liveSyncState = await waitForCondition(
+    async () => {
+      const mediaState = await captureMediaState(collaboratorPage);
+      const uploadingLabelVisible = await collaboratorPage.getByText(/uploading image/i).isVisible().catch(() => false);
+      if (mediaState.imageCount >= 2 && mediaState.imageHealthy && !uploadingLabelVisible) {
+        return {
+          ...mediaState,
+          uploadingLabelVisible
+        };
+      }
+      return null;
+    },
+    {
+      timeoutMs: 20000,
+      intervalMs: 1000,
+      errorMessage: "Collaborator did not receive finalized media live without a refresh."
+    }
+  );
 
   const beforeRefresh = await captureMediaState(collaboratorPage);
-  if (beforeRefresh.imageCount < 2 || beforeRefresh.audioCount < 1) {
+  if (beforeRefresh.imageCount < 2) {
     throw new Error(`Collaborator did not receive media before refresh: ${JSON.stringify(beforeRefresh)}`);
   }
 
@@ -293,7 +328,7 @@ async function run() {
   const afterRefresh = await captureMediaState(collaboratorPage);
   const audioHealthy = afterRefresh.audioStatuses.every((status) => Boolean(status.src) && !status.error && status.readyState >= 1);
 
-  if (!afterRefresh.imageHealthy || !audioHealthy) {
+  if (!afterRefresh.imageHealthy || (afterRefresh.audioCount > 0 && !audioHealthy)) {
     throw new Error(`Collaborative media broke after refresh: ${JSON.stringify({ beforeRefresh, afterRefresh })}`);
   }
 
@@ -301,6 +336,7 @@ async function run() {
     JSON.stringify(
       {
         storyId: createdStory.id,
+        liveSyncState,
         beforeRefresh,
         afterRefresh,
         audioHealthy

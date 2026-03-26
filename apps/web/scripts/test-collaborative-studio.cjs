@@ -251,13 +251,12 @@ async function run() {
     }
   });
 
-  await collaboratorPage.getByRole("button", { name: /load latest version/i }).waitFor({ state: "visible", timeout: 15000 });
-  await collaboratorPage.getByRole("button", { name: /load latest version/i }).click();
-  await collaboratorPage.waitForTimeout(2600);
+  await collaboratorPage.locator(".editor-surface").filter({ hasText: updatedBodyText }).waitFor({ state: "visible", timeout: 15000 });
+  await collaboratorPage.waitForTimeout(1200);
 
-  const ownerFalseUpdateSignal = await ownerPage.getByRole("button", { name: /load latest version/i }).isVisible().catch(() => false);
+  const ownerFalseUpdateSignal = await ownerPage.getByRole("button", { name: /sync latest now/i }).isVisible().catch(() => false);
   if (ownerFalseUpdateSignal) {
-    throw new Error("Owner received a false collaborative update prompt after the collaborator only loaded the latest version.");
+    throw new Error("Owner received a false collaborative update prompt after the collaborator auto-synced the latest version.");
   }
 
   const collaboratorBody = await collaboratorPage.locator(".editor-surface").innerText();

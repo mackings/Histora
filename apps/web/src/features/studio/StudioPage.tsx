@@ -339,12 +339,69 @@ export function StudioPage({
     chapters: StudioChapter[];
   };
   const isUploadingAttachmentSource = (source?: string | null) => /uploading/i.test(source ?? "");
+  const isFinalizedStudioAttachment = (attachment: Pick<StudioMediaAttachment, "url" | "objectKey" | "blob" | "source">) =>
+    Boolean((attachment.objectKey && isOwnedStorageObjectKey(attachment.objectKey)) || (!attachment.blob && !isBlobUrl(attachment.url)));
   const getStudioAttachmentIdentity = (attachment: Pick<StudioMediaAttachment, "name" | "url" | "objectKey" | "localId">) =>
     attachment.objectKey ||
     extractStudioOwnedObjectKey(attachment.url) ||
     (!isBlobUrl(attachment.url) ? attachment.url : "") ||
     attachment.localId ||
     attachment.name;
+  const getStudioAttachmentFileToken = (attachment: Pick<StudioMediaAttachment, "name" | "url" | "objectKey">) => {
+    const normalizedName = attachment.name.trim().toLowerCase();
+    if (normalizedName) {
+      return normalizedName;
+    }
+
+    const storageReference = attachment.objectKey || extractStudioOwnedObjectKey(attachment.url) || attachment.url;
+    if (!storageReference) {
+      return "";
+    }
+
+    try {
+      const normalizedPath = storageReference.startsWith("http")
+        ? new URL(storageReference).pathname
+        : storageReference;
+      return normalizedPath.split("/").filter(Boolean).pop()?.toLowerCase() ?? "";
+    } catch {
+      return storageReference.split("/").filter(Boolean).pop()?.toLowerCase() ?? "";
+    }
+  };
+  const attachmentsRepresentSameUpload = (left: StudioMediaAttachment, right: StudioMediaAttachment) => {
+    if (getStudioAttachmentIdentity(left) === getStudioAttachmentIdentity(right)) {
+      return true;
+    }
+
+    if (!isUploadingAttachmentSource(left.source) && !isUploadingAttachmentSource(right.source)) {
+      return false;
+    }
+
+    if (!isFinalizedStudioAttachment(left) && !isFinalizedStudioAttachment(right)) {
+      return false;
+    }
+
+    const leftToken = getStudioAttachmentFileToken(left);
+    const rightToken = getStudioAttachmentFileToken(right);
+    return Boolean(leftToken && rightToken && leftToken === rightToken);
+  };
+  const finalizeStudioAttachment = (
+    attachment: StudioMediaAttachment,
+    overrides: Partial<StudioMediaAttachment> = {},
+    fallbackSource = "Saved story"
+  ): StudioMediaAttachment => {
+    const nextSource =
+      overrides.source?.trim() ||
+      (!isUploadingAttachmentSource(attachment.source) && attachment.source?.trim()
+        ? attachment.source
+        : fallbackSource);
+
+    return {
+      ...attachment,
+      ...overrides,
+      blob: undefined,
+      source: nextSource
+    };
+  };
   const sanitizeStudioAttachment = (
     attachment: StudioMediaAttachment,
     fallbackSource = "Saved story"
@@ -385,16 +442,21 @@ export function StudioPage({
     }
 
     const merged = [...sanitizedRemote];
-    const seenAttachmentIds = new Set(merged.map((attachment) => getStudioAttachmentIdentity(attachment)));
 
     for (const attachment of sanitizedLocal) {
-      const attachmentId = getStudioAttachmentIdentity(attachment);
-      if (seenAttachmentIds.has(attachmentId)) {
+      const existingIndex = merged.findIndex((existingAttachment) => attachmentsRepresentSameUpload(existingAttachment, attachment));
+      if (existingIndex >= 0) {
+        const existingAttachment = merged[existingIndex];
+        merged[existingIndex] =
+          isFinalizedStudioAttachment(existingAttachment) && !isUploadingAttachmentSource(existingAttachment.source)
+            ? existingAttachment
+            : isFinalizedStudioAttachment(attachment) && !isUploadingAttachmentSource(attachment.source)
+              ? attachment
+              : sanitizeStudioAttachment(existingAttachment);
         continue;
       }
 
       merged.push(attachment);
-      seenAttachmentIds.add(attachmentId);
     }
 
     return merged;
@@ -804,6 +866,7 @@ export function StudioPage({
   const currentStoryRevisionRef = useRef(0);
   const currentStoryStatusRef = useRef<"draft" | "published">("draft");
   const localComparableStorySignatureRef = useRef<string | null>(null);
+  const currentStudioSnapshotRef = useRef<StudioStorySnapshot | null>(null);
   const lastSyncedStudioSnapshotRef = useRef<StudioStorySnapshot | null>(null);
   const persistStoryQueueRef = useRef<Promise<ApiStory | null>>(Promise.resolve(null));
   const collaborationRequestHandledRef = useRef(false);
@@ -1562,10 +1625,16 @@ export function StudioPage({
         });
 
         return {
-          ...attachment,
-          url: uploaded.readUrl,
-          source,
-          objectKey: uploaded.objectKey
+          ...finalizeStudioAttachment(
+            attachment,
+            {
+              url: uploaded.readUrl,
+              source,
+              objectKey: uploaded.objectKey
+            },
+            source
+          ),
+          localId: attachment.localId
         };
       })
     )
@@ -1688,12 +1757,15 @@ export function StudioPage({
             setVoiceNotes((current) => {
               const updated = current.map((voice) =>
                 voice.localId === localId
-                  ? {
-                      ...voice,
+                  ? finalizeStudioAttachment(
+                      voice,
+                      {
                       url: uploaded.readUrl,
                       source: "Recorded in studio",
                       objectKey: uploaded.objectKey
-                    }
+                      },
+                      "Recorded in studio"
+                    )
                   : voice
               );
               updateActiveChapterMedia("voiceNotes", updated);
@@ -2728,13 +2800,18 @@ export function StudioPage({
     ].slice(0, 6));
   };
 
-  const ensureStudioAttachmentUploaded = async (attachment: StudioMediaAttachment, fallbackExtension: string, fallbackType: string) => {
+  const ensureStudioAttachmentUploaded = async (
+    attachment: StudioMediaAttachment,
+    fallbackExtension: string,
+    fallbackType: string,
+    fallbackSource: string
+  ) => {
     if (attachment.objectKey) {
-      return attachment;
+      return finalizeStudioAttachment(attachment, {}, fallbackSource);
     }
 
     if (!attachment.blob) {
-      return attachment;
+      return sanitizeStudioAttachment(attachment, fallbackSource);
     }
 
     const contentType = attachment.blob.type || fallbackType;
@@ -2745,11 +2822,14 @@ export function StudioPage({
       contentType
     });
 
-    return {
-      ...attachment,
+    return finalizeStudioAttachment(
+      attachment,
+      {
       objectKey: uploaded.objectKey,
       url: uploaded.readUrl
-    };
+      },
+      fallbackSource
+    );
   };
 
   const ensureStoryMediaUploaded = async (sourceChapters: StudioChapter[]) => {
@@ -2757,12 +2837,12 @@ export function StudioPage({
       sourceChapters.map(async (chapter) => {
         const uploadedImages = await Promise.all(
           chapter.imageAttachments.map((attachment) =>
-            ensureStudioAttachmentUploaded(attachment, ".jpg", attachment.blob?.type || "image/jpeg")
+            ensureStudioAttachmentUploaded(attachment, ".jpg", attachment.blob?.type || "image/jpeg", "Upload")
           )
         );
         const uploadedVoiceNotes = await Promise.all(
           chapter.voiceNotes.map((voice) =>
-            ensureStudioAttachmentUploaded(voice, ".webm", voice.blob?.type || "audio/webm")
+            ensureStudioAttachmentUploaded(voice, ".webm", voice.blob?.type || "audio/webm", "Recorded in studio")
           )
         );
 
@@ -2917,6 +2997,23 @@ export function StudioPage({
     voiceNotes
   ]);
 
+  useEffect(() => {
+    currentStudioSnapshotRef.current = createCurrentStudioStorySnapshot();
+  }, [
+    activeChapter,
+    anonymous,
+    chapters,
+    currentStoryStatus,
+    imageAttachments,
+    liveEditorBody,
+    storyLinks,
+    storySummary,
+    storyTitle,
+    timelineEntries,
+    visibility,
+    voiceNotes
+  ]);
+
   const applyMergedRemoteStoryState = (
     story: ApiStory,
     mergedSnapshot: StudioStorySnapshot,
@@ -2957,6 +3054,69 @@ export function StudioPage({
         setChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)]);
       })
       .catch(() => undefined);
+  };
+
+  const applyRemoteStoryMetadata = (story: ApiStory, revisionFallback = 0) => {
+    setCurrentStoryStatus(story.status);
+    currentStoryStatusRef.current = story.status;
+    setCurrentStoryRevision(story.collaborationRevision ?? revisionFallback);
+    currentStoryRevisionRef.current = story.collaborationRevision ?? revisionFallback;
+    lastSyncedStudioSnapshotRef.current = createStudioStorySnapshotFromStory(story);
+    setCurrentStoryCanEdit(story.canEdit ?? true);
+    setCurrentStoryCollaborators(story.collaborators ?? []);
+    setCurrentStoryLastEditedByName(story.lastEditedByName ?? null);
+    setCurrentStoryLastEditedByUsername(story.lastEditedByUsername ?? null);
+    setCurrentStoryLastEditedAt(story.lastEditedAt ?? null);
+    setCurrentStoryIsOwner(Boolean(story.isOwner ?? true));
+    setRemoteCollaborationUpdate(null);
+  };
+
+  const syncCollaborativeStoryFromRemote = async (
+    storyId: string,
+    options?: {
+      manual?: boolean;
+      revisionFallback?: number;
+      updatedByName?: string;
+      updatedByUsername?: string;
+      updatedAt?: string;
+    }
+  ) => {
+    const latestStory = await apiRequest<ApiStory>(`/stories/mine/${storyId}`, { accessToken });
+    if (currentStoryIdRef.current !== storyId) {
+      return;
+    }
+
+    if ((latestStory.collaborationRevision ?? 0) < currentStoryRevisionRef.current) {
+      return;
+    }
+
+    const remoteComparableSignature = serializeComparableStoryPayload(buildComparableApiStoryPayload(latestStory));
+    if (remoteComparableSignature === localComparableStorySignatureRef.current) {
+      applyRemoteStoryMetadata(latestStory, options?.revisionFallback ?? 0);
+      return;
+    }
+
+    const remoteSnapshot = createStudioStorySnapshotFromStory(latestStory);
+    const localSnapshot = currentStudioSnapshotRef.current ?? createCurrentStudioStorySnapshot();
+    const mergedSnapshot = mergeRemoteStoryWithLocalDraft(
+      lastSyncedStudioSnapshotRef.current,
+      localSnapshot,
+      remoteSnapshot
+    );
+
+    applyMergedRemoteStoryState(
+      latestStory,
+      mergedSnapshot,
+      options?.manual
+        ? "Loaded the latest collaborative version and merged your local draft."
+        : `${options?.updatedByName ?? "A collaborator"} changed this story. Changes synced live.`
+    );
+    setDraftHistory((current) => [
+      options?.manual
+        ? "Latest collaborative version merged into local draft."
+        : `${options?.updatedByName ?? "A collaborator"} synced a collaborative update.`,
+      ...current
+    ].slice(0, 6));
   };
 
   const validateStoryBeforePersist = () => {
@@ -3056,17 +3216,7 @@ export function StudioPage({
     }
 
     try {
-      const story = await apiRequest<ApiStory>(`/stories/mine/${currentStoryId}`, { accessToken });
-      const remoteSnapshot = createStudioStorySnapshotFromStory(story);
-      const localSnapshot = createCurrentStudioStorySnapshot();
-      const mergedSnapshot = mergeRemoteStoryWithLocalDraft(
-        lastSyncedStudioSnapshotRef.current,
-        localSnapshot,
-        remoteSnapshot
-      );
-
-      applyMergedRemoteStoryState(story, mergedSnapshot, "Loaded the latest collaborative version and merged your local draft.");
-      setDraftHistory((current) => ["Latest collaborative version merged into local draft.", ...current].slice(0, 6));
+      await syncCollaborativeStoryFromRemote(currentStoryId, { manual: true });
     } catch (error) {
       setStudioMessage(getErrorMessage(error, "Could not load the latest collaborative version."));
     }
@@ -3108,37 +3258,12 @@ export function StudioPage({
         return;
       }
 
-      void apiRequest<ApiStory>(`/stories/mine/${targetStoryId}`, { accessToken })
-        .then((latestStory) => {
-          if (currentStoryIdRef.current !== targetStoryId) {
-            return;
-          }
-
-          const remoteComparableSignature = serializeComparableStoryPayload(buildComparableApiStoryPayload(latestStory));
-          if (remoteComparableSignature === localComparableStorySignatureRef.current) {
-            setCurrentStoryStatus(latestStory.status);
-            currentStoryStatusRef.current = latestStory.status;
-            setCurrentStoryRevision(latestStory.collaborationRevision ?? nextRevision);
-            currentStoryRevisionRef.current = latestStory.collaborationRevision ?? nextRevision;
-            lastSyncedStudioSnapshotRef.current = createStudioStorySnapshotFromStory(latestStory);
-            setCurrentStoryCanEdit(latestStory.canEdit ?? true);
-            setCurrentStoryCollaborators(latestStory.collaborators ?? []);
-            setCurrentStoryLastEditedByName(latestStory.lastEditedByName ?? null);
-            setCurrentStoryLastEditedByUsername(latestStory.lastEditedByUsername ?? null);
-            setCurrentStoryLastEditedAt(latestStory.lastEditedAt ?? null);
-            setCurrentStoryIsOwner(Boolean(latestStory.isOwner ?? true));
-            setRemoteCollaborationUpdate(null);
-            return;
-          }
-
-          setRemoteCollaborationUpdate({
-            revision: latestStory.collaborationRevision ?? nextRevision,
-            updatedAt: latestStory.lastEditedAt ?? message.payload?.updatedAt ?? new Date().toISOString(),
-            updatedByName: latestStory.lastEditedByName ?? message.payload?.updatedByName ?? "A collaborator",
-            updatedByUsername: latestStory.lastEditedByUsername ?? message.payload?.updatedByUsername ?? "collaborator"
-          });
-          setStudioMessage(`${latestStory.lastEditedByName ?? "A collaborator"} updated this story. Your local draft is still safe.`);
-        })
+      void syncCollaborativeStoryFromRemote(targetStoryId, {
+        revisionFallback: nextRevision,
+        updatedAt: message.payload?.updatedAt ?? new Date().toISOString(),
+        updatedByName: message.payload?.updatedByName ?? "A collaborator",
+        updatedByUsername: message.payload?.updatedByUsername ?? "collaborator"
+      })
         .catch(() => {
           setRemoteCollaborationUpdate({
             revision: nextRevision,
@@ -3146,7 +3271,7 @@ export function StudioPage({
             updatedByName: message.payload?.updatedByName ?? "A collaborator",
             updatedByUsername: message.payload?.updatedByUsername ?? "collaborator"
           });
-          setStudioMessage(`${message.payload?.updatedByName ?? "A collaborator"} updated this story. Your local draft is still safe.`);
+          setStudioMessage(`${message.payload?.updatedByName ?? "A collaborator"} updated this story. Tap to sync the latest version.`);
         });
     });
 
@@ -3605,7 +3730,7 @@ export function StudioPage({
             <p>
               {currentStoryIsOwner
                 ? "You own this story. Collaborators can help write and edit, but only you control audience and anonymity settings."
-                : "You are collaborating on this story. Your local autosaves stay on this device, and you can load newer remote revisions when another editor saves first."}
+                : "You are collaborating on this story. Collaborator saves now sync into this editor live, while your local autosaves stay protected on this device."}
             </p>
             <p>{currentStoryCanEdit ? "Editing access is active for this account." : "This account can view but cannot edit this story."}</p>
           </div>
@@ -3619,7 +3744,7 @@ export function StudioPage({
           {remoteCollaborationUpdate ? (
             <div className="chapter-controls">
               <button className="primary-action" onClick={() => void loadLatestCollaborativeVersion()} type="button">
-                LOAD LATEST VERSION
+                SYNC LATEST NOW
               </button>
             </div>
           ) : null}
