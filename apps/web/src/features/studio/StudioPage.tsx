@@ -314,6 +314,57 @@ export function StudioPage({
     }
     return monthLabels[monthIndex - 1];
   };
+  const getUniqueChapterTitle = (
+    desiredTitle: string,
+    sourceChapters: StudioChapter[],
+    options?: { excludeIndex?: number }
+  ) => {
+    const normalizedTitle = normalizeChapterTitle(desiredTitle) || "Untitled chapter";
+    const takenTitles = new Set(
+      sourceChapters
+        .map((chapter, index) => (index === options?.excludeIndex ? null : normalizeChapterTitle(chapter.title).toLowerCase()))
+        .filter((title): title is string => Boolean(title))
+    );
+
+    if (!takenTitles.has(normalizedTitle.toLowerCase())) {
+      return normalizedTitle;
+    }
+
+    const chapterNumberMatch = normalizedTitle.match(/^chapter\s+(\d+)$/i);
+    if (chapterNumberMatch) {
+      let nextNumber = Number.parseInt(chapterNumberMatch[1], 10);
+      while (takenTitles.has(`chapter ${nextNumber}`)) {
+        nextNumber += 1;
+      }
+      return `Chapter ${nextNumber}`;
+    }
+
+    let suffix = 2;
+    let candidate = `${normalizedTitle} (${suffix})`;
+    while (takenTitles.has(candidate.toLowerCase())) {
+      suffix += 1;
+      candidate = `${normalizedTitle} (${suffix})`;
+    }
+    return candidate;
+  };
+  const ensureUniqueStudioChapterTitles = (sourceChapters: StudioChapter[]) => {
+    const assignedTitles = new Set<string>();
+
+    return sourceChapters.map((chapter, index) => {
+      let nextTitle = normalizeChapterTitle(chapter.title) || `Chapter ${index + 1}`;
+      if (assignedTitles.has(nextTitle.toLowerCase())) {
+        nextTitle = getUniqueChapterTitle(nextTitle, sourceChapters, { excludeIndex: index });
+        while (assignedTitles.has(nextTitle.toLowerCase())) {
+          nextTitle = getUniqueChapterTitle(nextTitle, sourceChapters, { excludeIndex: index });
+        }
+      }
+      assignedTitles.add(nextTitle.toLowerCase());
+      return {
+        ...chapter,
+        title: nextTitle
+      };
+    });
+  };
   const getPlainTextFromHtml = (html: string) => {
     if (typeof document === "undefined") {
       return html.replace(/<[^>]+>/g, " ");
@@ -1026,6 +1077,7 @@ export function StudioPage({
   });
   const [imageAttachments, setImageAttachments] = useState<StudioMediaAttachment[]>([]);
   const [voiceNotes, setVoiceNotes] = useState<StudioMediaAttachment[]>([]);
+  const [imageLoadingState, setImageLoadingState] = useState<Record<string, boolean>>({});
   const [imageReplaceTargetUrl, setImageReplaceTargetUrl] = useState<string | null>(null);
   const [isRecordingVoice, setIsRecordingVoice] = useState(false);
   const [isVoiceRecordingPaused, setIsVoiceRecordingPaused] = useState(false);
@@ -1380,6 +1432,20 @@ export function StudioPage({
     setTimelineEntries(activeChapterEntry?.timelineEntries?.length ? activeChapterEntry.timelineEntries : [createEmptyTimelineEntry()]);
   }, [activeChapterEntry]);
 
+  useEffect(() => {
+    setImageLoadingState((current) =>
+      Object.fromEntries(
+        imageAttachments.map((attachment) => {
+          const attachmentIdentity = getStudioAttachmentIdentity(attachment);
+          return [
+            attachmentIdentity,
+            isUploadingAttachmentSource(attachment.source) || current[attachmentIdentity] !== false
+          ];
+        })
+      )
+    );
+  }, [imageAttachments]);
+
   const loadStoryIntoStudio = (story: ApiStory, options?: { mergeRestoredDraft?: boolean }) => {
     const remoteSnapshot = createStudioStorySnapshotFromStory(story);
     const fetchedChapters = remoteSnapshot.chapters;
@@ -1409,16 +1475,17 @@ export function StudioPage({
     setStoryLinks(story.links ?? []);
     setVisibility(story.visibility as "private" | "selected" | "public");
     setAnonymous(story.anonymous);
-    setChapters(nextChapters.length ? nextChapters : [createInitialStudioChapter(0)]);
-    setActiveChapter(nextChapters[0]?.title ?? "Chapter 1");
+    const uniqueChapters = ensureUniqueStudioChapterTitles(nextChapters.length ? nextChapters : [createInitialStudioChapter(0)]);
+    setChapters(uniqueChapters);
+    setActiveChapter(uniqueChapters[0]?.title ?? "Chapter 1");
     setIsStudioEditorOpen(true);
     setStudioMessage(`Loaded ${story.title}.`);
     setStudioNotice(null);
     invalidatePreviewReview();
-    void hydrateStudioChaptersForMedia(accessToken, nextChapters, { storyId: story.id })
+    void hydrateStudioChaptersForMedia(accessToken, uniqueChapters, { storyId: story.id })
       .then((hydratedChapters) => {
         suppressAutoSavePassesRef.current += 2;
-        setChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)]);
+        setChapters(ensureUniqueStudioChapterTitles(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)]));
       })
       .catch(() => undefined);
   };
@@ -1642,11 +1709,11 @@ export function StudioPage({
           }))
           .filter((chapter) => !isLegacySeedChapter(chapter));
 
-        setChapters(restoredChapters);
+        setChapters(ensureUniqueStudioChapterTitles(restoredChapters));
         void hydrateStudioChaptersForMedia(accessToken, restoredChapters, { storyId: savedDraft.currentStoryId ?? null })
           .then((hydratedChapters) => {
             if (!cancelled) {
-              setChapters(hydratedChapters);
+              setChapters(ensureUniqueStudioChapterTitles(hydratedChapters));
             }
           })
           .catch(() => undefined);
@@ -2160,13 +2227,21 @@ export function StudioPage({
   };
 
   const updateActiveChapterTitle = (nextTitle: string) => {
-    const normalizedTitle = normalizeChapterTitle(nextTitle) || "Untitled chapter";
     lastLocalStoryMetaActivityAtRef.current = Date.now();
-    updateChapter((chapter) => ({
-      ...chapter,
-      title: normalizedTitle
-    }));
-    setActiveChapter(normalizedTitle);
+    setChapters((current) => {
+      const safeIndex = activeChapterIndex >= 0 ? activeChapterIndex : 0;
+      const uniqueTitle = getUniqueChapterTitle(nextTitle, current, { excludeIndex: safeIndex });
+      const updatedChapters = current.map((chapter, index) =>
+        index === safeIndex
+          ? {
+              ...chapter,
+              title: uniqueTitle
+            }
+          : chapter
+      );
+      setActiveChapter(uniqueTitle);
+      return updatedChapters;
+    });
     invalidatePreviewReview();
     queueCollaborativeDraftUpdate("chapter-title");
   };
@@ -3554,7 +3629,9 @@ export function StudioPage({
     mergedSnapshot: StudioStorySnapshot,
     message: string
   ) => {
-    const mergedChapters = mergedSnapshot.chapters.length ? mergedSnapshot.chapters : [createInitialStudioChapter(0)];
+    const mergedChapters = ensureUniqueStudioChapterTitles(
+      mergedSnapshot.chapters.length ? mergedSnapshot.chapters : [createInitialStudioChapter(0)]
+    );
 
     suppressAutoSavePassesRef.current += 1;
     setCurrentStoryId(story.id);
@@ -3586,7 +3663,9 @@ export function StudioPage({
     void hydrateStudioChaptersForMedia(accessToken, mergedChapters, { storyId: story.id })
       .then((hydratedChapters) => {
         suppressAutoSavePassesRef.current += 2;
-        setChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)]);
+        setChapters(
+          ensureUniqueStudioChapterTitles(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)])
+        );
       })
       .catch(() => undefined);
   };
@@ -3930,8 +4009,11 @@ export function StudioPage({
       return;
     }
 
-    const nextChapter = createInitialStudioChapter(chapters.length);
-    setChapters((current) => [...current, nextChapter]);
+    const nextChapter = {
+      ...createInitialStudioChapter(chapters.length),
+      title: getUniqueChapterTitle(`Chapter ${chapters.length + 1}`, chapters)
+    };
+    setChapters((current) => ensureUniqueStudioChapterTitles([...current, nextChapter]));
     setActiveChapter(nextChapter.title);
     setIsStudioEditorOpen(true);
     setStudioMessage(`${nextChapter.title} added.`);
@@ -4727,7 +4809,11 @@ export function StudioPage({
             />
             {mediaError ? <div className="media-error-banner">{mediaError}</div> : null}
             <div className="media-grid">
-              {imageAttachments.map((attachment) => (
+              {imageAttachments.map((attachment) => {
+                const attachmentIdentity = getStudioAttachmentIdentity(attachment);
+                const showImageSkeleton = imageLoadingState[attachmentIdentity] ?? isUploadingAttachmentSource(attachment.source);
+
+                return (
                 <article className="media-card" key={attachment.url}>
                   <button
                     aria-label={`Remove ${attachment.name}`}
@@ -4737,8 +4823,25 @@ export function StudioPage({
                   >
                     <IconComponent className="button-icon" name="close" />
                   </button>
-                  <div className="media-preview-frame">
-                    <img alt={attachment.name} className="media-preview-image" src={attachment.url} />
+                  <div className={`media-preview-frame${showImageSkeleton ? " media-preview-frame-loading" : ""}`}>
+                    {showImageSkeleton ? <div className="media-preview-skeleton" aria-hidden="true" /> : null}
+                    <img
+                      alt={attachment.name}
+                      className={`media-preview-image${showImageSkeleton ? " media-preview-image-loading" : ""}`}
+                      onError={() => {
+                        setImageLoadingState((current) => ({
+                          ...current,
+                          [attachmentIdentity]: false
+                        }));
+                      }}
+                      onLoad={() => {
+                        setImageLoadingState((current) => ({
+                          ...current,
+                          [attachmentIdentity]: false
+                        }));
+                      }}
+                      src={attachment.url}
+                    />
                   </div>
                   <strong>{attachment.name}</strong>
                   <span>{attachment.source}</span>
@@ -4749,7 +4852,8 @@ export function StudioPage({
                     <small>Swap this image without using another slot.</small>
                   </div>
                 </article>
-              ))}
+                );
+              })}
               {Array.from({ length: Math.max(imageLimit - imageAttachments.length, 0) }).map((_, index) => (
                 <button className="media-card media-card-empty media-slot-button" key={`image-slot-${index}`} onClick={openImageSlot} type="button">
                   <div className="media-slot-placeholder" aria-hidden="true">
