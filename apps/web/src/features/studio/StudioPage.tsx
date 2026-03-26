@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { type ApiStory, type ProfileDashboard, type SignedReadResponse, apiRequest, subscribeToAppEvents, uploadMediaAsset } from "../../lib/api-client";
+import { type ApiStory, type ProfileDashboard, type SignedReadResponse, apiRequest, createAppEventsConnection, uploadMediaAsset } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
 import { sanitizeStudioRichText } from "../../lib/safe-content";
 import type { FeedIconComponent, FeedSectionLabelComponent } from "../feed/ui-types";
@@ -338,6 +338,18 @@ export function StudioPage({
     anonymous: boolean;
     chapters: StudioChapter[];
   };
+  type StudioCollaborativeDraftSnapshot = {
+    status: "draft" | "published";
+    title: string;
+    summary: string;
+    links: StudioExternalLink[];
+    visibility: "private" | "selected" | "public";
+    anonymous: boolean;
+    activeChapterId?: string;
+    activeChapterTitle: string;
+    activeChapterIndex: number;
+    chapter: StudioChapter;
+  };
   const isUploadingAttachmentSource = (source?: string | null) => /uploading/i.test(source ?? "");
   const isFinalizedStudioAttachment = (attachment: Pick<StudioMediaAttachment, "url" | "objectKey" | "blob" | "source">) =>
     Boolean((attachment.objectKey && isOwnedStorageObjectKey(attachment.objectKey)) || (!attachment.blob && !isBlobUrl(attachment.url)));
@@ -652,6 +664,202 @@ export function StudioPage({
     anonymous: remoteSnapshot.anonymous,
     chapters: mergeStudioChapterCollections(baseSnapshot?.chapters ?? [], localSnapshot.chapters, remoteSnapshot.chapters)
   });
+  const buildComparableStudioStorySnapshotPayload = (
+    snapshot: StudioStorySnapshot
+  ): Omit<StudioPublishPayload["payload"], "expectedRevision"> => ({
+    title: snapshot.title,
+    summary: snapshot.summary,
+    coverImageUrl:
+      snapshot.chapters
+        .flatMap((chapter) => chapter.imageAttachments)
+        .map((attachment) => normalizeStudioMediaReference(attachment.objectKey ?? attachment.url))
+        .find(Boolean) ?? undefined,
+    visibility: snapshot.visibility,
+    anonymous: snapshot.anonymous,
+    allowedViewerIds: [],
+    tags: [],
+    links: snapshot.links.map((link) => ({
+      label: link.label,
+      url: link.url,
+      kind: link.kind
+    })),
+    status: snapshot.status,
+    chapters: snapshot.chapters.map((chapter, index) => ({
+      id: chapter.id,
+      title: chapter.title,
+      body: sanitizeStudioRichText(chapter.body),
+      type:
+        chapter.type.toLowerCase() === "anon"
+          ? "anonymous"
+          : (chapter.type.toLowerCase() as "memory" | "reflection" | "milestone" | "anonymous"),
+      order: index + 1,
+      imageUrls: chapter.imageAttachments
+        .map((attachment) => normalizeStudioMediaReference(attachment.objectKey ?? attachment.url))
+        .filter(Boolean) as string[],
+      voiceNoteUrl:
+        chapter.voiceNotes[0]
+          ? normalizeStudioMediaReference(chapter.voiceNotes[0].objectKey ?? chapter.voiceNotes[0].url)
+          : undefined,
+      moments: chapter.timelineEntries
+        .filter((entry) => entry.title.trim() || entry.body.trim())
+        .map((entry) => ({
+          id: entry.id,
+          title: entry.title,
+          description: entry.body,
+          happenedAt: new Date(
+            `${entry.year || currentYear}-${entry.month || "01"}-${entry.day || "01"}T00:00:00.000Z`
+          ).toISOString(),
+          imageUrls: [],
+          voiceNoteUrl: undefined
+        }))
+    }))
+  });
+  const serializeComparableStudioStorySnapshot = (snapshot: StudioStorySnapshot) =>
+    serializeComparableStoryPayload(buildComparableStudioStorySnapshotPayload(snapshot));
+  const getCurrentVsSyncedComparableState = () => {
+    if (!currentStoryIdRef.current || !lastSyncedStudioSnapshotRef.current) {
+      return null;
+    }
+
+    const currentSnapshot = currentStudioSnapshotRef.current ?? createCurrentStudioStorySnapshot();
+    return {
+      currentPayload: buildComparableStudioStorySnapshotPayload(currentSnapshot),
+      syncedPayload: buildComparableStudioStorySnapshotPayload(lastSyncedStudioSnapshotRef.current)
+    };
+  };
+  const currentStudioMatchesLastSyncedStory = () => {
+    const comparableState = getCurrentVsSyncedComparableState();
+    if (!comparableState) {
+      return false;
+    }
+
+    return serializeComparableStoryPayload(comparableState.currentPayload) ===
+      serializeComparableStoryPayload(comparableState.syncedPayload);
+  };
+  const hasRemoteStudioBaselineLoaded = () =>
+    !currentStoryIdRef.current || Boolean(lastSyncedStudioSnapshotRef.current);
+  const shouldLogStudioCollaboration = () =>
+    typeof window !== "undefined" &&
+    (
+      window.localStorage.getItem("histora-debug-collab") === "true" ||
+      import.meta.env.DEV
+    );
+  const logStudioCollaboration = (event: string, detail?: unknown) => {
+    if (!shouldLogStudioCollaboration()) {
+      return;
+    }
+
+    const serializedDetail =
+      typeof detail === "string"
+        ? detail
+        : detail === undefined
+          ? ""
+          : JSON.stringify(detail);
+    console.info(`[studio-collab] ${event}${serializedDetail ? ` ${serializedDetail}` : ""}`);
+  };
+  const serializeStudioAttachmentForDraftSync = (
+    attachment: StudioMediaAttachment,
+    fallbackSource = "Saved story"
+  ): StudioMediaAttachment | null => {
+    const storageUrl = getStudioAttachmentStorageUrl(attachment);
+    if (!storageUrl) {
+      return null;
+    }
+
+    return {
+      ...sanitizeStudioAttachment(attachment, fallbackSource),
+      url: storageUrl,
+      blob: undefined
+    };
+  };
+  const serializeStudioChapterForDraftSync = (chapter: StudioChapter): StudioChapter => ({
+    ...chapter,
+    imageAttachments: chapter.imageAttachments
+      .map((attachment) => serializeStudioAttachmentForDraftSync(attachment, "Saved story"))
+      .filter(Boolean) as StudioMediaAttachment[],
+    voiceNotes: chapter.voiceNotes
+      .map((voice) => serializeStudioAttachmentForDraftSync(voice, "Recorded in studio"))
+      .filter(Boolean) as StudioMediaAttachment[],
+    timelineEntries: chapter.timelineEntries.length ? chapter.timelineEntries : [createEmptyTimelineEntry()]
+  });
+  const findCollaborativeChapterIndex = (
+    sourceChapters: StudioChapter[],
+    snapshot: Pick<StudioCollaborativeDraftSnapshot, "activeChapterId" | "activeChapterTitle" | "activeChapterIndex">
+  ) => {
+    const byId = snapshot.activeChapterId
+      ? sourceChapters.findIndex((chapter) => chapter.id && chapter.id === snapshot.activeChapterId)
+      : -1;
+    if (byId >= 0) {
+      return byId;
+    }
+
+    const byTitle = sourceChapters.findIndex((chapter) => chapter.title === snapshot.activeChapterTitle);
+    if (byTitle >= 0) {
+      return byTitle;
+    }
+
+    if (snapshot.activeChapterIndex >= 0 && snapshot.activeChapterIndex < sourceChapters.length) {
+      return snapshot.activeChapterIndex;
+    }
+
+    return -1;
+  };
+  const buildCollaborativeDraftSnapshot = (): StudioCollaborativeDraftSnapshot | null => {
+    const storyId = currentStoryIdRef.current;
+    if (!storyId) {
+      return null;
+    }
+
+    const latestBody = getLatestChapterBody();
+    const targetIndex = Math.max(
+      chaptersRef.current.findIndex((chapter) => chapter.title === activeChapterRef.current),
+      0
+    );
+    const currentSnapshot: StudioStorySnapshot = {
+      status: currentStoryStatusRef.current,
+      title: storyTitle,
+      summary: storySummary,
+      links: storyLinks,
+      visibility,
+      anonymous,
+      chapters: chaptersRef.current.map((chapter, index) =>
+        index === targetIndex
+          ? {
+              ...chapter,
+              body: latestBody,
+              words: getChapterWordCount(latestBody),
+              imageAttachments: sanitizeStudioAttachments([...imageAttachmentsRef.current]),
+              voiceNotes: sanitizeStudioAttachments([...voiceNotesRef.current], "Recorded in studio"),
+              timelineEntries: [...timelineEntriesRef.current].length ? [...timelineEntriesRef.current] : [createEmptyTimelineEntry()]
+            }
+          : chapter
+      )
+    };
+    const activeChapterIndex = findCollaborativeChapterIndex(currentSnapshot.chapters, {
+      activeChapterId: undefined,
+      activeChapterTitle: activeChapterRef.current,
+      activeChapterIndex: currentSnapshot.chapters.findIndex((chapter) => chapter.title === activeChapterRef.current)
+    });
+    const safeChapterIndex = activeChapterIndex >= 0 ? activeChapterIndex : 0;
+    const activeChapterSnapshot = currentSnapshot.chapters[safeChapterIndex];
+
+    if (!activeChapterSnapshot) {
+      return null;
+    }
+
+    return {
+      status: currentSnapshot.status,
+      title: currentSnapshot.title,
+      summary: currentSnapshot.summary,
+      links: currentSnapshot.links,
+      visibility: currentSnapshot.visibility,
+      anonymous: currentSnapshot.anonymous,
+      activeChapterId: activeChapterSnapshot.id,
+      activeChapterTitle: activeChapterSnapshot.title,
+      activeChapterIndex: safeChapterIndex,
+      chapter: serializeStudioChapterForDraftSync(activeChapterSnapshot)
+    };
+  };
   const isLegacySeedChapter = (chapter: Pick<StudioChapter, "title" | "body" | "imageAttachments" | "voiceNotes" | "timelineEntries">) => {
     const normalizedTitle = normalizeChapterTitle(chapter.title);
     const expectedBody = legacySeedChapterBodies[normalizedTitle as keyof typeof legacySeedChapterBodies];
@@ -841,6 +1049,7 @@ export function StudioPage({
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const imageAttachmentsRef = useRef<StudioMediaAttachment[]>([]);
   const voiceNotesRef = useRef<StudioMediaAttachment[]>([]);
+  const timelineEntriesRef = useRef<StudioTimelineEntry[]>([]);
   const audioChunksRef = useRef<Blob[]>([]);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -862,12 +1071,24 @@ export function StudioPage({
   const lastAutoSavedSignatureRef = useRef("");
   const restoredLocalDraftRef = useRef(false);
   const chaptersRef = useRef<StudioChapter[]>([]);
+  const activeChapterRef = useRef("Chapter 1");
   const currentStoryIdRef = useRef<string | null>(null);
   const currentStoryRevisionRef = useRef(0);
   const currentStoryStatusRef = useRef<"draft" | "published">("draft");
   const localComparableStorySignatureRef = useRef<string | null>(null);
   const currentStudioSnapshotRef = useRef<StudioStorySnapshot | null>(null);
   const lastSyncedStudioSnapshotRef = useRef<StudioStorySnapshot | null>(null);
+  const collaborativeDraftSessionIdRef = useRef(
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  );
+  const collaborativeDraftBroadcastTimerRef = useRef<number | null>(null);
+  const collaborativeDraftBroadcastFrameRef = useRef<number | null>(null);
+  const appEventsConnectionRef = useRef<ReturnType<typeof createAppEventsConnection> | null>(null);
+  const lastLocalEditorActivityAtRef = useRef(0);
+  const lastLocalMediaActivityAtRef = useRef(0);
+  const lastLocalStoryMetaActivityAtRef = useRef(0);
   const persistStoryQueueRef = useRef<Promise<ApiStory | null>>(Promise.resolve(null));
   const collaborationRequestHandledRef = useRef(false);
   const suppressAutoSavePassesRef = useRef(0);
@@ -1138,6 +1359,10 @@ export function StudioPage({
   }, [chapters]);
 
   useEffect(() => {
+    activeChapterRef.current = activeChapter;
+  }, [activeChapter]);
+
+  useEffect(() => {
     currentStoryIdRef.current = currentStoryId;
   }, [currentStoryId]);
 
@@ -1164,7 +1389,7 @@ export function StudioPage({
         ? mergeFetchedDraftChapters(chaptersRef.current, fetchedChapters)
         : fetchedChapters;
 
-    suppressAutoSavePassesRef.current += 1;
+    suppressAutoSavePassesRef.current += 4;
     setCurrentStoryId(story.id);
     setCurrentStoryStatus(story.status);
     setCurrentStoryRevision(story.collaborationRevision ?? 0);
@@ -1192,7 +1417,7 @@ export function StudioPage({
     invalidatePreviewReview();
     void hydrateStudioChaptersForMedia(accessToken, nextChapters, { storyId: story.id })
       .then((hydratedChapters) => {
-        suppressAutoSavePassesRef.current += 1;
+        suppressAutoSavePassesRef.current += 2;
         setChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)]);
       })
       .catch(() => undefined);
@@ -1535,6 +1760,10 @@ export function StudioPage({
   }, [voiceNotes]);
 
   useEffect(() => {
+    timelineEntriesRef.current = timelineEntries;
+  }, [timelineEntries]);
+
+  useEffect(() => {
     if (isEnteringStudio) {
       return;
     }
@@ -1611,6 +1840,7 @@ export function StudioPage({
             attachment.url === replaceTargetUrl ? optimisticImages[0] ?? attachment : attachment
           )
         : [...current, ...optimisticImages];
+      imageAttachmentsRef.current = updated;
       updateActiveChapterMedia("imageAttachments", updated);
       return updated;
     });
@@ -1650,9 +1880,12 @@ export function StudioPage({
             }
             return uploaded;
           });
+          imageAttachmentsRef.current = updated;
           updateActiveChapterMedia("imageAttachments", updated);
           return updated;
         });
+        lastLocalMediaActivityAtRef.current = Date.now();
+        queueCollaborativeDraftUpdate(replaceTargetUrl ? "image-replaced" : "image-uploaded", { immediate: true });
         setVoiceRecordingStatus(replaceTargetUrl ? "Image replaced." : "Image attachments saved.");
       })
       .catch((error) => {
@@ -1677,6 +1910,7 @@ export function StudioPage({
               updated = [replacementOriginal, ...updated];
             }
           }
+          imageAttachmentsRef.current = updated;
           updateActiveChapterMedia("imageAttachments", updated);
           return updated;
         });
@@ -1742,6 +1976,7 @@ export function StudioPage({
               blob
             }
           ];
+          voiceNotesRef.current = updated;
           updateActiveChapterMedia("voiceNotes", updated);
           return updated;
         });
@@ -1768,14 +2003,18 @@ export function StudioPage({
                     )
                   : voice
               );
+              voiceNotesRef.current = updated;
               updateActiveChapterMedia("voiceNotes", updated);
               return updated;
             });
+            lastLocalMediaActivityAtRef.current = Date.now();
+            queueCollaborativeDraftUpdate("voice-uploaded", { immediate: true });
             setVoiceRecordingStatus("Recording stopped. Voice note saved.");
           })
           .catch((error) => {
             setVoiceNotes((current) => {
               const updated = current.filter((voice) => voice.localId !== localId);
+              voiceNotesRef.current = updated;
               updateActiveChapterMedia("voiceNotes", updated);
               return updated;
             });
@@ -1833,15 +2072,18 @@ export function StudioPage({
   };
 
   const removeImageAttachment = (url: string) => {
+    lastLocalMediaActivityAtRef.current = Date.now();
     setImageAttachments((current) => {
       const target = current.find((attachment) => attachment.url === url);
       if (target && isBlobUrl(target.url)) {
         URL.revokeObjectURL(target.url);
       }
       const updated = current.filter((attachment) => attachment.url !== url);
+      imageAttachmentsRef.current = updated;
       updateActiveChapterMedia("imageAttachments", updated);
       return updated;
     });
+    queueCollaborativeDraftUpdate("image-removed", { immediate: true });
   };
 
   const openImageSlot = () => {
@@ -1871,15 +2113,18 @@ export function StudioPage({
   };
 
   const removeVoiceNote = (url: string) => {
+    lastLocalMediaActivityAtRef.current = Date.now();
     setVoiceNotes((current) => {
       const target = current.find((voice) => voice.url === url);
       if (target && isBlobUrl(target.url)) {
         URL.revokeObjectURL(target.url);
       }
       const updated = current.filter((voice) => voice.url !== url);
+      voiceNotesRef.current = updated;
       updateActiveChapterMedia("voiceNotes", updated);
       return updated;
     });
+    queueCollaborativeDraftUpdate("voice-removed", { immediate: true });
   };
 
   const closeVoiceSheet = () => {
@@ -1898,12 +2143,14 @@ export function StudioPage({
 
   const updateActiveChapterTitle = (nextTitle: string) => {
     const normalizedTitle = normalizeChapterTitle(nextTitle) || "Untitled chapter";
+    lastLocalStoryMetaActivityAtRef.current = Date.now();
     updateChapter((chapter) => ({
       ...chapter,
       title: normalizedTitle
     }));
     setActiveChapter(normalizedTitle);
     invalidatePreviewReview();
+    queueCollaborativeDraftUpdate("chapter-title");
   };
 
   const submitActiveChapterTitle = () => {
@@ -2015,6 +2262,8 @@ export function StudioPage({
       body: sanitizedHtml,
       words: nextText.trim().length === 0 ? 0 : nextText.trim().split(/\s+/).length
     }));
+    lastLocalEditorActivityAtRef.current = Date.now();
+    queueCollaborativeDraftUpdate("body-input");
     if (typeof window !== "undefined" && hasLoadedStudioDraftRef.current) {
       const serializableChapters = nextSnapshot.map((chapter) => ({
         ...chapter,
@@ -2664,6 +2913,26 @@ export function StudioPage({
       )
     );
 
+    if (currentStoryIdRef.current && !hasRemoteStudioBaselineLoaded()) {
+      lastAutoSavedSignatureRef.current = autoSaveSignature;
+      logStudioCollaboration("skip remote autosave until story baseline loads", {
+        currentStoryId: currentStoryIdRef.current
+      });
+      return;
+    }
+
+    if (currentStudioMatchesLastSyncedStory()) {
+      lastAutoSavedSignatureRef.current = autoSaveSignature;
+      if (quiet) {
+        setStudioMessage(
+          currentStoryStatus === "published"
+            ? "Live story is already in sync."
+            : "All studio changes auto-saved."
+        );
+      }
+      return;
+    }
+
     if (currentStoryStatus !== "published" && canPersistStoryRemotely(snapshot)) {
       void ensureStoryMediaUploaded(snapshot)
         .then((uploadedChapters) => persistStory(buildStoryPayload("draft", uploadedChapters), "Autosaved."))
@@ -2723,6 +2992,23 @@ export function StudioPage({
 
       if (autoSaveSignature === lastAutoSavedSignatureRef.current) {
         return;
+      }
+
+      if (!hasRemoteStudioBaselineLoaded()) {
+        lastAutoSavedSignatureRef.current = autoSaveSignature;
+        logStudioCollaboration("skip autosave timer until story baseline loads", {
+          currentStoryId: currentStoryIdRef.current
+        });
+        return;
+      }
+
+      if (currentStudioMatchesLastSyncedStory()) {
+        lastAutoSavedSignatureRef.current = autoSaveSignature;
+        return;
+      }
+
+      if (currentStoryIdRef.current) {
+        logStudioCollaboration("autosave mismatch before persist", getCurrentVsSyncedComparableState());
       }
 
       setIsAutoSavingDraft(true);
@@ -3014,6 +3300,162 @@ export function StudioPage({
     voiceNotes
   ]);
 
+  const sendCollaborativeDraftUpdate = (reason: string) => {
+    const storyId = currentStoryIdRef.current;
+    const snapshot = buildCollaborativeDraftSnapshot();
+    if (!storyId || !snapshot || !appEventsConnectionRef.current || currentStoryCollaborators.length === 0 || !currentStoryCanEdit) {
+      return;
+    }
+
+    const payload = {
+      type: "story-draft-update" as const,
+      storyId,
+      draftSessionId: collaborativeDraftSessionIdRef.current,
+      reason,
+      snapshot
+    };
+    const serializedSize = typeof TextEncoder !== "undefined"
+      ? new TextEncoder().encode(JSON.stringify(payload)).length
+      : JSON.stringify(payload).length;
+
+    if (serializedSize > 60_000) {
+      logStudioCollaboration("skip draft update payload too large", {
+        storyId,
+        reason,
+        serializedSize
+      });
+      return;
+    }
+
+    appEventsConnectionRef.current.send(payload);
+    logStudioCollaboration("sent draft update", {
+      storyId,
+      reason,
+      activeChapter: snapshot.activeChapterTitle,
+      bodyLength: snapshot.chapter.body.length,
+      imageCount: snapshot.chapter.imageAttachments.length
+    });
+  };
+
+  const queueCollaborativeDraftUpdate = (reason: string, options?: { immediate?: boolean }) => {
+    if (!currentStoryIdRef.current || currentStoryCollaborators.length === 0 || !currentStoryCanEdit) {
+      return;
+    }
+
+    if (collaborativeDraftBroadcastTimerRef.current !== null && typeof window !== "undefined") {
+      window.clearTimeout(collaborativeDraftBroadcastTimerRef.current);
+      collaborativeDraftBroadcastTimerRef.current = null;
+    }
+
+    if (collaborativeDraftBroadcastFrameRef.current !== null && typeof window !== "undefined") {
+      window.cancelAnimationFrame(collaborativeDraftBroadcastFrameRef.current);
+      collaborativeDraftBroadcastFrameRef.current = null;
+    }
+
+    if (typeof window === "undefined") {
+      sendCollaborativeDraftUpdate(reason);
+      return;
+    }
+
+    if (options?.immediate) {
+      collaborativeDraftBroadcastFrameRef.current = window.requestAnimationFrame(() => {
+        collaborativeDraftBroadcastFrameRef.current = null;
+        collaborativeDraftBroadcastTimerRef.current = window.setTimeout(() => {
+          collaborativeDraftBroadcastTimerRef.current = null;
+          sendCollaborativeDraftUpdate(reason);
+        }, 0);
+      });
+      return;
+    }
+
+    collaborativeDraftBroadcastTimerRef.current = window.setTimeout(() => {
+      collaborativeDraftBroadcastTimerRef.current = null;
+      sendCollaborativeDraftUpdate(reason);
+    }, 320);
+  };
+
+  const applyCollaborativeDraftSnapshot = (
+    snapshot: StudioCollaborativeDraftSnapshot,
+    options?: { updatedByName?: string; updatedByUsername?: string; reason?: string }
+  ) => {
+    const receivedAt = Date.now();
+    const protectStoryMeta = receivedAt - lastLocalStoryMetaActivityAtRef.current < 1200;
+    const protectActiveBody = receivedAt - lastLocalEditorActivityAtRef.current < 1200;
+    const protectActiveMedia = receivedAt - lastLocalMediaActivityAtRef.current < 1200;
+    const sanitizedRemoteChapter = serializeStudioChapterForDraftSync(snapshot.chapter);
+
+    suppressAutoSavePassesRef.current += 4;
+
+    if (!protectStoryMeta) {
+      setStoryTitle(snapshot.title);
+      setStorySummary(snapshot.summary);
+      setStoryLinks(snapshot.links);
+      setVisibility(snapshot.visibility);
+      setAnonymous(snapshot.anonymous);
+    }
+
+    setChapters((current) => {
+      const targetIndex = findCollaborativeChapterIndex(current, snapshot);
+      const nextChapters = [...current];
+      const existingChapter =
+        targetIndex >= 0
+          ? nextChapters[targetIndex]
+          : createInitialStudioChapter(Math.max(snapshot.activeChapterIndex, 0));
+      const targetIsActive = (targetIndex >= 0 ? targetIndex : snapshot.activeChapterIndex) === (activeChapterIndex >= 0 ? activeChapterIndex : 0);
+      const mergedChapter: StudioChapter = {
+        ...existingChapter,
+        ...sanitizedRemoteChapter,
+        body: targetIsActive && protectActiveBody ? existingChapter.body : sanitizedRemoteChapter.body,
+        words:
+          targetIsActive && protectActiveBody
+            ? existingChapter.words
+            : getChapterWordCount(sanitizedRemoteChapter.body),
+        imageAttachments:
+          targetIsActive && protectActiveMedia
+            ? existingChapter.imageAttachments
+            : sanitizedRemoteChapter.imageAttachments,
+        voiceNotes:
+          targetIsActive && protectActiveMedia
+            ? existingChapter.voiceNotes
+            : sanitizedRemoteChapter.voiceNotes,
+        timelineEntries:
+          targetIsActive && protectActiveMedia
+            ? existingChapter.timelineEntries
+            : sanitizedRemoteChapter.timelineEntries
+      };
+
+      if (targetIndex >= 0) {
+        nextChapters[targetIndex] = mergedChapter;
+      } else {
+        nextChapters.splice(Math.max(snapshot.activeChapterIndex, 0), 0, mergedChapter);
+      }
+
+      return nextChapters;
+    });
+
+    const activeIndex = activeChapterIndex >= 0 ? activeChapterIndex : 0;
+    const targetIndex = findCollaborativeChapterIndex(chaptersRef.current, snapshot);
+    if ((targetIndex >= 0 ? targetIndex : snapshot.activeChapterIndex) === activeIndex) {
+      if (!protectActiveMedia) {
+        setImageAttachments(sanitizedRemoteChapter.imageAttachments);
+        setVoiceNotes(sanitizedRemoteChapter.voiceNotes);
+        setTimelineEntries(sanitizedRemoteChapter.timelineEntries);
+      }
+    }
+
+    logStudioCollaboration("applied draft update", {
+      storyId: currentStoryIdRef.current,
+      updatedByName: options?.updatedByName,
+      updatedByUsername: options?.updatedByUsername,
+      reason: options?.reason ?? "draft-update",
+      activeChapter: snapshot.activeChapterTitle,
+      protectStoryMeta,
+      protectActiveBody,
+      protectActiveMedia,
+      imageCount: sanitizedRemoteChapter.imageAttachments.length
+    });
+  };
+
   const applyMergedRemoteStoryState = (
     story: ApiStory,
     mergedSnapshot: StudioStorySnapshot,
@@ -3050,7 +3492,7 @@ export function StudioPage({
     lastSyncedStudioSnapshotRef.current = createStudioStorySnapshotFromStory(story);
     void hydrateStudioChaptersForMedia(accessToken, mergedChapters, { storyId: story.id })
       .then((hydratedChapters) => {
-        suppressAutoSavePassesRef.current += 1;
+        suppressAutoSavePassesRef.current += 2;
         setChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)]);
       })
       .catch(() => undefined);
@@ -3223,13 +3665,26 @@ export function StudioPage({
   };
 
   useEffect(() => {
-    const unsubscribe = subscribeToAppEvents(accessToken, [`user:${currentUser.id}`], (rawMessage) => {
+    const connection = createAppEventsConnection(accessToken, {
+      onOpen: () => {
+        logStudioCollaboration("events socket open", { userId: currentUser.id });
+      },
+      onClose: () => {
+        logStudioCollaboration("events socket close", { userId: currentUser.id });
+      },
+      onError: () => {
+        logStudioCollaboration("events socket error", { userId: currentUser.id });
+      },
+      onMessage: (rawMessage) => {
       const message = rawMessage as {
         type?: string;
         channel?: string;
         payload?: {
           kind?: string;
           storyId?: string;
+          draftSessionId?: string;
+          reason?: string;
+          snapshot?: StudioCollaborativeDraftSnapshot;
           revision?: number;
           updatedAt?: string;
           updatedByName?: string;
@@ -3240,15 +3695,44 @@ export function StudioPage({
       if (
         message.type !== "event" ||
         message.channel !== `user:${currentUser.id}` ||
-        message.payload?.kind !== "story.collaboration.updated" ||
-        !currentStoryId ||
-        message.payload.storyId !== currentStoryId ||
-        (message.payload.updatedByUsername ?? "").toLowerCase() === currentUser.username.toLowerCase()
+        !message.payload ||
+        !currentStoryIdRef.current ||
+        message.payload.storyId !== currentStoryIdRef.current
       ) {
         return;
       }
 
-      const nextRevision = message.payload.revision ?? 0;
+      const payload = message.payload;
+
+      if (
+        payload.kind === "story.collaboration.draft.updated" &&
+        payload.draftSessionId !== collaborativeDraftSessionIdRef.current &&
+        payload.snapshot?.chapter &&
+        typeof payload.snapshot.activeChapterTitle === "string"
+      ) {
+        logStudioCollaboration("received draft update", {
+          storyId: payload.storyId,
+          updatedByName: payload.updatedByName,
+          updatedByUsername: payload.updatedByUsername,
+          reason: payload.reason ?? "draft-update",
+          draftSessionId: payload.draftSessionId
+        });
+        applyCollaborativeDraftSnapshot(payload.snapshot, {
+          updatedByName: payload.updatedByName,
+          updatedByUsername: payload.updatedByUsername,
+          reason: payload.reason
+        });
+        return;
+      }
+
+      if (
+        payload.kind !== "story.collaboration.updated" ||
+        (payload.updatedByUsername ?? "").toLowerCase() === currentUser.username.toLowerCase()
+      ) {
+        return;
+      }
+
+      const nextRevision = payload.revision ?? 0;
       if (nextRevision <= currentStoryRevisionRef.current) {
         return;
       }
@@ -3260,31 +3744,48 @@ export function StudioPage({
 
       void syncCollaborativeStoryFromRemote(targetStoryId, {
         revisionFallback: nextRevision,
-        updatedAt: message.payload?.updatedAt ?? new Date().toISOString(),
-        updatedByName: message.payload?.updatedByName ?? "A collaborator",
-        updatedByUsername: message.payload?.updatedByUsername ?? "collaborator"
+        updatedAt: payload.updatedAt ?? new Date().toISOString(),
+        updatedByName: payload.updatedByName ?? "A collaborator",
+        updatedByUsername: payload.updatedByUsername ?? "collaborator"
       })
         .catch(() => {
           setRemoteCollaborationUpdate({
             revision: nextRevision,
-            updatedAt: message.payload?.updatedAt ?? new Date().toISOString(),
-            updatedByName: message.payload?.updatedByName ?? "A collaborator",
-            updatedByUsername: message.payload?.updatedByUsername ?? "collaborator"
+            updatedAt: payload.updatedAt ?? new Date().toISOString(),
+            updatedByName: payload.updatedByName ?? "A collaborator",
+            updatedByUsername: payload.updatedByUsername ?? "collaborator"
           });
-          setStudioMessage(`${message.payload?.updatedByName ?? "A collaborator"} updated this story. Tap to sync the latest version.`);
+          setStudioMessage(`${payload.updatedByName ?? "A collaborator"} updated this story. Tap to sync the latest version.`);
         });
+      }
     });
+    connection.subscribe([`user:${currentUser.id}`]);
+    appEventsConnectionRef.current = connection;
 
-    return unsubscribe;
-  }, [accessToken, currentStoryId, currentStoryRevision, currentUser.id, currentUser.username]);
+    return () => {
+      appEventsConnectionRef.current = null;
+      if (collaborativeDraftBroadcastFrameRef.current !== null && typeof window !== "undefined") {
+        window.cancelAnimationFrame(collaborativeDraftBroadcastFrameRef.current);
+        collaborativeDraftBroadcastFrameRef.current = null;
+      }
+      if (collaborativeDraftBroadcastTimerRef.current !== null && typeof window !== "undefined") {
+        window.clearTimeout(collaborativeDraftBroadcastTimerRef.current);
+        collaborativeDraftBroadcastTimerRef.current = null;
+      }
+      connection.close();
+    };
+  }, [accessToken, currentUser.id, currentUser.username]);
 
   const updateTimelineEntry = (index: number, field: "title" | "body", value: string) => {
+    lastLocalMediaActivityAtRef.current = Date.now();
     setTimelineEntries((current) => {
       const updated = current.map((entry, entryIndex) => (entryIndex === index ? { ...entry, [field]: value } : entry));
+      timelineEntriesRef.current = updated;
       updateActiveChapterMedia("timelineEntries", updated);
       return updated;
     });
     invalidatePreviewReview();
+    queueCollaborativeDraftUpdate("timeline-updated");
   };
 
   const updateStoryLink = (index: number, field: keyof StudioExternalLink, value: string) => {
@@ -3323,31 +3824,38 @@ export function StudioPage({
   };
 
   const addTimelineEntry = () => {
+    lastLocalMediaActivityAtRef.current = Date.now();
     setTimelineEntries((current) => {
       const updated = [
         ...current,
         createEmptyTimelineEntry()
       ];
+      timelineEntriesRef.current = updated;
       updateActiveChapterMedia("timelineEntries", updated);
       return updated;
     });
     setStudioMessage("New timeline moment added.");
     setDraftHistory((current) => ["Timeline moment added.", ...current].slice(0, 6));
+    queueCollaborativeDraftUpdate("timeline-added", { immediate: true });
   };
 
   const removeTimelineEntry = (index: number) => {
+    lastLocalMediaActivityAtRef.current = Date.now();
     setTimelineEntries((current) => {
       const filtered = current.filter((_, entryIndex) => entryIndex !== index);
       const updated = filtered.length ? filtered : [createEmptyTimelineEntry()];
+      timelineEntriesRef.current = updated;
       updateActiveChapterMedia("timelineEntries", updated);
       return updated;
     });
     setStudioMessage("Timeline moment removed.");
     setDraftHistory((current) => ["Timeline moment removed.", ...current].slice(0, 6));
     invalidatePreviewReview();
+    queueCollaborativeDraftUpdate("timeline-removed", { immediate: true });
   };
 
   const updateTimelineDatePart = (index: number, field: "year" | "month" | "day", value: string) => {
+    lastLocalMediaActivityAtRef.current = Date.now();
     setTimelineEntries((current) => {
       const updated = current.map((entry, entryIndex) => {
         if (entryIndex !== index) {
@@ -3366,10 +3874,12 @@ export function StudioPage({
 
         return nextEntry;
       })
+      timelineEntriesRef.current = updated;
       updateActiveChapterMedia("timelineEntries", updated);
       return updated;
     });
     invalidatePreviewReview();
+    queueCollaborativeDraftUpdate("timeline-date");
   };
 
   const handlePreviewToggle = async () => {
@@ -3382,9 +3892,11 @@ export function StudioPage({
       const uploadedChapters = await ensureStoryMediaUploaded(snapshot);
       const previewChapters = sanitizePreviewChaptersForCurrentPlan(uploadedChapters);
       let previewStoryId = currentStoryId;
+      let previewRevision = currentStoryRevisionRef.current;
       if (currentStoryStatus !== "published" && canPersistStoryRemotely(previewChapters)) {
         const previewStory = await persistStory(buildStoryPayload("draft", previewChapters), "Autosaved.");
         previewStoryId = previewStory.id;
+        previewRevision = previewStory.collaborationRevision ?? previewRevision;
       }
       const uploadedActiveChapter = previewChapters[activeChapterIndex >= 0 ? activeChapterIndex : 0];
       const previewPayload: StudioPreviewPayload = {
@@ -3411,9 +3923,13 @@ export function StudioPage({
         }
       };
 
+      const nextPublishPayload = buildStoryPayload("published", previewChapters);
       const publishPayload: StudioPublishPayload = {
         storyId: previewStoryId,
-        payload: buildStoryPayload("published", previewChapters)
+        payload: {
+          ...nextPublishPayload,
+          expectedRevision: previewStoryId ? previewRevision : undefined
+        }
       };
 
       window.sessionStorage.setItem("histora-studio-preview", JSON.stringify(previewPayload));
@@ -3851,15 +4367,19 @@ export function StudioPage({
               <label>
                 Title
                 <input onChange={(event) => {
+                  lastLocalStoryMetaActivityAtRef.current = Date.now();
                   setStoryTitle(event.target.value);
                   invalidatePreviewReview();
+                  queueCollaborativeDraftUpdate("story-title");
                 }} value={storyTitle} />
               </label>
               <label>
                 Summary
                 <textarea onChange={(event) => {
+                  lastLocalStoryMetaActivityAtRef.current = Date.now();
                   setStorySummary(event.target.value);
                   invalidatePreviewReview();
+                  queueCollaborativeDraftUpdate("story-summary");
                 }} value={storySummary} />
                 <span className="section-meta studio-word-counter">
                   {summaryWordsRemaining > 0

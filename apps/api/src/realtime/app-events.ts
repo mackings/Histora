@@ -3,6 +3,8 @@ import { randomUUID } from "crypto";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { isTrustedBrowserOrigin, normalizeOriginValue } from "../config/cors.js";
+import { StoryModel } from "../models/story.model.js";
+import { UserModel } from "../models/user.model.js";
 import { getRedisClient, getRedisSubscriber, safeRedisConnect } from "../services/redis.service.js";
 import { authenticateAccessToken } from "../services/session-auth.service.js";
 
@@ -17,6 +19,14 @@ type ClientContext = {
   socket: WebSocket;
   userId?: string;
   channels: Set<string>;
+};
+
+type StoryDraftUpdateMessage = {
+  type: "story-draft-update";
+  storyId?: string;
+  draftSessionId?: string;
+  reason?: string;
+  snapshot?: unknown;
 };
 
 const eventClients = new Set<ClientContext>();
@@ -89,6 +99,75 @@ const canSubscribeToChannel = (channel: string, userId?: string) => {
 
   return false;
 };
+
+const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const canPublishStoryDraftUpdate = async (storyId: string, userId?: string) => {
+  if (!userId) {
+    return null;
+  }
+
+  const story = await StoryModel.findById(storyId).select("authorId collaborators");
+  if (!story) {
+    return null;
+  }
+
+  const isEditor =
+    String(story.authorId) === userId ||
+    story.collaborators.some((collaborator) => String(collaborator.userId) === userId);
+
+  return isEditor ? story : null;
+};
+
+const isValidStoryDraftUpdateMessage = (payload: unknown): payload is StoryDraftUpdateMessage => {
+  if (!isObjectRecord(payload) || payload.type !== "story-draft-update") {
+    return false;
+  }
+
+  return typeof payload.storyId === "string" && payload.storyId.length > 0 && isObjectRecord(payload.snapshot);
+};
+
+async function handleStoryDraftUpdate(client: ClientContext, payload: StoryDraftUpdateMessage) {
+  if (!payload.storyId || !client.userId || !payload.snapshot || !isObjectRecord(payload.snapshot)) {
+    client.socket.send(JSON.stringify({ type: "error", error: "Invalid collaborative draft update." }));
+    return;
+  }
+
+  const serializedPayload = JSON.stringify(payload.snapshot);
+  if (Buffer.byteLength(serializedPayload, "utf8") > 60_000) {
+    client.socket.send(JSON.stringify({ type: "error", error: "Collaborative draft update is too large." }));
+    return;
+  }
+
+  const [story, actor] = await Promise.all([
+    canPublishStoryDraftUpdate(payload.storyId, client.userId),
+    UserModel.findById(client.userId).select("fullName username")
+  ]);
+
+  if (!story || !actor) {
+    client.socket.send(JSON.stringify({ type: "error", error: "Unauthorized collaborative draft update." }));
+    return;
+  }
+
+  const participantIds = new Set([
+    String(story.authorId),
+    ...story.collaborators.map((collaborator) => String(collaborator.userId))
+  ]);
+
+  for (const participantId of participantIds) {
+    broadcastAppEvent(`user:${participantId}`, {
+      kind: "story.collaboration.draft.updated",
+      storyId: payload.storyId,
+      draftSessionId: typeof payload.draftSessionId === "string" ? payload.draftSessionId : "",
+      reason: typeof payload.reason === "string" ? payload.reason : "draft-update",
+      updatedAt: new Date().toISOString(),
+      updatedByName: actor.fullName,
+      updatedByUsername: actor.username,
+      snapshot: payload.snapshot
+    });
+  }
+}
 
 export function broadcastAppEvent(channel: string, payload: unknown) {
   const envelope: EventEnvelope = { type: "event", channel, payload, eventId: randomUUID() };
@@ -188,27 +267,33 @@ export function registerAppEventsRelay(server: HttpServer) {
     );
 
     socket.on("message", (message) => {
-      try {
+      void (async () => {
         const payload = JSON.parse(message.toString()) as {
           type?: string;
           channel?: string;
         };
 
-        if (payload.type !== "subscribe" || !payload.channel) {
+        if (payload.type === "subscribe" && payload.channel) {
+          if (!canSubscribeToChannel(payload.channel, client.userId)) {
+            socket.send(JSON.stringify({ type: "error", error: "Unauthorized channel subscription." }));
+            return;
+          }
+
+          // Keep subscriptions explicit so private inbox traffic never leaks into public channels.
+          client.channels.add(payload.channel);
+          socket.send(JSON.stringify({ type: "subscribed", channel: payload.channel }));
           return;
         }
 
-        if (!canSubscribeToChannel(payload.channel, client.userId)) {
-          socket.send(JSON.stringify({ type: "error", error: "Unauthorized channel subscription." }));
+        if (isValidStoryDraftUpdateMessage(payload)) {
+          await handleStoryDraftUpdate(client, payload);
           return;
         }
 
-        // Keep subscriptions explicit so private inbox traffic never leaks into public channels.
-        client.channels.add(payload.channel);
-        socket.send(JSON.stringify({ type: "subscribed", channel: payload.channel }));
-      } catch {
         socket.send(JSON.stringify({ type: "error", error: "Invalid realtime payload." }));
-      }
+      })().catch(() => {
+        socket.send(JSON.stringify({ type: "error", error: "Invalid realtime payload." }));
+      });
     });
 
     socket.on("close", () => {

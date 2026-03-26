@@ -302,19 +302,49 @@ export const getEventsSocketUrl = (accessToken: string) => {
   return `${protocol}//${baseUrl.host}/ws/events?token=${encodeURIComponent(accessToken)}`;
 };
 
-export function subscribeToAppEvents(
+export function createAppEventsConnection(
   accessToken: string,
-  channels: string[],
-  onMessage: (message: unknown) => void
+  handlers?: {
+    onMessage?: (message: unknown) => void;
+    onOpen?: () => void;
+    onClose?: () => void;
+    onError?: () => void;
+  }
 ) {
   let socket: WebSocket | null = null;
   let reconnectTimer: number | null = null;
   let closedManually = false;
+  const subscriptions = new Set<string>();
+  const pendingMessages: string[] = [];
 
   const cleanupReconnectTimer = () => {
     if (reconnectTimer !== null && typeof window !== "undefined") {
       window.clearTimeout(reconnectTimer);
       reconnectTimer = null;
+    }
+  };
+
+  const flushSubscriptions = () => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    subscriptions.forEach((channel) => {
+      socket?.send(JSON.stringify({ type: "subscribe", channel }));
+    });
+  };
+
+  const flushPendingMessages = () => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    while (pendingMessages.length > 0) {
+      const nextPayload = pendingMessages.shift();
+      if (!nextPayload) {
+        continue;
+      }
+      socket.send(nextPayload);
     }
   };
 
@@ -326,24 +356,26 @@ export function subscribeToAppEvents(
     socket = new WebSocket(getEventsSocketUrl(accessToken));
 
     socket.addEventListener("open", () => {
-      channels.forEach((channel) => {
-        socket?.send(JSON.stringify({ type: "subscribe", channel }));
-      });
+      handlers?.onOpen?.();
+      flushSubscriptions();
+      flushPendingMessages();
     });
 
     socket.addEventListener("message", (event) => {
       try {
-        onMessage(JSON.parse(event.data as string));
+        handlers?.onMessage?.(JSON.parse(event.data as string));
       } catch {
         return;
       }
     });
 
     socket.addEventListener("error", () => {
+      handlers?.onError?.();
       socket?.close();
     });
 
     socket.addEventListener("close", () => {
+      handlers?.onClose?.();
       socket = null;
       if (closedManually || typeof window === "undefined") {
         return;
@@ -358,10 +390,38 @@ export function subscribeToAppEvents(
 
   connect();
 
+  return {
+    subscribe(channels: string[]) {
+      channels.forEach((channel) => subscriptions.add(channel));
+      flushSubscriptions();
+    },
+    send(payload: unknown) {
+      const serialized = JSON.stringify(payload);
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(serialized);
+        return;
+      }
+
+      pendingMessages.push(serialized);
+    },
+    close() {
+      closedManually = true;
+      cleanupReconnectTimer();
+      socket?.close();
+    }
+  };
+}
+
+export function subscribeToAppEvents(
+  accessToken: string,
+  channels: string[],
+  onMessage: (message: unknown) => void
+) {
+  const connection = createAppEventsConnection(accessToken, { onMessage });
+  connection.subscribe(channels);
+
   return () => {
-    closedManually = true;
-    cleanupReconnectTimer();
-    socket?.close();
+    connection.close();
   };
 }
 
