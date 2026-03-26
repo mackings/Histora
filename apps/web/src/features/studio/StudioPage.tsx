@@ -184,6 +184,41 @@ async function hydrateStudioChaptersForMedia(
   );
 }
 
+const hasPendingStudioAttachmentHydration = (attachment: StudioMediaAttachment) => {
+  const storageKey =
+    (attachment.objectKey && isOwnedStorageObjectKey(attachment.objectKey) ? attachment.objectKey : null) ||
+    extractStudioOwnedObjectKey(attachment.url);
+
+  return Boolean(storageKey && attachment.url === storageKey);
+};
+
+async function hydrateStudioChapterMediaWithRetry(
+  accessToken: string,
+  chapter: StudioChapter,
+  options?: { storyId?: string | null; attempts?: number; delayMs?: number }
+) {
+  let nextChapter = chapter;
+  const attempts = options?.attempts ?? 4;
+  const delayMs = options?.delayMs ?? 700;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const [hydratedChapter] = await hydrateStudioChaptersForMedia(accessToken, [nextChapter], options);
+    nextChapter = hydratedChapter ?? nextChapter;
+
+    const hasPendingHydration = [...nextChapter.imageAttachments, ...nextChapter.voiceNotes].some(
+      (attachment) => hasPendingStudioAttachmentHydration(attachment)
+    );
+
+    if (!hasPendingHydration) {
+      return nextChapter;
+    }
+
+    await new Promise((resolve) => globalThis.setTimeout(resolve, delayMs));
+  }
+
+  return nextChapter;
+}
+
 const isRestorableStudioAttachment = (attachment: { url: string; objectKey?: string }) =>
   Boolean(
     (attachment.objectKey && isOwnedStorageObjectKey(attachment.objectKey)) ||
@@ -1100,6 +1135,7 @@ export function StudioPage({
   const publishControlSectionRef = useRef<HTMLElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const imageAttachmentsRef = useRef<StudioMediaAttachment[]>([]);
+  const imageHydrationRetryInFlightRef = useRef<Record<string, boolean>>({});
   const voiceNotesRef = useRef<StudioMediaAttachment[]>([]);
   const timelineEntriesRef = useRef<StudioTimelineEntry[]>([]);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -1439,12 +1475,69 @@ export function StudioPage({
           const attachmentIdentity = getStudioAttachmentIdentity(attachment);
           return [
             attachmentIdentity,
-            isUploadingAttachmentSource(attachment.source) || current[attachmentIdentity] !== false
+            isUploadingAttachmentSource(attachment.source) ||
+              hasPendingStudioAttachmentHydration(attachment) ||
+              current[attachmentIdentity] !== false
           ];
         })
       )
     );
   }, [imageAttachments]);
+
+  const refreshImageAttachmentAfterError = (attachment: StudioMediaAttachment) => {
+    const storyId = currentStoryIdRef.current;
+    const attachmentIdentity = getStudioAttachmentIdentity(attachment);
+    const storageKey =
+      (attachment.objectKey && isOwnedStorageObjectKey(attachment.objectKey) ? attachment.objectKey : null) ||
+      extractStudioOwnedObjectKey(attachment.url);
+
+    if (!storyId || !storageKey || imageHydrationRetryInFlightRef.current[attachmentIdentity]) {
+      return;
+    }
+
+    imageHydrationRetryInFlightRef.current[attachmentIdentity] = true;
+    setImageLoadingState((current) => ({
+      ...current,
+      [attachmentIdentity]: true
+    }));
+
+    void resolveStudioAttachmentUrl(accessToken, attachment, { storyId })
+      .then((refreshedAttachment) => {
+        const applyRefreshedAttachment = (collection: StudioMediaAttachment[]) =>
+          collection.map((existingAttachment) =>
+            attachmentsRepresentSameUpload(existingAttachment, attachment)
+              ? finalizeStudioAttachment(refreshedAttachment, {
+                  localId: existingAttachment.localId
+                })
+              : existingAttachment
+          );
+
+        setChapters((current) =>
+          current.map((chapter) => ({
+            ...chapter,
+            imageAttachments: applyRefreshedAttachment(chapter.imageAttachments)
+          }))
+        );
+        setImageAttachments((current) => applyRefreshedAttachment(current));
+
+        logStudioCollaboration("refreshed broken image attachment", {
+          storyId,
+          attachment: attachment.name,
+          objectKey: storageKey
+        });
+      })
+      .catch((error) => {
+        logStudioCollaboration("image attachment refresh failed", {
+          storyId,
+          attachment: attachment.name,
+          objectKey: storageKey,
+          error: getErrorMessage(error, "Unknown image hydration failure")
+        });
+      })
+      .finally(() => {
+        delete imageHydrationRetryInFlightRef.current[attachmentIdentity];
+      });
+  };
 
   const loadStoryIntoStudio = (story: ApiStory, options?: { mergeRestoredDraft?: boolean }) => {
     const remoteSnapshot = createStudioStorySnapshotFromStory(story);
@@ -3538,8 +3631,8 @@ export function StudioPage({
 
     const activeStoryId = currentStoryIdRef.current;
     if (activeStoryId && !protectActiveMedia) {
-      void hydrateStudioChaptersForMedia(accessToken, [sanitizedRemoteChapter], { storyId: activeStoryId })
-        .then(([hydratedRemoteChapter]) => {
+      void hydrateStudioChapterMediaWithRetry(accessToken, sanitizedRemoteChapter, { storyId: activeStoryId })
+        .then((hydratedRemoteChapter) => {
           if (!hydratedRemoteChapter || currentStoryIdRef.current !== activeStoryId) {
             return;
           }
@@ -4814,7 +4907,7 @@ export function StudioPage({
                 const showImageSkeleton = imageLoadingState[attachmentIdentity] ?? isUploadingAttachmentSource(attachment.source);
 
                 return (
-                <article className="media-card" key={attachment.url}>
+                  <article className="media-card" key={attachmentIdentity}>
                   <button
                     aria-label={`Remove ${attachment.name}`}
                     className="media-remove-button"
@@ -4829,10 +4922,19 @@ export function StudioPage({
                       alt={attachment.name}
                       className={`media-preview-image${showImageSkeleton ? " media-preview-image-loading" : ""}`}
                       onError={() => {
+                        const shouldKeepSkeletonVisible =
+                          Boolean(attachment.objectKey) ||
+                          hasPendingStudioAttachmentHydration(attachment) ||
+                          isUploadingAttachmentSource(attachment.source);
+
                         setImageLoadingState((current) => ({
                           ...current,
-                          [attachmentIdentity]: false
+                          [attachmentIdentity]: shouldKeepSkeletonVisible
                         }));
+
+                        if (shouldKeepSkeletonVisible) {
+                          refreshImageAttachmentAfterError(attachment);
+                        }
                       }}
                       onLoad={() => {
                         setImageLoadingState((current) => ({
@@ -4851,7 +4953,7 @@ export function StudioPage({
                     </button>
                     <small>Swap this image without using another slot.</small>
                   </div>
-                </article>
+                  </article>
                 );
               })}
               {Array.from({ length: Math.max(imageLimit - imageAttachments.length, 0) }).map((_, index) => (
