@@ -17,8 +17,8 @@ const ownerUser = {
   email: "studioe2e@gmail.com",
   password: "TestPassword123",
   deviceIdentity: {
-    deviceId: "test-device-000000001101",
-    deviceName: "Live Media Owner"
+    deviceId: "test-device-000000000001",
+    deviceName: "Playwright Test Device"
   }
 };
 
@@ -26,8 +26,8 @@ const collaboratorUser = {
   email: "feedauthor@gmail.com",
   password: "AuthorPass123",
   deviceIdentity: {
-    deviceId: "test-device-000000001102",
-    deviceName: "Live Media Collaborator"
+    deviceId: "test-device-000000000002",
+    deviceName: "Playwright Feed Author Device"
   }
 };
 

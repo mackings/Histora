@@ -1991,16 +1991,14 @@ export function StudioPage({
       blob: file
     }));
 
-    setImageAttachments((current) => {
-      const updated = replaceTargetUrl
-        ? current.map((attachment) =>
-            attachment.url === replaceTargetUrl ? optimisticImages[0] ?? attachment : attachment
-          )
-        : [...current, ...optimisticImages];
-      imageAttachmentsRef.current = updated;
-      updateActiveChapterMedia("imageAttachments", updated);
-      return updated;
-    });
+    const optimisticImageAttachments = replaceTargetUrl
+      ? imageAttachmentsRef.current.map((attachment) =>
+          attachment.url === replaceTargetUrl ? optimisticImages[0] ?? attachment : attachment
+        )
+      : [...imageAttachmentsRef.current, ...optimisticImages];
+    imageAttachmentsRef.current = optimisticImageAttachments;
+    setImageAttachments(optimisticImageAttachments);
+    updateActiveChapterMedia("imageAttachments", optimisticImageAttachments);
 
     void Promise.all(
       optimisticImages.map(async (attachment, index) => {
@@ -2026,25 +2024,23 @@ export function StudioPage({
       })
     )
       .then((uploadedImages) => {
-        setImageAttachments((current) => {
-          const updated = current.map((attachment) => {
-            const uploaded = uploadedImages.find((item) => item.localId === attachment.localId);
-            if (!uploaded) {
-              return attachment;
-            }
-            if (isBlobUrl(attachment.url)) {
-              URL.revokeObjectURL(attachment.url);
-            }
-            return uploaded;
-          });
-          imageAttachmentsRef.current = updated;
-          updateActiveChapterMedia("imageAttachments", updated);
-          return updated;
+        const updatedImageAttachments = imageAttachmentsRef.current.map((attachment) => {
+          const uploaded = uploadedImages.find((item) => item.localId === attachment.localId);
+          if (!uploaded) {
+            return attachment;
+          }
+          if (isBlobUrl(attachment.url)) {
+            URL.revokeObjectURL(attachment.url);
+          }
+          return uploaded;
         });
+        imageAttachmentsRef.current = updatedImageAttachments;
+        setImageAttachments(updatedImageAttachments);
+        updateActiveChapterMedia("imageAttachments", updatedImageAttachments);
         lastLocalMediaActivityAtRef.current = Date.now();
         const nextReason = replaceTargetUrl ? "image-replaced" : "image-uploaded";
         if (currentStoryIdRef.current && currentStoryCollaborators.length > 0 && currentStoryCanEdit) {
-          void persistCollaborativeMediaDraft()
+          void persistCollaborativeMediaDraft({ imageAttachments: updatedImageAttachments })
             .then(() => {
               queueCollaborativeDraftUpdate(nextReason, { immediate: true });
             })
@@ -2062,26 +2058,25 @@ export function StudioPage({
             URL.revokeObjectURL(attachment.url);
           }
         });
-        setImageAttachments((current) => {
-          let updated = current.filter(
-            (attachment) => !optimisticImages.some((item) => item.localId === attachment.localId)
-          );
-          if (replaceTargetUrl && replacementOriginal) {
-            const targetIndex = imageAttachments.findIndex((attachment) => attachment.url === replaceTargetUrl);
-            if (targetIndex >= 0) {
-              updated = [
-                ...updated.slice(0, targetIndex),
-                replacementOriginal,
-                ...updated.slice(targetIndex)
-              ];
-            } else {
-              updated = [replacementOriginal, ...updated];
-            }
+        const currentImageAttachments = imageAttachmentsRef.current;
+        let updatedImageAttachments = currentImageAttachments.filter(
+          (attachment) => !optimisticImages.some((item) => item.localId === attachment.localId)
+        );
+        if (replaceTargetUrl && replacementOriginal) {
+          const targetIndex = currentImageAttachments.findIndex((attachment) => attachment.url === replaceTargetUrl);
+          if (targetIndex >= 0) {
+            updatedImageAttachments = [
+              ...updatedImageAttachments.slice(0, targetIndex),
+              replacementOriginal,
+              ...updatedImageAttachments.slice(targetIndex)
+            ];
+          } else {
+            updatedImageAttachments = [replacementOriginal, ...updatedImageAttachments];
           }
-          imageAttachmentsRef.current = updated;
-          updateActiveChapterMedia("imageAttachments", updated);
-          return updated;
-        });
+        }
+        imageAttachmentsRef.current = updatedImageAttachments;
+        setImageAttachments(updatedImageAttachments);
+        updateActiveChapterMedia("imageAttachments", updatedImageAttachments);
         setMediaError(getErrorMessage(error, "Could not save the selected images."));
         setVoiceRecordingStatus(replaceTargetUrl ? "Image replacement failed." : "Image upload failed.");
       });
@@ -2133,21 +2128,19 @@ export function StudioPage({
         const nextVoiceName = `Voice note ${voiceNotesRef.current.length + 1}`;
         const localId = `${Date.now()}-${nextVoiceName}`;
 
-        setVoiceNotes((current) => {
-          const updated = [
-            ...current,
-            {
-              localId,
-              name: nextVoiceName,
-              url,
-              source: "Uploading voice note...",
-              blob
-            }
-          ];
-          voiceNotesRef.current = updated;
-          updateActiveChapterMedia("voiceNotes", updated);
-          return updated;
-        });
+        const optimisticVoiceNotes = [
+          ...voiceNotesRef.current,
+          {
+            localId,
+            name: nextVoiceName,
+            url,
+            source: "Uploading voice note...",
+            blob
+          }
+        ];
+        voiceNotesRef.current = optimisticVoiceNotes;
+        setVoiceNotes(optimisticVoiceNotes);
+        updateActiveChapterMedia("voiceNotes", optimisticVoiceNotes);
 
         setVoiceRecordingStatus("Uploading voice note...");
 
@@ -2157,27 +2150,25 @@ export function StudioPage({
           contentType: blob.type || "audio/webm"
         })
           .then((uploaded) => {
-            setVoiceNotes((current) => {
-              const updated = current.map((voice) =>
-                voice.localId === localId
-                  ? finalizeStudioAttachment(
-                      voice,
-                      {
+            const updatedVoiceNotes = voiceNotesRef.current.map((voice) =>
+              voice.localId === localId
+                ? finalizeStudioAttachment(
+                    voice,
+                    {
                       url: uploaded.readUrl,
                       source: "Recorded in studio",
                       objectKey: uploaded.objectKey
-                      },
-                      "Recorded in studio"
-                    )
-                  : voice
-              );
-              voiceNotesRef.current = updated;
-              updateActiveChapterMedia("voiceNotes", updated);
-              return updated;
-            });
+                    },
+                    "Recorded in studio"
+                  )
+                : voice
+            );
+            voiceNotesRef.current = updatedVoiceNotes;
+            setVoiceNotes(updatedVoiceNotes);
+            updateActiveChapterMedia("voiceNotes", updatedVoiceNotes);
             lastLocalMediaActivityAtRef.current = Date.now();
             if (currentStoryIdRef.current && currentStoryCollaborators.length > 0 && currentStoryCanEdit) {
-              void persistCollaborativeMediaDraft()
+              void persistCollaborativeMediaDraft({ voiceNotes: updatedVoiceNotes })
                 .then(() => {
                   queueCollaborativeDraftUpdate("voice-uploaded", { immediate: true });
                 })
@@ -2190,12 +2181,10 @@ export function StudioPage({
             setVoiceRecordingStatus("Recording stopped. Voice note saved.");
           })
           .catch((error) => {
-            setVoiceNotes((current) => {
-              const updated = current.filter((voice) => voice.localId !== localId);
-              voiceNotesRef.current = updated;
-              updateActiveChapterMedia("voiceNotes", updated);
-              return updated;
-            });
+            const updatedVoiceNotes = voiceNotesRef.current.filter((voice) => voice.localId !== localId);
+            voiceNotesRef.current = updatedVoiceNotes;
+            setVoiceNotes(updatedVoiceNotes);
+            updateActiveChapterMedia("voiceNotes", updatedVoiceNotes);
             if (isBlobUrl(url)) {
               URL.revokeObjectURL(url);
             }
@@ -3917,7 +3906,12 @@ export function StudioPage({
     return await nextPersist;
   };
 
-  const persistCollaborativeMediaDraft = async () => {
+  const persistCollaborativeMediaDraft = async (overrides?: {
+    imageAttachments?: StudioMediaAttachment[];
+    voiceNotes?: StudioMediaAttachment[];
+    timelineEntries?: StudioTimelineEntry[];
+    latestBody?: string;
+  }) => {
     if (!currentStoryIdRef.current || currentStoryCollaborators.length === 0 || !currentStoryCanEdit) {
       return null;
     }
@@ -3926,7 +3920,7 @@ export function StudioPage({
       return null;
     }
 
-    const latestBody = getLatestChapterBody();
+    const latestBody = overrides?.latestBody ?? getLatestChapterBody();
     const targetIndex = Math.max(
       chaptersRef.current.findIndex((chapter) => chapter.title === activeChapterRef.current),
       0
@@ -3937,9 +3931,12 @@ export function StudioPage({
             ...chapter,
             body: latestBody,
             words: getChapterWordCount(latestBody),
-            imageAttachments: sanitizeStudioAttachments([...imageAttachmentsRef.current]),
-            voiceNotes: sanitizeStudioAttachments([...voiceNotesRef.current], "Recorded in studio"),
-            timelineEntries: [...timelineEntriesRef.current].length ? [...timelineEntriesRef.current] : [createEmptyTimelineEntry()]
+            imageAttachments: sanitizeStudioAttachments([...(overrides?.imageAttachments ?? imageAttachmentsRef.current)]),
+            voiceNotes: sanitizeStudioAttachments([...(overrides?.voiceNotes ?? voiceNotesRef.current)], "Recorded in studio"),
+            timelineEntries:
+              [...(overrides?.timelineEntries ?? timelineEntriesRef.current)].length
+                ? [...(overrides?.timelineEntries ?? timelineEntriesRef.current)]
+                : [createEmptyTimelineEntry()]
           }
         : chapter
     );
