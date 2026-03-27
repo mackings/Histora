@@ -329,6 +329,8 @@ export function StudioPage({
 }) {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const legacyStudioStorageKey = "histora-studio-local-draft-v1";
+  const studioStoragePrefix = "histora-studio-local-draft-v2";
   const normalizeChapterTitle = (title: string) => title.replace(/^Chapter\s+\d+:\s*/i, "").trim();
   const monthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const currentYear = new Date().getFullYear();
@@ -413,6 +415,162 @@ export function StudioPage({
     const plainText = getPlainTextFromHtml(html).trim();
     return plainText.length === 0 ? 0 : plainText.split(/\s+/).length;
   };
+  const getStudioStorageKey = (storyId?: string | null) =>
+    storyId ? `${studioStoragePrefix}:story:${storyId}` : `${studioStoragePrefix}:local`;
+  const buildSerializableStudioChapters = (sourceChapters: StudioChapter[]) =>
+    sourceChapters.map((chapter) => ({
+      ...chapter,
+      imageAttachments: chapter.imageAttachments
+        .map((attachment) => ({
+          name: attachment.name,
+          url: getStudioAttachmentStorageUrl(attachment),
+          source: attachment.source,
+          objectKey: attachment.objectKey
+        }))
+        .filter((attachment) => attachment.url),
+      voiceNotes: chapter.voiceNotes
+        .map((voice) => ({
+          name: voice.name,
+          url: getStudioAttachmentStorageUrl(voice),
+          source: voice.source,
+          objectKey: voice.objectKey
+        }))
+        .filter((voice) => voice.url)
+    }));
+  const parseStoredStudioDraft = (
+    rawDraft: string | null,
+    options?: {
+      expectedStoryId?: string | null;
+      allowUnsavedLocal?: boolean;
+    }
+  ): StoredStudioDraft | null => {
+    if (!rawDraft) {
+      return null;
+    }
+
+    try {
+      const savedDraft = JSON.parse(rawDraft) as Partial<StoredStudioDraft>;
+
+      if (options?.expectedStoryId) {
+        if (savedDraft.currentStoryId !== options.expectedStoryId) {
+          return null;
+        }
+      } else if (!options?.allowUnsavedLocal || savedDraft.currentStoryId) {
+        return null;
+      }
+
+      const storyLinks = Array.isArray(savedDraft.storyLinks)
+        ? savedDraft.storyLinks.filter(
+            (link): link is StudioExternalLink =>
+              Boolean(
+                link &&
+                  typeof link === "object" &&
+                  typeof link.label === "string" &&
+                  typeof link.url === "string" &&
+                  (link.kind === "website" || link.kind === "social" || link.kind === "drive" || link.kind === "photos")
+              )
+          )
+        : [];
+
+      const chapters = Array.isArray(savedDraft.chapters)
+        ? savedDraft.chapters
+            .map((chapter) => ({
+              ...chapter,
+              body: sanitizeStudioRichText(chapter.body),
+              imageAttachments: sanitizeStudioAttachments(
+                (chapter.imageAttachments ?? []).filter((attachment) => isRestorableStudioAttachment(attachment))
+              ),
+              voiceNotes: sanitizeStudioAttachments(
+                (chapter.voiceNotes ?? []).filter((voice) => isRestorableStudioAttachment(voice))
+              ),
+              timelineEntries: chapter.timelineEntries?.length ? chapter.timelineEntries : [createEmptyTimelineEntry()]
+            }))
+            .filter((chapter) => !isLegacySeedChapter(chapter))
+        : [];
+
+      return {
+        currentStoryId: typeof savedDraft.currentStoryId === "string" ? savedDraft.currentStoryId : null,
+        currentStoryStatus: savedDraft.currentStoryStatus === "published" ? "published" : "draft",
+        liveChapterIndexes: Array.isArray(savedDraft.liveChapterIndexes)
+          ? savedDraft.liveChapterIndexes.filter((value) => Number.isInteger(value) && value >= 0)
+          : [],
+        activeChapter: typeof savedDraft.activeChapter === "string" ? savedDraft.activeChapter : "",
+        isPremium: typeof savedDraft.isPremium === "boolean" ? savedDraft.isPremium : false,
+        visibility:
+          savedDraft.visibility === "private" || savedDraft.visibility === "public" || savedDraft.visibility === "selected"
+            ? savedDraft.visibility
+            : "selected",
+        anonymous: typeof savedDraft.anonymous === "boolean" ? savedDraft.anonymous : false,
+        storyTitle: typeof savedDraft.storyTitle === "string" ? savedDraft.storyTitle : "",
+        storySummary: typeof savedDraft.storySummary === "string" ? savedDraft.storySummary : "",
+        storyLinks,
+        chapterType: typeof savedDraft.chapterType === "string" ? savedDraft.chapterType : "memory",
+        allowComments: typeof savedDraft.allowComments === "boolean" ? savedDraft.allowComments : currentUser.allowCommentsByDefault,
+        chapters,
+        timelineEntries: Array.isArray(savedDraft.timelineEntries) ? savedDraft.timelineEntries : [createEmptyTimelineEntry()],
+        draftHistory: Array.isArray(savedDraft.draftHistory) ? savedDraft.draftHistory : [],
+        transcriptionLanguage: typeof savedDraft.transcriptionLanguage === "string" ? savedDraft.transcriptionLanguage : "en-US"
+      };
+    } catch {
+      return null;
+    }
+  };
+  const readStoredStudioDraft = (options?: {
+    storyId?: string | null;
+    allowUnsavedLocal?: boolean;
+  }) => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+
+    const storyId = options?.storyId ?? null;
+    const expectedStoryId = storyId || null;
+    const nextDraft = parseStoredStudioDraft(window.localStorage.getItem(getStudioStorageKey(storyId)), {
+      expectedStoryId,
+      allowUnsavedLocal: options?.allowUnsavedLocal
+    });
+
+    if (nextDraft) {
+      return nextDraft;
+    }
+
+    return parseStoredStudioDraft(window.localStorage.getItem(legacyStudioStorageKey), {
+      expectedStoryId,
+      allowUnsavedLocal: options?.allowUnsavedLocal
+    });
+  };
+  const buildStoredStudioDraftPayload = (sourceChapters: StudioChapter[]): StoredStudioDraft => ({
+    currentStoryId,
+    currentStoryStatus,
+    liveChapterIndexes,
+    activeChapter,
+    isPremium,
+    visibility,
+    anonymous,
+    storyTitle,
+    storySummary,
+    storyLinks,
+    chapterType,
+    allowComments,
+    chapters: buildSerializableStudioChapters(sourceChapters),
+    timelineEntries,
+    draftHistory,
+    transcriptionLanguage
+  });
+  const persistStudioDraftToStorage = (sourceChapters: StudioChapter[]) => {
+    if (typeof window === "undefined" || !hasLoadedStudioDraftRef.current) {
+      return;
+    }
+
+    const draftPayload = buildStoredStudioDraftPayload(sourceChapters);
+    window.localStorage.setItem(getStudioStorageKey(draftPayload.currentStoryId), JSON.stringify(draftPayload));
+
+    if (draftPayload.currentStoryId) {
+      window.localStorage.removeItem(getStudioStorageKey(null));
+    }
+
+    window.localStorage.removeItem(legacyStudioStorageKey);
+  };
   const hasTimelineContent = (entries: StudioTimelineEntry[]) =>
     entries.some((entry) => entry.title.trim() || entry.body.trim() || entry.year || entry.month || entry.day);
   type StudioStorySnapshot = {
@@ -435,6 +593,24 @@ export function StudioPage({
     activeChapterTitle: string;
     activeChapterIndex: number;
     chapter: StudioChapter;
+  };
+  type StoredStudioDraft = {
+    currentStoryId: string | null;
+    currentStoryStatus: "draft" | "published";
+    liveChapterIndexes: number[];
+    activeChapter: string;
+    isPremium: boolean;
+    visibility: "private" | "selected" | "public";
+    anonymous: boolean;
+    storyTitle: string;
+    storySummary: string;
+    storyLinks: StudioExternalLink[];
+    chapterType: string;
+    allowComments: boolean;
+    chapters: StudioChapter[];
+    timelineEntries: StudioTimelineEntry[];
+    draftHistory: string[];
+    transcriptionLanguage: string;
   };
   const isUploadingAttachmentSource = (source?: string | null) => /uploading/i.test(source ?? "");
   const isFinalizedStudioAttachment = (attachment: Pick<StudioMediaAttachment, "url" | "objectKey" | "blob" | "source">) =>
@@ -1182,7 +1358,6 @@ export function StudioPage({
   const suppressAutoSavePassesRef = useRef(0);
 
   const apiBaseUrl = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api";
-  const studioStorageKey = "histora-studio-local-draft-v1";
   const imageLimit = isPremium ? 12 : 2;
   const voiceLimit = isPremium ? 6 : 1;
   const chapterLimit = isPremium ? 8 : 2;
@@ -1542,13 +1717,24 @@ export function StudioPage({
   const loadStoryIntoStudio = (story: ApiStory, options?: { mergeRestoredDraft?: boolean }) => {
     const remoteSnapshot = createStudioStorySnapshotFromStory(story);
     const fetchedChapters = remoteSnapshot.chapters;
+    const storedDraft = readStoredStudioDraft({ storyId: story.id });
+    const restoredDraftChapters = storedDraft?.chapters.length ? ensureUniqueStudioChapterTitles(storedDraft.chapters) : null;
+    const restoredDraftActiveChapter = storedDraft?.activeChapter?.trim() || "";
 
     const nextChapters =
-      options?.mergeRestoredDraft && restoredLocalDraftRef.current
-        ? mergeFetchedDraftChapters(chaptersRef.current, fetchedChapters)
+      restoredDraftChapters
+        ? mergeFetchedDraftChapters(restoredDraftChapters, fetchedChapters)
+        : options?.mergeRestoredDraft && restoredLocalDraftRef.current
+          ? mergeFetchedDraftChapters(chaptersRef.current, fetchedChapters)
         : fetchedChapters;
+    const uniqueChapters = ensureUniqueStudioChapterTitles(nextChapters.length ? nextChapters : [createInitialStudioChapter(0)]);
+    const resolvedActiveChapter =
+      restoredDraftActiveChapter && uniqueChapters.some((chapter) => chapter.title === restoredDraftActiveChapter)
+        ? restoredDraftActiveChapter
+        : uniqueChapters[0]?.title ?? "Chapter 1";
 
     suppressAutoSavePassesRef.current += 4;
+    restoredLocalDraftRef.current = Boolean(storedDraft);
     setCurrentStoryId(story.id);
     setCurrentStoryStatus(story.status);
     setCurrentStoryRevision(story.collaborationRevision ?? 0);
@@ -1563,14 +1749,13 @@ export function StudioPage({
     setCurrentStoryIsOwner(Boolean(story.isOwner ?? true));
     setRemoteCollaborationUpdate(null);
     setLiveChapterIndexes(story.status === "published" ? fetchedChapters.map((_, index) => index) : []);
-    setStoryTitle(story.title);
-    setStorySummary(story.summary);
-    setStoryLinks(story.links ?? []);
-    setVisibility(story.visibility as "private" | "selected" | "public");
-    setAnonymous(story.anonymous);
-    const uniqueChapters = ensureUniqueStudioChapterTitles(nextChapters.length ? nextChapters : [createInitialStudioChapter(0)]);
+    setStoryTitle(storedDraft?.storyTitle ?? story.title);
+    setStorySummary(storedDraft?.storySummary ?? story.summary);
+    setStoryLinks(storedDraft?.storyLinks ?? story.links ?? []);
+    setVisibility(storedDraft?.visibility ?? (story.visibility as "private" | "selected" | "public"));
+    setAnonymous(storedDraft?.anonymous ?? story.anonymous);
     setChapters(uniqueChapters);
-    setActiveChapter(uniqueChapters[0]?.title ?? "Chapter 1");
+    setActiveChapter(resolvedActiveChapter);
     setIsStudioEditorOpen(true);
     setStudioMessage(`Loaded ${story.title}.`);
     setStudioNotice(null);
@@ -1637,7 +1822,8 @@ export function StudioPage({
     setStudioMessage("New story ready.");
     setStudioNotice(null);
     if (typeof window !== "undefined") {
-      window.localStorage.removeItem(studioStorageKey);
+      window.localStorage.removeItem(getStudioStorageKey(null));
+      window.localStorage.removeItem(legacyStudioStorageKey);
       window.sessionStorage.removeItem("histora-studio-preview");
       window.sessionStorage.removeItem("histora-studio-publish-payload");
       window.sessionStorage.removeItem("histora-studio-reviewed");
@@ -1715,95 +1901,36 @@ export function StudioPage({
     let hydrationTimer: number | null = null;
 
     try {
-      const rawDraft = window.localStorage.getItem(studioStorageKey);
-      if (!rawDraft) {
+      const restoredDraft = requestedStudioStoryId
+        ? readStoredStudioDraft({ storyId: requestedStudioStoryId })
+        : readStoredStudioDraft({ allowUnsavedLocal: true });
+
+      if (!restoredDraft) {
         return;
       }
 
-      const savedDraft = JSON.parse(rawDraft) as Partial<{
-        activeChapter: string;
-        currentStoryId: string | null;
-        currentStoryStatus: "draft" | "published";
-        liveChapterIndexes: number[];
-        isPremium: boolean;
-        visibility: string;
-        anonymous: boolean;
-        storyTitle: string;
-        storySummary: string;
-        storyLinks: StudioExternalLink[];
-        chapterType: string;
-        chapters: typeof chapters;
-        timelineEntries: typeof timelineEntries;
-        draftHistory: string[];
-        transcriptionLanguage: string;
-        allowComments: boolean;
-      }>;
-
-      if (savedDraft.activeChapter) {
-        setActiveChapter(savedDraft.activeChapter);
+      if (restoredDraft.activeChapter) {
+        setActiveChapter(restoredDraft.activeChapter);
       }
-      if (savedDraft.currentStoryId) {
-        setCurrentStoryId(savedDraft.currentStoryId);
+      if (restoredDraft.currentStoryId) {
+        setCurrentStoryId(restoredDraft.currentStoryId);
       }
-      if (savedDraft.currentStoryStatus === "draft" || savedDraft.currentStoryStatus === "published") {
-        setCurrentStoryStatus(savedDraft.currentStoryStatus);
-      }
-      if (Array.isArray(savedDraft.liveChapterIndexes)) {
-        setLiveChapterIndexes(savedDraft.liveChapterIndexes.filter((value) => Number.isInteger(value) && value >= 0));
-      }
-      if (typeof savedDraft.isPremium === "boolean") {
-        setIsPremium(savedDraft.isPremium);
-      }
-      if (savedDraft.visibility) {
-        setVisibility(savedDraft.visibility as "private" | "selected" | "public");
-      }
-      if (typeof savedDraft.anonymous === "boolean") {
-        setAnonymous(savedDraft.anonymous);
-      }
-      if (savedDraft.storyTitle) {
-        setStoryTitle(savedDraft.storyTitle);
-      }
-      if (savedDraft.storySummary) {
-        setStorySummary(savedDraft.storySummary);
-      }
-      if (Array.isArray(savedDraft.storyLinks)) {
-        setStoryLinks(
-          savedDraft.storyLinks.filter(
-            (link): link is StudioExternalLink =>
-              Boolean(
-                link &&
-                  typeof link === "object" &&
-                  typeof link.label === "string" &&
-                  typeof link.url === "string" &&
-                  (link.kind === "website" || link.kind === "social" || link.kind === "drive" || link.kind === "photos")
-              )
-          )
-        );
-      }
-      if (savedDraft.chapterType) {
-        setChapterType(savedDraft.chapterType);
-      }
-      if (typeof savedDraft.allowComments === "boolean") {
-        setAllowComments(savedDraft.allowComments);
-      }
-      if (Array.isArray(savedDraft.chapters) && savedDraft.chapters.length > 0) {
+      setCurrentStoryStatus(restoredDraft.currentStoryStatus);
+      setLiveChapterIndexes(restoredDraft.liveChapterIndexes);
+      setIsPremium(restoredDraft.isPremium);
+      setVisibility(restoredDraft.visibility);
+      setAnonymous(restoredDraft.anonymous);
+      setStoryTitle(restoredDraft.storyTitle);
+      setStorySummary(restoredDraft.storySummary);
+      setStoryLinks(restoredDraft.storyLinks);
+      setChapterType(restoredDraft.chapterType);
+      setAllowComments(restoredDraft.allowComments);
+      if (restoredDraft.chapters.length > 0) {
         restoredLocalDraftRef.current = true;
-        const restoredChapters = savedDraft.chapters
-          .map((chapter) => ({
-            ...chapter,
-            body: sanitizeStudioRichText(chapter.body),
-            imageAttachments: sanitizeStudioAttachments(
-              (chapter.imageAttachments ?? []).filter((attachment) => isRestorableStudioAttachment(attachment))
-            ),
-            voiceNotes: sanitizeStudioAttachments(
-              (chapter.voiceNotes ?? []).filter((voice) => isRestorableStudioAttachment(voice))
-            ),
-            timelineEntries: chapter.timelineEntries?.length ? chapter.timelineEntries : [createEmptyTimelineEntry()]
-          }))
-          .filter((chapter) => !isLegacySeedChapter(chapter));
+        const restoredChapters = restoredDraft.chapters;
 
         setChapters(ensureUniqueStudioChapterTitles(restoredChapters));
-        void hydrateStudioChaptersForMedia(accessToken, restoredChapters, { storyId: savedDraft.currentStoryId ?? null })
+        void hydrateStudioChaptersForMedia(accessToken, restoredChapters, { storyId: restoredDraft.currentStoryId ?? null })
           .then((hydratedChapters) => {
             if (!cancelled) {
               setChapters(ensureUniqueStudioChapterTitles(hydratedChapters));
@@ -1811,15 +1938,15 @@ export function StudioPage({
           })
           .catch(() => undefined);
       }
-      if (Array.isArray(savedDraft.timelineEntries) && (!savedDraft.chapters || savedDraft.chapters.length === 0)) {
+      if (restoredDraft.timelineEntries.length > 0 && restoredDraft.chapters.length === 0) {
         restoredLocalDraftRef.current = true;
-        setTimelineEntries(savedDraft.timelineEntries.length ? savedDraft.timelineEntries : [createEmptyTimelineEntry()]);
+        setTimelineEntries(restoredDraft.timelineEntries);
       }
-      if (Array.isArray(savedDraft.draftHistory) && savedDraft.draftHistory.length > 0) {
-        setDraftHistory(savedDraft.draftHistory);
+      if (restoredDraft.draftHistory.length > 0) {
+        setDraftHistory(restoredDraft.draftHistory);
       }
-      if (savedDraft.transcriptionLanguage) {
-        setTranscriptionLanguage(savedDraft.transcriptionLanguage);
+      if (restoredDraft.transcriptionLanguage) {
+        setTranscriptionLanguage(restoredDraft.transcriptionLanguage);
       }
 
       setStudioMessage("Autosaved draft restored.");
@@ -1838,7 +1965,7 @@ export function StudioPage({
         window.clearTimeout(hydrationTimer);
       }
     };
-  }, [accessToken, studioStorageKey]);
+  }, [accessToken, requestedStudioStoryId]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !hasLoadedStudioDraftRef.current || !isStudioDraftHydrated) {
@@ -1846,46 +1973,7 @@ export function StudioPage({
     }
 
     const snapshotChapters = getLiveChaptersSnapshot();
-    const serializableChapters = snapshotChapters.map((chapter) => ({
-      ...chapter,
-      imageAttachments: chapter.imageAttachments
-        .map((attachment) => ({
-          name: attachment.name,
-          url: getStudioAttachmentStorageUrl(attachment),
-          source: attachment.source,
-          objectKey: attachment.objectKey
-        }))
-        .filter((attachment) => attachment.url),
-      voiceNotes: chapter.voiceNotes
-        .map((voice) => ({
-          name: voice.name,
-          url: getStudioAttachmentStorageUrl(voice),
-          source: voice.source,
-          objectKey: voice.objectKey
-        }))
-        .filter((voice) => voice.url)
-    }));
-
-    const draftPayload = {
-      currentStoryId,
-      currentStoryStatus,
-      liveChapterIndexes,
-      activeChapter,
-      isPremium,
-      visibility,
-      anonymous,
-      storyTitle,
-      storySummary,
-      storyLinks,
-      chapterType,
-      allowComments,
-      chapters: serializableChapters,
-      timelineEntries,
-      draftHistory,
-      transcriptionLanguage
-    };
-
-    window.localStorage.setItem(studioStorageKey, JSON.stringify(draftPayload));
+    persistStudioDraftToStorage(snapshotChapters);
   }, [
     activeChapter,
     anonymous,
@@ -1904,8 +1992,7 @@ export function StudioPage({
     timelineEntries,
     transcriptionLanguage,
     visibility,
-    isStudioDraftHydrated,
-    studioStorageKey
+    isStudioDraftHydrated
   ]);
 
   useEffect(() => {
@@ -2439,46 +2526,7 @@ export function StudioPage({
     }));
     lastLocalEditorActivityAtRef.current = Date.now();
     queueCollaborativeDraftUpdate("body-input");
-    if (typeof window !== "undefined" && hasLoadedStudioDraftRef.current) {
-      const serializableChapters = nextSnapshot.map((chapter) => ({
-        ...chapter,
-        imageAttachments: chapter.imageAttachments
-          .map((attachment) => ({
-            name: attachment.name,
-            url: getStudioAttachmentStorageUrl(attachment),
-            source: attachment.source,
-            objectKey: attachment.objectKey
-          }))
-          .filter((attachment) => attachment.url),
-        voiceNotes: chapter.voiceNotes
-          .map((voice) => ({
-            name: voice.name,
-            url: getStudioAttachmentStorageUrl(voice),
-            source: voice.source,
-            objectKey: voice.objectKey
-          }))
-          .filter((voice) => voice.url)
-      }));
-      const draftPayload = {
-        currentStoryId,
-        currentStoryStatus,
-        liveChapterIndexes,
-        activeChapter,
-        isPremium,
-        visibility,
-        anonymous,
-        storyTitle,
-        storySummary,
-        storyLinks,
-        chapterType,
-        allowComments,
-        chapters: serializableChapters,
-        timelineEntries,
-        draftHistory,
-        transcriptionLanguage
-      };
-      window.localStorage.setItem(studioStorageKey, JSON.stringify(draftPayload));
-    }
+    persistStudioDraftToStorage(nextSnapshot);
     refreshEditorState();
   };
 
