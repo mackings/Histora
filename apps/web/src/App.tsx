@@ -16,7 +16,13 @@ import { FeedStoryPage } from "./features/feed/FeedStoryPage";
 import { FeedRealtimeBridge } from "./features/feed/store";
 import { EditProfilePage } from "./features/profile/EditProfilePage";
 import { AuthPage } from "./features/auth/AuthPage";
-import { ProfilePage } from "./features/profile/ProfilePage";
+import {
+  ProfileActivityPage,
+  ProfileAnalyticsPage,
+  ProfileCollaborationsPage,
+  ProfileNetworkPage,
+  ProfilePage
+} from "./features/profile/ProfilePage";
 import { StudioPreviewPage } from "./features/studio/StudioPreviewPage";
 import { StudioPage } from "./features/studio/StudioPage";
 import { AnonymousHubPage } from "./features/anonymous/AnonymousHubPage";
@@ -401,6 +407,54 @@ export default function App() {
             ) : <RequireCurrentLocationSignInRedirect />
           }
           path="/profile"
+        />
+        <Route
+          element={
+            authSession ? (
+              <ProfileNetworkPage
+                IconComponent={Icon}
+                SectionLabelComponent={SectionLabel}
+                accessToken={authSession.accessToken}
+              />
+            ) : <RequireCurrentLocationSignInRedirect />
+          }
+          path="/profile/network"
+        />
+        <Route
+          element={
+            authSession ? (
+              <ProfileCollaborationsPage
+                IconComponent={Icon}
+                SectionLabelComponent={SectionLabel}
+                accessToken={authSession.accessToken}
+              />
+            ) : <RequireCurrentLocationSignInRedirect />
+          }
+          path="/profile/collaborations"
+        />
+        <Route
+          element={
+            authSession ? (
+              <ProfileAnalyticsPage
+                IconComponent={Icon}
+                SectionLabelComponent={SectionLabel}
+                accessToken={authSession.accessToken}
+              />
+            ) : <RequireCurrentLocationSignInRedirect />
+          }
+          path="/profile/analytics"
+        />
+        <Route
+          element={
+            authSession ? (
+              <ProfileActivityPage
+                IconComponent={Icon}
+                SectionLabelComponent={SectionLabel}
+                accessToken={authSession.accessToken}
+              />
+            ) : <RequireCurrentLocationSignInRedirect />
+          }
+          path="/profile/activity"
         />
         <Route
           element={

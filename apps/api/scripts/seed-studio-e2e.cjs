@@ -2,9 +2,7 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
-const uri =
-  process.env.MONGODB_URI ||
-  "mongodb://kingsleyudoma2018_db_user:uYCashSiOMEQikdZ@ac-owgrk1n-shard-00-00.hb3zcwk.mongodb.net:27017,ac-owgrk1n-shard-00-01.hb3zcwk.mongodb.net:27017,ac-owgrk1n-shard-00-02.hb3zcwk.mongodb.net:27017/?ssl=true&replicaSet=atlas-10zm3h-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Devcluster";
+const { mongoUri: uri, studioUser } = require("./test-env.cjs");
 
 async function main() {
   await mongoose.connect(uri);
@@ -47,11 +45,11 @@ async function main() {
   const User = mongoose.models.SeedUser || mongoose.model("SeedUser", userSchema);
   const Trusted = mongoose.models.SeedTrustedDevice || mongoose.model("SeedTrustedDevice", trustedSchema);
 
-  const email = "studioe2e@gmail.com";
-  const username = "studioe2e";
-  const password = "TestPassword123";
-  const deviceId = "test-device-000000000001";
-  const deviceName = "Playwright Test Device";
+  const email = studioUser.email;
+  const username = studioUser.username;
+  const password = studioUser.password;
+  const deviceId = studioUser.deviceIdentity.deviceId;
+  const deviceName = studioUser.deviceIdentity.deviceName;
   const passwordHash = await bcrypt.hash(password, 12);
 
   let user = await User.findOne({ email });
@@ -79,7 +77,7 @@ async function main() {
     user.emailVerifiedAt = new Date();
     user.subscriptionTier = "free";
     user.username = username;
-    user.fullName = "Studio E2E";
+    user.fullName = studioUser.displayName;
     await user.save();
   }
 
@@ -99,7 +97,7 @@ async function main() {
     { upsert: true, new: true }
   );
 
-  console.log(JSON.stringify({ email, password, deviceId, deviceName, userId: String(user._id) }));
+  console.log(JSON.stringify({ email, username, deviceId, deviceName, userId: String(user._id) }));
 }
 
 main()

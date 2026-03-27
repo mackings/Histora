@@ -2,33 +2,14 @@ const { chromium } = require("playwright");
 const crypto = require("crypto");
 const path = require("path");
 
-const dotenv = require(path.resolve(__dirname, "../../../node_modules/dotenv"));
+const { feedAuthorUser, studioUser } = require("../../api/scripts/test-env.cjs");
 const jwt = require(path.resolve(__dirname, "../../../node_modules/jsonwebtoken"));
 const mongoose = require(path.resolve(__dirname, "../../api/node_modules/mongoose"));
 
 const baseUrl = process.env.HISTORA_WEB_URL || "http://127.0.0.1:3000";
 
-dotenv.config({ path: path.resolve(__dirname, "../../api/.env") });
-
-const recipientUser = {
-  email: "studioe2e@gmail.com",
-  username: "studioe2e",
-  displayName: "Studio E2E",
-  deviceIdentity: {
-    deviceId: "test-device-000000000001",
-    deviceName: "Playwright Test Device"
-  }
-};
-
-const senderUser = {
-  email: "feedauthor@gmail.com",
-  username: "feedauthor",
-  displayName: "Feed Author",
-  deviceIdentity: {
-    deviceId: "test-device-000000000002",
-    deviceName: "Playwright Feed Author Device"
-  }
-};
+const recipientUser = studioUser;
+const senderUser = feedAuthorUser;
 
 async function loadSession(email) {
   if (!process.env.MONGODB_URI || !process.env.JWT_SECRET) {

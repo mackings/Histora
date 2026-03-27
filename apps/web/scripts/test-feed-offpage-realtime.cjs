@@ -1,4 +1,5 @@
 const { chromium } = require("playwright");
+const { studioUser } = require("../../api/scripts/test-env.cjs");
 
 const baseUrl = process.env.HISTORA_WEB_URL || "http://localhost:3000";
 const targetStoryTitle = "Feed author public story";
@@ -12,8 +13,8 @@ async function signIn(page, deviceId) {
     deviceName: "Playwright Test Device"
   });
   await page.reload({ waitUntil: "networkidle" });
-  await page.getByLabel("Email").fill("studioe2e@gmail.com");
-  await page.locator('input[type="password"]').first().fill("TestPassword123");
+  await page.getByLabel("Email").fill(studioUser.email);
+  await page.locator('input[type="password"]').first().fill(studioUser.password);
   await page.getByRole("button", { name: /sign in/i }).click();
   await page.waitForURL(/\/feed|\/$/, { timeout: 20000 });
   await page.waitForLoadState("networkidle");

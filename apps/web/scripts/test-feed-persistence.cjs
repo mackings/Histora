@@ -1,4 +1,5 @@
 const { chromium } = require("playwright");
+const { studioUser } = require("../../api/scripts/test-env.cjs");
 
 const baseUrl = process.env.HISTORA_WEB_URL || "http://localhost:3000";
 const targetStoryTitle = "Feed author public story";
@@ -66,19 +67,13 @@ async function run() {
   });
 
   await page.goto(`${baseUrl}/signin`, { waitUntil: "networkidle" });
-  await page.evaluate(() => {
-    window.localStorage.setItem(
-      "histora-device-identity-v1",
-      JSON.stringify({
-        deviceId: "test-device-000000000001",
-        deviceName: "Playwright Test Device"
-      })
-    );
-  });
+  await page.evaluate((identity) => {
+    window.localStorage.setItem("histora-device-identity-v1", JSON.stringify(identity));
+  }, studioUser.deviceIdentity);
   await page.reload({ waitUntil: "networkidle" });
 
-  await page.getByLabel("Email").fill("studioe2e@gmail.com");
-  await page.locator('input[type="password"]').first().fill("TestPassword123");
+  await page.getByLabel("Email").fill(studioUser.email);
+  await page.locator('input[type="password"]').first().fill(studioUser.password);
   await page.getByRole("button", { name: /sign in/i }).click();
   await page.waitForURL(/\/feed|\/$/, { timeout: 20000 });
   await page.waitForLoadState("networkidle");

@@ -1,15 +1,40 @@
 #!/bin/zsh
 set -euo pipefail
 
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+API_ENV_FILE="${HISTORA_API_ENV_FILE:-$SCRIPT_DIR/../../api/.env}"
+
+if [[ -f "$API_ENV_FILE" ]]; then
+  set -a
+  source "$API_ENV_FILE"
+  set +a
+fi
+
 API_BASE_URL="${HISTORA_API_URL:-http://127.0.0.1:4000}"
 WEB_ORIGIN="${HISTORA_WEB_URL:-http://localhost:3000}"
+STUDIO_E2E_EMAIL="${HISTORA_STUDIO_E2E_EMAIL:-studioe2e@gmail.com}"
+STUDIO_E2E_PASSWORD="${HISTORA_STUDIO_E2E_PASSWORD:-}"
+STUDIO_E2E_DEVICE_ID="${HISTORA_STUDIO_E2E_DEVICE_ID:-test-device-000000000001}"
+STUDIO_E2E_DEVICE_NAME="${HISTORA_STUDIO_E2E_DEVICE_NAME:-Playwright Test Device}"
+FEED_AUTHOR_USERNAME="${HISTORA_FEED_E2E_USERNAME:-feedauthor}"
+
+if [[ -z "$STUDIO_E2E_PASSWORD" ]]; then
+  echo "Missing required environment variable: HISTORA_STUDIO_E2E_PASSWORD" >&2
+  exit 1
+fi
+
+login_payload=$(printf '{"email":"%s","password":"%s","deviceId":"%s","deviceName":"%s"}' \
+  "$STUDIO_E2E_EMAIL" \
+  "$STUDIO_E2E_PASSWORD" \
+  "$STUDIO_E2E_DEVICE_ID" \
+  "$STUDIO_E2E_DEVICE_NAME")
 
 login_json=$(
   curl -s -X POST "$API_BASE_URL/api/auth/login" \
     -H "Origin: $WEB_ORIGIN" \
     -H "Referer: $WEB_ORIGIN/" \
     -H "Content-Type: application/json" \
-    --data '{"email":"studioe2e@gmail.com","password":"TestPassword123","deviceId":"test-device-000000000001","deviceName":"Playwright Test Device"}'
+    --data "$login_payload"
 )
 
 token=$(printf '%s' "$login_json" | jq -r '.accessToken')
@@ -25,7 +50,7 @@ safe_message=$(
     -H "Referer: $WEB_ORIGIN/" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $token" \
-    --data '{"recipientUsername":"feedauthor","body":"This safe anonymous message exists only to test that helper contact unlock cannot be triggered by the sender and that public comment listing still requires the share slug.","distribution":"app"}'
+    --data "$(printf '{"recipientUsername":"%s","body":"This safe anonymous message exists only to test that helper contact unlock cannot be triggered by the sender and that public comment listing still requires the share slug.","distribution":"app"}' "$FEED_AUTHOR_USERNAME")"
 )
 
 message_id=$(printf '%s' "$safe_message" | jq -r '.id')
@@ -46,7 +71,7 @@ curl -i -s -X POST "$API_BASE_URL/api/anonymous-messages" \
   -H "Referer: $WEB_ORIGIN/" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $token" \
-  --data '{"recipientUsername":"feedauthor","body":"<img src=x onerror=alert(1)>","distribution":"external"}'
+  --data "$(printf '{"recipientUsername":"%s","body":"<img src=x onerror=alert(1)>","distribution":"external"}' "$FEED_AUTHOR_USERNAME")"
 
 echo
 echo '=== malicious story ==='

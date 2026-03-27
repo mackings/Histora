@@ -1,12 +1,10 @@
 const { chromium } = require("playwright");
+const { studioUser } = require("../../api/scripts/test-env.cjs");
 
 const baseUrl = process.env.HISTORA_WEB_URL || "http://127.0.0.1:3000";
-const email = "studioe2e@gmail.com";
-const password = "TestPassword123";
-const deviceIdentity = {
-  deviceId: "test-device-000000000001",
-  deviceName: "Playwright Test Device"
-};
+const email = studioUser.email;
+const password = studioUser.password;
+const deviceIdentity = studioUser.deviceIdentity;
 
 const bodyText =
   "This anonymous story body is long enough to cross the chapter readiness threshold and confirm the published result opens in the full story reader instead of being treated like a quick status.";

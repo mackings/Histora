@@ -1,35 +1,12 @@
 const { chromium } = require("playwright");
 const fs = require("fs");
-const path = require("path");
-
-const dotenv = require(path.resolve(__dirname, "../../../node_modules/dotenv"));
+const { feedAuthorUser, studioUser } = require("../../api/scripts/test-env.cjs");
 
 const webBaseUrl = process.env.HISTORA_WEB_URL || "http://localhost:3000";
 const apiBaseUrl = process.env.HISTORA_API_URL || "http://127.0.0.1:4000/api";
 
-dotenv.config({ path: path.resolve(__dirname, "../../api/.env") });
-
-const ownerUser = {
-  email: "studioe2e@gmail.com",
-  username: "studioe2e",
-  password: "TestPassword123",
-  displayName: "Studio E2E",
-  deviceIdentity: {
-    deviceId: "test-device-000000000001",
-    deviceName: "Playwright Test Device"
-  }
-};
-
-const collaboratorUser = {
-  email: "feedauthor@gmail.com",
-  username: "feedauthor",
-  password: "AuthorPass123",
-  displayName: "Feed Author",
-  deviceIdentity: {
-    deviceId: "test-device-000000000002",
-    deviceName: "Playwright Feed Author Device"
-  }
-};
+const ownerUser = studioUser;
+const collaboratorUser = feedAuthorUser;
 
 function ensureFixtureFiles() {
   const pngBuffer = Buffer.from(

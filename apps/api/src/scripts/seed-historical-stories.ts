@@ -7,6 +7,8 @@ import { StoryModel } from "../models/story.model.js";
 import { UserModel } from "../models/user.model.js";
 import { buildStoredStoryContent } from "../services/story-content.service.js";
 
+const archiveSeedPassword = process.env.HISTORA_ARCHIVE_SEED_PASSWORD?.trim();
+
 type StorySeed = {
   slug: string;
   title: string;
@@ -396,7 +398,11 @@ const stories: StorySeed[] = [
 ];
 
 async function upsertArchiveAuthor() {
-  const passwordHash = await bcrypt.hash("ArchivePass123!", 12);
+  if (!archiveSeedPassword) {
+    throw new Error("Missing required environment variable: HISTORA_ARCHIVE_SEED_PASSWORD");
+  }
+
+  const passwordHash = await bcrypt.hash(archiveSeedPassword, 12);
   const now = new Date();
 
   return UserModel.findOneAndUpdate(

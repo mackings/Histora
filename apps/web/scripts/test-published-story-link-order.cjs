@@ -1,13 +1,11 @@
 const { chromium } = require("playwright");
+const { studioUser } = require("../../api/scripts/test-env.cjs");
 
 const baseUrl = process.env.HISTORA_WEB_URL || "http://127.0.0.1:3000";
 const storySlug = process.env.HISTORA_TEST_STORY_SLUG || "playwright-studio-library-flow-1774110545632";
-const email = "studioe2e@gmail.com";
-const password = "TestPassword123";
-const deviceIdentity = {
-  deviceId: "test-device-000000000001",
-  deviceName: "Playwright Test Device"
-};
+const email = studioUser.email;
+const password = studioUser.password;
+const deviceIdentity = studioUser.deviceIdentity;
 
 async function signIn(page) {
   await page.goto(`${baseUrl}/signin`, { waitUntil: "networkidle" });

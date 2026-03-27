@@ -1,12 +1,10 @@
 const { chromium } = require("playwright");
+const { studioUser } = require("../../api/scripts/test-env.cjs");
 
 const baseUrl = process.env.HISTORA_WEB_URL || "http://localhost:3000";
-const email = "studioe2e@gmail.com";
-const password = "TestPassword123";
-const deviceIdentity = {
-  deviceId: "test-device-000000000001",
-  deviceName: "Playwright Test Device"
-};
+const email = studioUser.email;
+const password = studioUser.password;
+const deviceIdentity = studioUser.deviceIdentity;
 
 const summaryText =
   "This two browser regression summary is intentionally long enough to satisfy the studio minimum while we verify that a live story never disappears from another signed in session.";

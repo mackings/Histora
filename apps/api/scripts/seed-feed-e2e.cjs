@@ -2,9 +2,7 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
-const uri =
-  process.env.MONGODB_URI ||
-  "mongodb://kingsleyudoma2018_db_user:uYCashSiOMEQikdZ@ac-owgrk1n-shard-00-00.hb3zcwk.mongodb.net:27017,ac-owgrk1n-shard-00-01.hb3zcwk.mongodb.net:27017,ac-owgrk1n-shard-00-02.hb3zcwk.mongodb.net:27017/?ssl=true&replicaSet=atlas-10zm3h-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Devcluster";
+const { feedAuthorUser, mongoUri: uri } = require("./test-env.cjs");
 
 async function main() {
   await mongoose.connect(uri);
@@ -95,16 +93,16 @@ async function main() {
   );
   const Trusted = mongoose.models.FeedSeedTrustedDevice || mongoose.model("FeedSeedTrustedDevice", trustedSchema);
 
-  const email = "feedauthor@gmail.com";
-  const username = "feedauthor";
-  const deviceId = "test-device-000000000002";
-  const deviceName = "Playwright Feed Author Device";
-  const passwordHash = await bcrypt.hash("AuthorPass123", 12);
+  const email = feedAuthorUser.email;
+  const username = feedAuthorUser.username;
+  const deviceId = feedAuthorUser.deviceIdentity.deviceId;
+  const deviceName = feedAuthorUser.deviceIdentity.deviceName;
+  const passwordHash = await bcrypt.hash(feedAuthorUser.password, 12);
 
   let user = await User.findOne({ email });
   if (!user) {
     user = await User.create({
-      fullName: "Feed Author",
+      fullName: feedAuthorUser.displayName,
       username,
       email,
       passwordHash,
@@ -121,7 +119,7 @@ async function main() {
       selectedViewerIds: []
     });
   } else {
-    user.fullName = "Feed Author";
+    user.fullName = feedAuthorUser.displayName;
     user.username = username;
     user.passwordHash = passwordHash;
     user.emailVerified = true;

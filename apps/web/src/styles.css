@@ -3089,8 +3089,177 @@ textarea {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
+.profile-home-grid {
+  align-items: start;
+}
+
+.profile-route-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.profile-route-card {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: linear-gradient(180deg, #fff, #f9fbff);
+  color: inherit;
+  text-decoration: none;
+  transition: transform 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.profile-route-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(49, 94, 251, 0.24);
+  box-shadow: 0 14px 30px rgba(27, 36, 64, 0.08);
+}
+
+.profile-route-card.static-card:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: var(--line);
+}
+
+.profile-route-count {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: clamp(1.7rem, 2vw, 2.4rem);
+  line-height: 1;
+}
+
+.profile-collaboration-stats {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
 .profile-collaboration-preview {
   gap: 12px;
+}
+
+.profile-network-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profile-network-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 52px;
+  padding: 0 16px;
+  border: 1px solid rgba(27, 36, 64, 0.08);
+  border-radius: 999px;
+  background: #fff;
+  color: #475467;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.profile-network-tab span {
+  color: #1b2440;
+}
+
+.profile-network-tab.active-tab {
+  background: linear-gradient(180deg, #1f4ef5, #3f71ff);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 16px 28px rgba(49, 94, 251, 0.22);
+}
+
+.profile-network-tab.active-tab span {
+  color: inherit;
+}
+
+.profile-twitter-list,
+.profile-network-empty {
+  display: grid;
+  gap: 14px;
+}
+
+.profile-twitter-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid rgba(27, 36, 64, 0.08);
+  border-radius: 24px;
+  background: linear-gradient(180deg, #fff, #f9fbff);
+}
+
+.profile-twitter-avatar-shell,
+.profile-twitter-copy,
+.profile-twitter-actions,
+.profile-twitter-head,
+.profile-twitter-meta,
+.profile-network-empty,
+.profile-collaboration-meta-grid,
+.profile-activity-timeline-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.profile-twitter-head span,
+.profile-twitter-copy p,
+.profile-twitter-meta small,
+.profile-network-empty span,
+.profile-collaboration-meta-grid small,
+.profile-route-card small,
+.profile-activity-timeline-copy span,
+.profile-activity-timeline-copy small {
+  color: var(--muted);
+}
+
+.profile-twitter-copy p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.profile-twitter-meta {
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  align-items: center;
+  gap: 10px;
+}
+
+.profile-twitter-actions {
+  justify-items: end;
+  align-self: center;
+}
+
+.profile-collaboration-story-card {
+  gap: 14px;
+}
+
+.profile-collaboration-meta-grid {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.profile-analytics-highlight {
+  background: linear-gradient(180deg, #eef4ff, #ffffff);
+}
+
+.profile-activity-timeline {
+  position: relative;
+}
+
+.profile-activity-timeline-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.profile-activity-dot {
+  width: 12px;
+  height: 12px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #315efb, #4f7dff);
+  box-shadow: 0 0 0 6px rgba(49, 94, 251, 0.12);
 }
 
 .profile-editor-shell {
@@ -5389,6 +5558,23 @@ textarea {
   .profile-person-row {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .profile-network-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-twitter-card {
+    grid-template-columns: 1fr;
+  }
+
+  .profile-twitter-actions {
+    justify-items: stretch;
+  }
+
+  .profile-twitter-meta {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
   }
 
   .story-link-chip {
