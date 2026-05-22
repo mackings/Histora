@@ -12,12 +12,22 @@ import {
   safeRedisConnect
 } from "./services/redis.service.js";
 
-async function bootstrap() {
-  await connectDatabase();
-  await Promise.all([
+async function connectOptionalRedisClients() {
+  await Promise.allSettled([
     safeRedisConnect(getRedisClient()),
     safeRedisConnect(getRedisSubscriber())
-  ]);
+  ]).then((results) => {
+    results.forEach((result) => {
+      if (result.status === "rejected") {
+        console.warn("Histora Redis connection unavailable; continuing without Redis-backed realtime fanout, queues, or rate-limit storage.", result.reason);
+      }
+    });
+  });
+}
+
+async function bootstrap() {
+  await connectDatabase();
+  await connectOptionalRedisClients();
 
   const app = createApp();
   const server = createServer(app);
