@@ -55,7 +55,11 @@ export function createApp() {
       store: getRateLimitStore("histora:rate-limit:global:"),
       standardHeaders: true,
       legacyHeaders: false,
-      skip: (request) => request.path.startsWith("/api/transcriptions")
+      skip: (request) =>
+        request.method === "OPTIONS" ||
+        request.path === "/" ||
+        request.path === "/health" ||
+        request.path.startsWith("/api/transcriptions")
     })
   );
   app.use(express.json({ limit: "1mb" }));

@@ -1,6 +1,3 @@
-import { Queue, Worker } from "bullmq";
-
-import { env } from "../config/env.js";
 import { AnonymousMessageModel } from "../models/anonymous-message.model.js";
 import { CommentModel } from "../models/comment.model.js";
 import { StatusInteractionModel } from "../models/status-interaction.model.js";
@@ -14,105 +11,68 @@ type CounterSyncJob = {
   statusId: string;
 };
 
-let appQueue: Queue<CounterSyncJob> | null = null;
-
-export function getAppQueue() {
-  if (!env.REDIS_URL) {
-    return null;
-  }
-
-  if (!appQueue) {
-    appQueue = new Queue<CounterSyncJob>("histora-jobs", {
-      connection: { url: env.REDIS_URL }
+export async function enqueueCounterSync(targetType: "status" | "anonymousMessage" | "story", statusId: string) {
+  try {
+    await syncCounters({
+      type:
+        targetType === "status"
+          ? "statusCounterSync"
+          : targetType === "story"
+            ? "storyCounterSync"
+            : "anonymousMessageCounterSync",
+      targetType,
+      statusId
     });
+  } catch (error) {
+    console.error("Failed to sync counters", { targetType, statusId, error });
   }
-
-  return appQueue;
 }
 
-export async function enqueueCounterSync(targetType: "status" | "anonymousMessage" | "story", statusId: string) {
-  const queue = getAppQueue();
-  if (!queue) {
+async function syncCounters(job: CounterSyncJob) {
+  if (job.targetType === "status") {
+    const [likesCount, bookmarksCount, commentsCount] = await Promise.all([
+      StatusInteractionModel.countDocuments({ statusId: job.statusId, kind: "like" }),
+      StatusInteractionModel.countDocuments({ statusId: job.statusId, kind: "bookmark" }),
+      CommentModel.countDocuments({ targetType: "status", targetId: job.statusId })
+    ]);
+
+    await StatusModel.findByIdAndUpdate(job.statusId, {
+      $set: { likesCount, bookmarksCount, commentsCount }
+    });
     return;
   }
 
-  try {
-    await queue.add(
-      `${targetType}-counter-sync`,
-      {
-        type:
-          targetType === "status"
-            ? "statusCounterSync"
-            : targetType === "story"
-              ? "storyCounterSync"
-              : "anonymousMessageCounterSync",
-        targetType,
-        statusId
-      },
-      {
-        jobId: `${targetType}-${statusId}`,
-        removeOnComplete: 100,
-        removeOnFail: 100
+  if (job.targetType === "story") {
+    const [likesCount, bookmarksCount, commentsCount] = await Promise.all([
+      StoryInteractionModel.countDocuments({ storyId: job.statusId, kind: "like" }),
+      StoryInteractionModel.countDocuments({ storyId: job.statusId, kind: "bookmark" }),
+      CommentModel.countDocuments({
+        targetType: "storyChapter",
+        targetId: { $regex: `^${job.statusId}:` }
+      })
+    ]);
+
+    await StoryModel.findByIdAndUpdate(job.statusId, {
+      $set: {
+        likesCount,
+        bookmarksCount,
+        commentsCount,
+        reactionsCount: likesCount + bookmarksCount
       }
-    );
-  } catch (error) {
-    console.error("Failed to enqueue counter sync", { targetType, statusId, error });
+    });
+    return;
   }
+
+  const commentsCount = await CommentModel.countDocuments({
+    targetType: "anonymousMessage",
+    targetId: job.statusId
+  });
+
+  await AnonymousMessageModel.findByIdAndUpdate(job.statusId, {
+    $set: { commentsCount }
+  });
 }
 
-export function registerQueueWorkers() {
-  if (!env.REDIS_URL) {
-    return null;
-  }
-
-  // The worker is intentionally light for now: it gives us a durable place for
-  // background jobs without blocking the request path, even before heavy jobs land.
-  return new Worker<CounterSyncJob>(
-    "histora-jobs",
-    async (job) => {
-      if (job.data.targetType === "status") {
-        const [likesCount, bookmarksCount, commentsCount] = await Promise.all([
-          StatusInteractionModel.countDocuments({ statusId: job.data.statusId, kind: "like" }),
-          StatusInteractionModel.countDocuments({ statusId: job.data.statusId, kind: "bookmark" }),
-          CommentModel.countDocuments({ targetType: "status", targetId: job.data.statusId })
-        ]);
-
-        await StatusModel.findByIdAndUpdate(job.data.statusId, {
-          $set: { likesCount, bookmarksCount, commentsCount }
-        });
-        return;
-      }
-
-      if (job.data.targetType === "story") {
-        const [likesCount, bookmarksCount, commentsCount] = await Promise.all([
-          StoryInteractionModel.countDocuments({ storyId: job.data.statusId, kind: "like" }),
-          StoryInteractionModel.countDocuments({ storyId: job.data.statusId, kind: "bookmark" }),
-          CommentModel.countDocuments({
-            targetType: "storyChapter",
-            targetId: { $regex: `^${job.data.statusId}:` }
-          })
-        ]);
-
-        await StoryModel.findByIdAndUpdate(job.data.statusId, {
-          $set: {
-            likesCount,
-            bookmarksCount,
-            commentsCount,
-            reactionsCount: likesCount + bookmarksCount
-          }
-        });
-        return;
-      }
-
-      const commentsCount = await CommentModel.countDocuments({
-        targetType: "anonymousMessage",
-        targetId: job.data.statusId
-      });
-
-      await AnonymousMessageModel.findByIdAndUpdate(job.data.statusId, {
-        $set: { commentsCount }
-      });
-    },
-    { connection: { url: env.REDIS_URL } }
-  );
+export function registerQueueWorkers(): { on(event: "error", listener: (error: Error) => void): unknown } | null {
+  return null;
 }
