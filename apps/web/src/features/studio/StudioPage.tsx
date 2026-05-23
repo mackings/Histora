@@ -300,6 +300,29 @@ const formatStudioEditMeta = (name?: string | null, username?: string | null, ed
   return `Last edited by ${name} (@${username}) // ${new Date(editedAt).toLocaleString()}`;
 };
 
+const formatEditorHandle = (username?: string | null) => {
+  const normalizedUsername = username?.trim();
+  return normalizedUsername ? `@${normalizedUsername.replace(/^@+/, "")}` : "";
+};
+
+const getStoryEditorHandles = (story: ApiStory, currentUsername?: string) => {
+  const current = currentUsername?.trim().toLowerCase();
+  const handles = [story.authorUsername, ...(story.collaborators ?? []).map((collaborator) => collaborator.username)]
+    .map(formatEditorHandle)
+    .filter(Boolean);
+  const uniqueHandles = [...new Set(handles)];
+  const collaboratorHandles = uniqueHandles.filter((handle) => handle.slice(1).toLowerCase() !== current);
+  const visibleHandles = collaboratorHandles.length ? collaboratorHandles : uniqueHandles;
+
+  if (!visibleHandles.length) {
+    return "";
+  }
+
+  const shownHandles = visibleHandles.slice(0, 3);
+  const overflowCount = visibleHandles.length - shownHandles.length;
+  return `With ${shownHandles.join(", ")}${overflowCount > 0 ? ` +${overflowCount}` : ""}`;
+};
+
 type StudioGuideTarget =
   | "chapters"
   | "storySetup"
@@ -4508,13 +4531,16 @@ export function StudioPage({
                   <span className="story-tag">{story.status === "published" ? "LIVE" : "DRAFT"}</span>
                 </div>
                 <p>{story.summary}</p>
+                {story.collaborators?.length ? (
+                  <span className="studio-library-collaborators">{getStoryEditorHandles(story, currentUser.username)}</span>
+                ) : null}
                 {story.status === "published" ? (
                   <span className="studio-library-action-chip">CONTINUE STORY</span>
                 ) : null}
                 <div className="studio-library-meta">
                   <span>{story.chapters.length} chapter{story.chapters.length === 1 ? "" : "s"}</span>
                   <span>{story.status === "published" ? "Live now" : "Not published yet"}</span>
-                  <span>{getStoryAudienceLabel(story.visibility)}</span>
+                  <span>{story.collaborators?.length ? `${(story.collaborators ?? []).length + 1} editors` : getStoryAudienceLabel(story.visibility)}</span>
                   <span>{new Date(story.updatedAt).toLocaleDateString()}</span>
                 </div>
               </button>
@@ -4531,6 +4557,7 @@ export function StudioPage({
                   <span className="story-tag">COLLAB</span>
                 </div>
                 <p>{story.summary}</p>
+                <span className="studio-library-collaborators">{getStoryEditorHandles(story, currentUser.username)}</span>
                 <span className="studio-library-action-chip">START COLLABORATING</span>
                 <div className="studio-library-meta">
                   <span>{story.chapters.length} chapter{story.chapters.length === 1 ? "" : "s"}</span>

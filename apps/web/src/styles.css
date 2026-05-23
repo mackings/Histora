@@ -5415,6 +5415,14 @@ textarea {
   letter-spacing: 0.06em;
 }
 
+.studio-library-collaborators {
+  display: block;
+  color: #315efb;
+  font-size: 0.9rem;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
 .studio-library-empty {
   background: rgba(247, 250, 255, 0.8);
 }
