@@ -42,5 +42,9 @@ export async function safeRedisConnect(client: Redis | null) {
     return;
   }
 
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (error) {
+    console.warn("Redis connection unavailable", error);
+  }
 }

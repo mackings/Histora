@@ -13,24 +13,24 @@ import {
 } from "./services/redis.service.js";
 
 async function bootstrap() {
+  const app = createApp();
+  const server = createServer(app);
+  registerAppEventsRelay(server);
+  registerTranscriptionRelay(server);
+
+  server.listen(env.PORT, () => {
+    console.log(`Histora API listening on port ${env.PORT}`);
+  });
+
   await connectDatabase();
   await Promise.all([
     safeRedisConnect(getRedisClient()),
     safeRedisConnect(getRedisSubscriber())
   ]);
 
-  const app = createApp();
-  const server = createServer(app);
   const queueWorker = registerQueueWorkers();
-  registerAppEventsRelay(server);
-  registerTranscriptionRelay(server);
-
   queueWorker?.on("error", (error: Error) => {
     console.error("Histora queue worker error", error);
-  });
-
-  server.listen(env.PORT, () => {
-    console.log(`Histora API listening on port ${env.PORT}`);
   });
 }
 

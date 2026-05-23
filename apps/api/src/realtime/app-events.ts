@@ -229,7 +229,9 @@ async function ensureRedisSubscription() {
 export function registerAppEventsRelay(server: HttpServer) {
   const eventsServer = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
-  void ensureRedisSubscription();
+  void ensureRedisSubscription().catch((error) => {
+    console.warn("Redis event subscription unavailable", error);
+  });
 
   server.on("upgrade", (request, socket, head) => {
     if (!isEventsUpgradeRequest(request)) {
