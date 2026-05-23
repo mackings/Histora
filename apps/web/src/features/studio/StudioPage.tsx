@@ -512,6 +512,7 @@ export function StudioPage({
         : [];
 
       return {
+        savedAt: typeof savedDraft.savedAt === "string" ? savedDraft.savedAt : undefined,
         currentStoryId: typeof savedDraft.currentStoryId === "string" ? savedDraft.currentStoryId : null,
         currentStoryStatus: savedDraft.currentStoryStatus === "published" ? "published" : "draft",
         liveChapterIndexes: Array.isArray(savedDraft.liveChapterIndexes)
@@ -563,6 +564,7 @@ export function StudioPage({
     });
   };
   const buildStoredStudioDraftPayload = (sourceChapters: StudioChapter[]): StoredStudioDraft => ({
+    savedAt: new Date().toISOString(),
     currentStoryId,
     currentStoryStatus,
     liveChapterIndexes,
@@ -618,6 +620,7 @@ export function StudioPage({
     chapter: StudioChapter;
   };
   type StoredStudioDraft = {
+    savedAt?: string;
     currentStoryId: string | null;
     currentStoryStatus: "draft" | "published";
     liveChapterIndexes: number[];
@@ -641,8 +644,8 @@ export function StudioPage({
   const getStudioAttachmentIdentity = (attachment: Pick<StudioMediaAttachment, "name" | "url" | "objectKey" | "localId">) =>
     attachment.objectKey ||
     extractStudioOwnedObjectKey(attachment.url) ||
-    (!isBlobUrl(attachment.url) ? attachment.url : "") ||
     attachment.localId ||
+    (!isBlobUrl(attachment.url) ? attachment.url : "") ||
     attachment.name;
   const getStudioAttachmentFileToken = (attachment: Pick<StudioMediaAttachment, "name" | "url" | "objectKey">) => {
     const normalizedName = attachment.name.trim().toLowerCase();
@@ -699,6 +702,47 @@ export function StudioPage({
       source: nextSource
     };
   };
+  const pickPreferredStudioAttachment = (
+    current: StudioMediaAttachment,
+    candidate: StudioMediaAttachment,
+    fallbackSource = "Saved story"
+  ) => {
+    const normalizedCurrent = sanitizeStudioAttachment(current, fallbackSource);
+    const normalizedCandidate = sanitizeStudioAttachment(candidate, fallbackSource);
+    const currentHasStorageKey = Boolean(normalizedCurrent.objectKey || extractStudioOwnedObjectKey(normalizedCurrent.url));
+    const candidateHasStorageKey = Boolean(normalizedCandidate.objectKey || extractStudioOwnedObjectKey(normalizedCandidate.url));
+    const currentIsFinal = isFinalizedStudioAttachment(normalizedCurrent) && !isUploadingAttachmentSource(normalizedCurrent.source);
+    const candidateIsFinal = isFinalizedStudioAttachment(normalizedCandidate) && !isUploadingAttachmentSource(normalizedCandidate.source);
+
+    if (candidateHasStorageKey && !currentHasStorageKey) {
+      return normalizedCandidate;
+    }
+
+    if (candidateIsFinal && !currentIsFinal) {
+      return normalizedCandidate;
+    }
+
+    if (candidate.objectKey && !current.objectKey) {
+      return normalizedCandidate;
+    }
+
+    const currentStorageKey = normalizedCurrent.objectKey || extractStudioOwnedObjectKey(normalizedCurrent.url);
+    const candidateStorageKey = normalizedCandidate.objectKey || extractStudioOwnedObjectKey(normalizedCandidate.url);
+    if (
+      currentStorageKey &&
+      candidateStorageKey === currentStorageKey &&
+      normalizedCurrent.url === currentStorageKey &&
+      normalizedCandidate.url !== candidateStorageKey
+    ) {
+      return normalizedCandidate;
+    }
+
+    if (!isBlobUrl(candidate.url) && isBlobUrl(current.url)) {
+      return normalizedCandidate;
+    }
+
+    return normalizedCurrent;
+  };
   const sanitizeStudioAttachment = (
     attachment: StudioMediaAttachment,
     fallbackSource = "Saved story"
@@ -710,7 +754,24 @@ export function StudioPage({
         : attachment.source?.trim() || fallbackSource
   });
   const sanitizeStudioAttachments = (attachments: StudioMediaAttachment[], fallbackSource = "Saved story") =>
-    attachments.map((attachment) => sanitizeStudioAttachment(attachment, fallbackSource));
+    attachments.reduce<StudioMediaAttachment[]>((deduped, attachment) => {
+      const sanitizedAttachment = sanitizeStudioAttachment(attachment, fallbackSource);
+      const existingIndex = deduped.findIndex((existingAttachment) =>
+        attachmentsRepresentSameUpload(existingAttachment, sanitizedAttachment)
+      );
+
+      if (existingIndex >= 0) {
+        deduped[existingIndex] = pickPreferredStudioAttachment(
+          deduped[existingIndex],
+          sanitizedAttachment,
+          fallbackSource
+        );
+        return deduped;
+      }
+
+      deduped.push(sanitizedAttachment);
+      return deduped;
+    }, []);
   const normalizeAttachmentCollectionForCompare = (attachments: StudioMediaAttachment[]) =>
     attachments.map((attachment) => ({
       key: getStudioAttachmentIdentity(attachment),
@@ -1225,6 +1286,22 @@ export function StudioPage({
       isPersistableStudioChapter(chapter) || fetchedChapters.some((fetchedChapter) => getStudioChapterIdentity(fetchedChapter) === getStudioChapterIdentity(chapter))
     );
   };
+  const replaceStaleDraftMediaWithFetchedMedia = (mergedChapters: StudioChapter[], fetchedChapters: StudioChapter[]) =>
+    mergedChapters.map((chapter) => {
+      const fetchedChapter = fetchedChapters.find(
+        (candidate) => getStudioChapterIdentity(candidate) === getStudioChapterIdentity(chapter)
+      );
+
+      if (!fetchedChapter) {
+        return chapter;
+      }
+
+      return {
+        ...chapter,
+        imageAttachments: sanitizeStudioAttachments(fetchedChapter.imageAttachments),
+        voiceNotes: sanitizeStudioAttachments(fetchedChapter.voiceNotes, "Recorded in studio")
+      };
+    });
   const canPersistStoryRemotely = (sourceChapters: StudioChapter[]) =>
     storyTitle.trim().length >= 3 &&
     storySummary.trim().split(/\s+/).filter(Boolean).length >= 20 &&
@@ -1661,8 +1738,8 @@ export function StudioPage({
   }, [currentStoryStatus]);
 
   useEffect(() => {
-    setImageAttachments(activeChapterEntry?.imageAttachments ?? []);
-    setVoiceNotes(activeChapterEntry?.voiceNotes ?? []);
+    setImageAttachments(sanitizeStudioAttachments(activeChapterEntry?.imageAttachments ?? []));
+    setVoiceNotes(sanitizeStudioAttachments(activeChapterEntry?.voiceNotes ?? [], "Recorded in studio"));
     setTimelineEntries(activeChapterEntry?.timelineEntries?.length ? activeChapterEntry.timelineEntries : [createEmptyTimelineEntry()]);
   }, [activeChapterEntry]);
 
@@ -1744,12 +1821,21 @@ export function StudioPage({
     const restoredDraftChapters = storedDraft?.chapters.length ? ensureUniqueStudioChapterTitles(storedDraft.chapters) : null;
     const restoredDraftActiveChapter = storedDraft?.activeChapter?.trim() || "";
 
-    const nextChapters =
+    const storedDraftSavedAtMs = storedDraft?.savedAt ? new Date(storedDraft.savedAt).getTime() : 0;
+    const remoteUpdatedAtMs = new Date(story.updatedAt).getTime();
+    const storedDraftMediaIsStale =
+      Boolean(storedDraft) &&
+      (!Number.isFinite(storedDraftSavedAtMs) || !Number.isFinite(remoteUpdatedAtMs) || storedDraftSavedAtMs < remoteUpdatedAtMs);
+
+    const mergedNextChapters =
       restoredDraftChapters
         ? mergeFetchedDraftChapters(restoredDraftChapters, fetchedChapters)
         : options?.mergeRestoredDraft && restoredLocalDraftRef.current
           ? mergeFetchedDraftChapters(chaptersRef.current, fetchedChapters)
-        : fetchedChapters;
+          : fetchedChapters;
+    const nextChapters = storedDraftMediaIsStale
+      ? replaceStaleDraftMediaWithFetchedMedia(mergedNextChapters, fetchedChapters)
+      : mergedNextChapters;
     const uniqueChapters = ensureUniqueStudioChapterTitles(nextChapters.length ? nextChapters : [createInitialStudioChapter(0)]);
     const resolvedActiveChapter =
       restoredDraftActiveChapter && uniqueChapters.some((chapter) => chapter.title === restoredDraftActiveChapter)
