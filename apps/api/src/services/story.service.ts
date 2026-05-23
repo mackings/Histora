@@ -923,7 +923,7 @@ export async function getStoryBySlug(shareSlug: string, viewerId?: string) {
 
   if (story.visibility === "public") {
     story.readCount += 1;
-    await story.save();
+    await StoryModel.updateOne({ _id: story.id }, { $inc: { readCount: 1 } });
   }
 
   const payload = await serializeStory(story, viewerId);
@@ -1108,7 +1108,7 @@ export async function trackStoryShare(storyId: string, userId: string) {
   const actor = await UserModel.findById(userId).select("fullName username").lean();
 
   story.sharesCount += 1;
-  await story.save();
+  await StoryModel.updateOne({ _id: story.id }, { $inc: { sharesCount: 1 } });
 
   await deleteCache("stories:feed");
   await deleteCache(`stories:public:${story.slug}`);
