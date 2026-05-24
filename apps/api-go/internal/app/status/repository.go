@@ -101,3 +101,31 @@ func (r *Repository) DeleteOwned(ctx context.Context, statusID bson.ObjectID, us
 	_, _ = r.comments.DeleteMany(ctx, bson.M{"targetType": "status", "targetId": statusID.Hex()})
 	return nil
 }
+
+func (r *Repository) ToggleInteraction(ctx context.Context, statusID bson.ObjectID, userID bson.ObjectID, kind string) (bool, int64, int64, error) {
+	filter := bson.M{"statusId": statusID, "userId": userID, "kind": kind}
+	count, err := r.interactions.CountDocuments(ctx, filter)
+	if err != nil {
+		return false, 0, 0, err
+	}
+	active := false
+	if count > 0 {
+		_, err = r.interactions.DeleteOne(ctx, filter)
+	} else {
+		_, err = r.interactions.InsertOne(ctx, bson.M{"statusId": statusID, "userId": userID, "kind": kind, "createdAt": time.Now(), "updatedAt": time.Now()})
+		active = true
+	}
+	if err != nil {
+		return false, 0, 0, err
+	}
+	likes, err := r.interactions.CountDocuments(ctx, bson.M{"statusId": statusID, "kind": "like"})
+	if err != nil {
+		return false, 0, 0, err
+	}
+	bookmarks, err := r.interactions.CountDocuments(ctx, bson.M{"statusId": statusID, "kind": "bookmark"})
+	if err != nil {
+		return false, 0, 0, err
+	}
+	_, err = r.statuses.UpdateOne(ctx, bson.M{"_id": statusID}, bson.M{"$set": bson.M{"likesCount": likes, "bookmarksCount": bookmarks, "updatedAt": time.Now()}})
+	return active, likes, bookmarks, err
+}

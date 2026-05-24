@@ -139,6 +139,24 @@ func (s *Service) Delete(ctx context.Context, statusID bson.ObjectID, userID bso
 	return s.repo.DeleteOwned(ctx, statusID, userID)
 }
 
+func (s *Service) ToggleReaction(ctx context.Context, statusID bson.ObjectID, userID bson.ObjectID, action string) (map[string]any, error) {
+	if action != "like" && action != "bookmark" {
+		return nil, apperror.BadRequest("Invalid status reaction action.")
+	}
+	status, err := s.repo.FindByID(ctx, statusID)
+	if err != nil {
+		return nil, err
+	}
+	if status == nil {
+		return nil, apperror.NotFound("Status not found")
+	}
+	active, likes, bookmarks, err := s.repo.ToggleInteraction(ctx, statusID, userID, action)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"statusId": statusID.Hex(), "action": action, "active": active, "likesCount": likes, "bookmarksCount": bookmarks}, nil
+}
+
 func (s *Service) serializeMany(statuses []statusdomain.Status) ([]Response, error) {
 	out := make([]Response, 0, len(statuses))
 	for _, status := range statuses {

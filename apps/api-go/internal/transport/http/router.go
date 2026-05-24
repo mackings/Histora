@@ -5,23 +5,32 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	anonymousapp "github.com/mackings/histora/apps/api-go/internal/app/anonymous"
 	authapp "github.com/mackings/histora/apps/api-go/internal/app/auth"
 	commentapp "github.com/mackings/histora/apps/api-go/internal/app/comment"
 	"github.com/mackings/histora/apps/api-go/internal/app/health"
+	mediaapp "github.com/mackings/histora/apps/api-go/internal/app/media"
+	profileapp "github.com/mackings/histora/apps/api-go/internal/app/profile"
 	statusapp "github.com/mackings/histora/apps/api-go/internal/app/status"
 	storyapp "github.com/mackings/histora/apps/api-go/internal/app/story"
+	transcriptionapp "github.com/mackings/histora/apps/api-go/internal/app/transcription"
 	"github.com/mackings/histora/apps/api-go/internal/config"
 	"github.com/mackings/histora/apps/api-go/internal/shared/apperror"
 	"github.com/mackings/histora/apps/api-go/internal/shared/response"
 )
 
 type Deps struct {
-	Config         config.Config
-	Health         health.Service
-	AuthService    *authapp.Service
-	StoryService   *storyapp.Service
-	CommentService *commentapp.Service
-	StatusService  *statusapp.Service
+	Config               config.Config
+	Health               health.Service
+	AuthService          *authapp.Service
+	StoryService         *storyapp.Service
+	CommentService       *commentapp.Service
+	StatusService        *statusapp.Service
+	MediaService         *mediaapp.Service
+	ProfileService       *profileapp.Service
+	AnonymousService     *anonymousapp.Service
+	TranscriptionService *transcriptionapp.Service
+	EventsHandler        http.Handler
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -46,11 +55,18 @@ func NewRouter(deps Deps) http.Handler {
 		}
 		response.JSON(w, httpStatus, status)
 	})
+	if deps.EventsHandler != nil {
+		r.Handle("/ws/events", deps.EventsHandler)
+	}
 
 	authHandler := NewAuthHandler(deps.Config, deps.AuthService)
 	storyHandler := NewStoryHandler(deps.StoryService)
 	commentHandler := NewCommentHandler(deps.CommentService)
 	statusHandler := NewStatusHandler(deps.StatusService)
+	mediaHandler := NewMediaHandler(deps.MediaService)
+	profileHandler := NewProfileHandler(deps.ProfileService)
+	anonymousHandler := NewAnonymousHandler(deps.AnonymousService)
+	transcriptionHandler := NewTranscriptionHandler(deps.TranscriptionService)
 	requireAuth := RequireAuth(deps.AuthService)
 	optionalAuth := OptionalAuth(deps.AuthService)
 
@@ -93,23 +109,29 @@ func NewRouter(deps Deps) http.Handler {
 			api.Post("/stories", notImplemented("stories/create"))
 			api.Patch("/stories/{storyId}", notImplemented("stories/update"))
 		}
-		api.Post("/stories/{storyId}/reactions", notImplemented("stories/reactions"))
-		api.Post("/stories/{storyId}/share", notImplemented("stories/share"))
+		if deps.StoryService != nil {
+			api.With(requireAuth).Post("/stories/{storyId}/reactions", storyHandler.ToggleReaction)
+			api.With(requireAuth).Post("/stories/{storyId}/share", storyHandler.Share)
+		} else {
+			api.Post("/stories/{storyId}/reactions", notImplemented("stories/reactions"))
+			api.Post("/stories/{storyId}/share", notImplemented("stories/share"))
+		}
 
 		if deps.StatusService != nil {
 			api.With(requireAuth).Get("/statuses/mine", statusHandler.Mine)
 			api.Get("/statuses/share/{shareSlug}", statusHandler.Share)
 			api.With(optionalAuth).Get("/statuses", statusHandler.Feed)
 			api.With(requireAuth).Post("/statuses", statusHandler.Create)
+			api.With(requireAuth).Post("/statuses/{statusId}/reactions", statusHandler.ToggleReaction)
 			api.With(requireAuth).Delete("/statuses/{statusId}", statusHandler.Delete)
 		} else {
 			api.Get("/statuses/mine", notImplemented("statuses/mine"))
 			api.Get("/statuses/share/{shareSlug}", notImplemented("statuses/share/:shareSlug"))
 			api.Get("/statuses", notImplemented("statuses/feed"))
 			api.Post("/statuses", notImplemented("statuses/create"))
+			api.Post("/statuses/{statusId}/reactions", notImplemented("statuses/reactions"))
 			api.Delete("/statuses/{statusId}", notImplemented("statuses/delete"))
 		}
-		api.Post("/statuses/{statusId}/reactions", notImplemented("statuses/reactions"))
 
 		if deps.CommentService != nil {
 			api.With(optionalAuth).Get("/comments", commentHandler.List)
@@ -119,45 +141,75 @@ func NewRouter(deps Deps) http.Handler {
 			api.Post("/comments", notImplemented("comments/create"))
 		}
 
-		api.Get("/anonymous-messages/inbox", notImplemented("anonymous/inbox"))
-		api.Get("/anonymous-messages/sent", notImplemented("anonymous/sent"))
-		api.Post("/anonymous-messages", notImplemented("anonymous/create"))
-		api.Get("/anonymous-messages/{shareSlug}/private", notImplemented("anonymous/private"))
-		api.Get("/anonymous-messages/{shareSlug}", notImplemented("anonymous/get"))
-		api.Post("/anonymous-messages/{shareSlug}/help-requests", notImplemented("anonymous/help-request"))
-		api.Patch("/anonymous-messages/{messageId}/distribution", notImplemented("anonymous/distribution"))
-		api.Post("/anonymous-messages/{messageId}/help-requests/{requestId}/accept", notImplemented("anonymous/help-accept"))
-		api.Post("/anonymous-messages/{messageId}/helper-contact/unlock", notImplemented("anonymous/helper-contact"))
-		api.Delete("/anonymous-messages/{messageId}", notImplemented("anonymous/delete"))
+		if deps.AnonymousService != nil {
+			api.With(requireAuth).Get("/anonymous-messages/inbox", anonymousHandler.Inbox)
+			api.With(requireAuth).Get("/anonymous-messages/sent", anonymousHandler.Sent)
+			api.With(requireAuth).Post("/anonymous-messages", anonymousHandler.Create)
+			api.Get("/anonymous-messages/{shareSlug}/private", anonymousHandler.Get)
+			api.Get("/anonymous-messages/{shareSlug}", anonymousHandler.Get)
+			api.With(requireAuth).Post("/anonymous-messages/{shareSlug}/help-requests", anonymousHandler.Help)
+			api.With(requireAuth).Post("/anonymous-messages/{messageId}/help-requests/{requestId}/accept", anonymousHandler.AcceptHelp)
+			api.With(requireAuth).Post("/anonymous-messages/{messageId}/helper-contact/unlock", anonymousHandler.UnlockHelperContact)
+			api.With(requireAuth).Patch("/anonymous-messages/{messageId}/distribution", anonymousHandler.Distribution)
+			api.With(requireAuth).Delete("/anonymous-messages/{messageId}", anonymousHandler.Delete)
+		} else {
+			api.Get("/anonymous-messages/inbox", notImplemented("anonymous/inbox"))
+			api.Get("/anonymous-messages/sent", notImplemented("anonymous/sent"))
+			api.Post("/anonymous-messages", notImplemented("anonymous/create"))
+			api.Get("/anonymous-messages/{shareSlug}/private", notImplemented("anonymous/private"))
+			api.Get("/anonymous-messages/{shareSlug}", notImplemented("anonymous/get"))
+			api.Post("/anonymous-messages/{shareSlug}/help-requests", notImplemented("anonymous/help-request"))
+			api.Patch("/anonymous-messages/{messageId}/distribution", notImplemented("anonymous/distribution"))
+			api.Delete("/anonymous-messages/{messageId}", notImplemented("anonymous/delete"))
+		}
 
-		api.Get("/profile/me", notImplemented("profile/me"))
-		api.Patch("/profile/me", notImplemented("profile/update"))
-		api.Get("/profile/sessions", notImplemented("profile/sessions"))
-		api.Post("/profile/sessions/{sessionId}/revoke", notImplemented("profile/revoke-session"))
-		api.Get("/profile/devices", notImplemented("profile/devices"))
-		api.Patch("/profile/devices/{deviceId}", notImplemented("profile/rename-device"))
-		api.Post("/profile/devices/{deviceId}/revoke", notImplemented("profile/revoke-device"))
-		api.Get("/profile/push/public-key", notImplemented("profile/push-key"))
-		api.Post("/profile/push/subscriptions", notImplemented("profile/push-subscriptions"))
-		api.Delete("/profile/push/subscriptions", notImplemented("profile/delete-push-subscriptions"))
-		api.Get("/profile/invites", notImplemented("profile/invites"))
-		api.Get("/profile/invites/incoming", notImplemented("profile/incoming-invites"))
-		api.Post("/profile/invites", notImplemented("profile/create-invite"))
-		api.Post("/profile/invites/{inviteId}/accept", notImplemented("profile/accept-invite"))
-		api.Delete("/profile/invites/{inviteId}", notImplemented("profile/revoke-invite"))
-		api.Get("/profile/saved", notImplemented("profile/saved"))
-		api.Post("/profile/verification/request", notImplemented("profile/verification-request"))
-		api.Get("/profile/followers", notImplemented("profile/followers"))
-		api.Get("/profile/following", notImplemented("profile/following"))
-		api.Post("/profile/follows/story/{storyId}/toggle", notImplemented("profile/follow-story-author"))
-		api.Post("/profile/follows/{username}/toggle", notImplemented("profile/follow-user"))
+		if deps.ProfileService != nil {
+			api.With(requireAuth).Get("/profile/me", profileHandler.Me)
+			api.With(requireAuth).Patch("/profile/me", profileHandler.Update)
+			api.With(requireAuth).Get("/profile/sessions", profileHandler.Sessions)
+			api.With(requireAuth).Post("/profile/sessions/{sessionId}/revoke", profileHandler.RevokeSession)
+			api.With(requireAuth).Get("/profile/devices", profileHandler.Devices)
+			api.With(requireAuth).Patch("/profile/devices/{deviceId}", profileHandler.RenameDevice)
+			api.With(requireAuth).Post("/profile/devices/{deviceId}/revoke", profileHandler.RevokeDevice)
+			api.With(requireAuth).Get("/profile/push/public-key", profileHandler.PushPublicKey)
+			api.With(requireAuth).Post("/profile/push/subscriptions", profileHandler.SavePushSubscription)
+			api.With(requireAuth).Delete("/profile/push/subscriptions", profileHandler.DeletePushSubscription)
+			api.With(requireAuth).Get("/profile/invites", profileHandler.Invites)
+			api.With(requireAuth).Get("/profile/invites/incoming", profileHandler.IncomingInvites)
+			api.With(requireAuth).Post("/profile/invites", profileHandler.CreateInvite)
+			api.With(requireAuth).Post("/profile/invites/{inviteId}/accept", profileHandler.AcceptInvite)
+			api.With(requireAuth).Delete("/profile/invites/{inviteId}", profileHandler.RevokeInvite)
+			api.With(requireAuth).Get("/profile/saved", profileHandler.Saved)
+			api.With(requireAuth).Post("/profile/verification/request", profileHandler.RequestVerification)
+			api.With(requireAuth).Get("/profile/followers", profileHandler.Followers)
+			api.With(requireAuth).Get("/profile/following", profileHandler.Following)
+			api.With(requireAuth).Post("/profile/follows/story/{storyId}/toggle", profileHandler.ToggleStoryAuthorFollow)
+			api.With(requireAuth).Post("/profile/follows/{username}/toggle", profileHandler.ToggleFollow)
+		} else {
+			api.Get("/profile/me", notImplemented("profile/me"))
+			api.Patch("/profile/me", notImplemented("profile/update"))
+			api.Get("/profile/sessions", notImplemented("profile/sessions"))
+			api.Post("/profile/sessions/{sessionId}/revoke", notImplemented("profile/revoke-session"))
+			api.Get("/profile/push/public-key", notImplemented("profile/push-key"))
+			api.Post("/profile/follows/{username}/toggle", notImplemented("profile/follow-user"))
+		}
+		if deps.MediaService != nil {
+			api.With(requireAuth).Post("/media/signed-upload", mediaHandler.SignedUpload)
+			api.With(requireAuth).Get("/media/signed-read", mediaHandler.SignedRead)
+			api.With(requireAuth).Post("/media/upload", mediaHandler.Upload)
+		} else {
+			api.Post("/media/signed-upload", notImplemented("media/signed-upload"))
+			api.Get("/media/signed-read", notImplemented("media/signed-read"))
+			api.Post("/media/upload", notImplemented("media/upload"))
+		}
 
-		api.Post("/media/signed-upload", notImplemented("media/signed-upload"))
-		api.Get("/media/signed-read", notImplemented("media/signed-read"))
-		api.Post("/media/upload", notImplemented("media/upload"))
-
-		api.Get("/transcriptions/token", notImplemented("transcriptions/token"))
-		api.Post("/transcriptions", notImplemented("transcriptions"))
+		if deps.TranscriptionService != nil {
+			api.With(requireAuth).Get("/transcriptions/token", transcriptionHandler.Token)
+			api.With(requireAuth).Post("/transcriptions", transcriptionHandler.Create)
+		} else {
+			api.Get("/transcriptions/token", notImplemented("transcriptions/token"))
+			api.Post("/transcriptions", notImplemented("transcriptions"))
+		}
 	})
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {

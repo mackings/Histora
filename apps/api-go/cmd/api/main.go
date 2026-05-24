@@ -9,14 +9,20 @@ import (
 	"syscall"
 	"time"
 
+	anonymousapp "github.com/mackings/histora/apps/api-go/internal/app/anonymous"
 	authapp "github.com/mackings/histora/apps/api-go/internal/app/auth"
 	commentapp "github.com/mackings/histora/apps/api-go/internal/app/comment"
 	"github.com/mackings/histora/apps/api-go/internal/app/health"
+	mediaapp "github.com/mackings/histora/apps/api-go/internal/app/media"
+	profileapp "github.com/mackings/histora/apps/api-go/internal/app/profile"
 	statusapp "github.com/mackings/histora/apps/api-go/internal/app/status"
 	storyapp "github.com/mackings/histora/apps/api-go/internal/app/story"
+	transcriptionapp "github.com/mackings/histora/apps/api-go/internal/app/transcription"
 	"github.com/mackings/histora/apps/api-go/internal/config"
 	"github.com/mackings/histora/apps/api-go/internal/platform/httpserver"
+	"github.com/mackings/histora/apps/api-go/internal/platform/jobs"
 	mongoplatform "github.com/mackings/histora/apps/api-go/internal/platform/mongo"
+	"github.com/mackings/histora/apps/api-go/internal/platform/realtime"
 	redisplatform "github.com/mackings/histora/apps/api-go/internal/platform/redis"
 	httptransport "github.com/mackings/histora/apps/api-go/internal/transport/http"
 )
@@ -46,7 +52,6 @@ func main() {
 			slog.Error("failed to disconnect mongo", "error", err)
 		}
 	}()
-
 	redisClients, err := redisplatform.Connect(ctx, cfg)
 	if err != nil {
 		slog.Warn("redis unavailable; continuing without redis", "error", err)
@@ -57,13 +62,24 @@ func main() {
 			slog.Error("failed to close redis", "error", err)
 		}
 	}()
+	jobs.NewQueue(redisClients.Command).RunCounterWorker(ctx, func(context.Context, jobs.CounterSyncJob) error {
+		// Counter recalculation is intentionally idempotent; current ported routes update
+		// counters inline and enqueueing remains available for deeper reconciliation.
+		return nil
+	})
 
+	authService := authapp.NewService(cfg, authapp.NewRepository(mongoStore.DB))
 	router := httptransport.NewRouter(httptransport.Deps{
-		Config:         cfg,
-		AuthService:    authapp.NewService(cfg, authapp.NewRepository(mongoStore.DB)),
-		StoryService:   storyapp.NewService(cfg, storyapp.NewRepository(mongoStore.DB)),
-		CommentService: commentapp.NewService(cfg, commentapp.NewRepository(mongoStore.DB)),
-		StatusService:  statusapp.NewService(cfg, statusapp.NewRepository(mongoStore.DB)),
+		Config:               cfg,
+		AuthService:          authService,
+		StoryService:         storyapp.NewService(cfg, storyapp.NewRepository(mongoStore.DB)),
+		CommentService:       commentapp.NewService(cfg, commentapp.NewRepository(mongoStore.DB)),
+		StatusService:        statusapp.NewService(cfg, statusapp.NewRepository(mongoStore.DB)),
+		MediaService:         mediaapp.NewService(cfg),
+		ProfileService:       profileapp.NewService(cfg, mongoStore.DB),
+		AnonymousService:     anonymousapp.NewService(cfg, mongoStore.DB),
+		TranscriptionService: transcriptionapp.NewService(cfg),
+		EventsHandler:        realtime.NewHub(cfg, authService),
 		Health: health.Service{
 			Mongo: mongoStore.Client,
 			Redis: redisClients.Command,

@@ -92,3 +92,29 @@ func (h *StatusHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	response.JSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
+
+func (h *StatusHandler) ToggleReaction(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := appctx.AuthUserFromContext(r.Context())
+	if !ok {
+		response.Error(w, apperror.Unauthorized("Authentication required"))
+		return
+	}
+	statusID, err := bson.ObjectIDFromHex(chi.URLParam(r, "statusId"))
+	if err != nil {
+		response.Error(w, apperror.NotFound("Status not found"))
+		return
+	}
+	var input struct {
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, apperror.BadRequest("Invalid JSON payload"))
+		return
+	}
+	result, err := h.service.ToggleReaction(r.Context(), statusID, authUser.ID, input.Action)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
+}

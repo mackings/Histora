@@ -335,6 +335,60 @@ func (s *Service) PublicBySlug(ctx context.Context, slug string, viewerID *bson.
 	return s.serialize(*story, viewerID)
 }
 
+type ReactionResult struct {
+	StoryID        string `json:"storyId"`
+	Action         string `json:"action"`
+	Active         bool   `json:"active"`
+	LikesCount     int64  `json:"likesCount"`
+	BookmarksCount int64  `json:"bookmarksCount"`
+	ReactionsCount int64  `json:"reactionsCount"`
+}
+
+func (s *Service) ToggleReaction(ctx context.Context, storyID bson.ObjectID, userID bson.ObjectID, action string) (ReactionResult, error) {
+	if action != "like" && action != "bookmark" {
+		return ReactionResult{}, apperror.BadRequest("Invalid story reaction action.")
+	}
+	story, err := s.repo.FindEditableByID(ctx, storyID, userID)
+	if err != nil {
+		return ReactionResult{}, err
+	}
+	if story == nil {
+		story, err = s.repo.FindPublicByID(ctx, storyID)
+		if err != nil {
+			return ReactionResult{}, err
+		}
+	}
+	if story == nil || (story.Status != "published" && !canEditStory(*story, userID)) {
+		return ReactionResult{}, apperror.NotFound("Story not found")
+	}
+	active, likes, bookmarks, err := s.repo.ToggleInteraction(ctx, storyID, userID, action)
+	if err != nil {
+		return ReactionResult{}, err
+	}
+	return ReactionResult{StoryID: storyID.Hex(), Action: action, Active: active, LikesCount: likes, BookmarksCount: bookmarks, ReactionsCount: likes + bookmarks}, nil
+}
+
+func (s *Service) TrackShare(ctx context.Context, storyID bson.ObjectID, userID bson.ObjectID) (map[string]any, error) {
+	story, err := s.repo.FindEditableByID(ctx, storyID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if story == nil {
+		story, err = s.repo.FindPublicByID(ctx, storyID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if story == nil || (story.Status != "published" && !canEditStory(*story, userID)) {
+		return nil, apperror.NotFound("Story not found")
+	}
+	count, err := s.repo.IncrementShares(ctx, storyID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"storyId": storyID.Hex(), "sharesCount": count}, nil
+}
+
 func (s *Service) serializeMany(stories []storydomain.Story, viewerID *bson.ObjectID) ([]SerializedStory, error) {
 	out := make([]SerializedStory, 0, len(stories))
 	for _, item := range stories {

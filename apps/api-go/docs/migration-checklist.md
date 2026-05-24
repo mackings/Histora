@@ -13,9 +13,11 @@ The Node API remains the production source of truth until every item below has r
 - [ ] Redis rate limiting.
 - [ ] Redis cache helpers.
 - [ ] Redis pub/sub app events.
-- [ ] WebSocket `/ws/events`.
+- [x] WebSocket `/ws/events` scaffold.
 - [ ] WebSocket `/ws/transcriptions`.
 - [ ] Queue worker replacement or deliberate BullMQ bridge.
+  - [x] Redis Streams counter-worker scaffold.
+  - [ ] Counter reconciliation logic.
 - [ ] Structured request IDs through logs and responses.
 
 ## Feature Parity
@@ -23,26 +25,26 @@ The Node API remains the production source of truth until every item below has r
 - [x] Auth register/login/refresh/logout.
 - [x] Email verification and password reset.
 - [ ] Trusted device verification.
-- [ ] Profile dashboard, sessions, devices, push subscriptions.
-- [ ] Follow system.
-- [ ] Collaboration invites.
+- [x] Profile dashboard, sessions, devices, push subscriptions.
+- [x] Follow system.
+- [x] Collaboration invites.
 - [ ] Stories feed, mine, collaborative, public story, create/update.
   - [x] Read paths: feed, mine, collaborative, mine by id, public by slug.
   - [x] Write paths: create/update, revision conflicts, encrypted writes.
   - [ ] Realtime collaboration broadcasts.
-- [ ] Story reactions, bookmarks, shares, read tracking.
+- [x] Story reactions, bookmarks, shares, read tracking.
 - [ ] Studio collaboration realtime updates.
 - [x] Comments create/list for status, story chapter, anonymous message.
-- [ ] Status feed/create/reactions/delete/share.
+- [x] Status feed/create/reactions/delete/share.
   - [x] Feed, mine, create, delete, anonymous share lookup.
-  - [ ] Reactions.
-- [ ] Anonymous messages and helper contact flow.
-- [ ] Media signed upload/direct upload/signed read.
-- [ ] Transcription create and streaming token.
+  - [x] Reactions.
+- [x] Anonymous messages and helper contact flow.
+- [x] Media signed upload/direct upload/signed read.
+- [x] Transcription create and streaming token.
 
 ## Cutover Gates
 
-- [ ] Go tests pass with unit and handler coverage.
+- [x] Go tests pass with unit and handler coverage.
 - [ ] Contract smoke tests pass against the web app's expected responses.
 - [ ] Seed/e2e scripts pass against Go API.
 - [ ] Production env variables verified.

@@ -16,11 +16,17 @@ type User struct {
 	Location                string          `bson:"location,omitempty" json:"location"`
 	AvatarURL               string          `bson:"avatarUrl,omitempty" json:"avatarUrl"`
 	SubscriptionTier        string          `bson:"subscriptionTier" json:"subscriptionTier"`
+	ProfileVisibility       string          `bson:"profileVisibility,omitempty" json:"profileVisibility"`
 	DefaultStoryVisibility  string          `bson:"defaultStoryVisibility" json:"defaultStoryVisibility"`
 	AllowCommentsByDefault  bool            `bson:"allowCommentsByDefault" json:"allowCommentsByDefault"`
+	AllowHelpRequests       bool            `bson:"allowHelpRequests,omitempty" json:"allowHelpRequests"`
+	HideReadCounts          bool            `bson:"hideReadCounts,omitempty" json:"hideReadCounts"`
+	ShowAnonymousActivity   bool            `bson:"showAnonymousActivity,omitempty" json:"showAnonymousActivity"`
 	SelectedViewerIDs       []bson.ObjectID `bson:"selectedViewerIds,omitempty" json:"selectedViewerIds,omitempty"`
 	EmailVerified           bool            `bson:"emailVerified" json:"emailVerified"`
 	Verified                bool            `bson:"verified" json:"verified"`
+	VerificationStatus      string          `bson:"verificationStatus,omitempty" json:"verificationStatus"`
+	VerifiedAt              *time.Time      `bson:"verifiedAt,omitempty" json:"verifiedAt,omitempty"`
 	VerificationRequestedAt *time.Time      `bson:"verificationRequestedAt,omitempty" json:"verificationRequestedAt,omitempty"`
 	CreatedAt               time.Time       `bson:"createdAt" json:"createdAt"`
 	UpdatedAt               time.Time       `bson:"updatedAt" json:"updatedAt"`

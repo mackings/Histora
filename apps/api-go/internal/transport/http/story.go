@@ -59,6 +59,51 @@ func (h *StoryHandler) Update(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, story)
 }
 
+func (h *StoryHandler) ToggleReaction(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := appctx.AuthUserFromContext(r.Context())
+	if !ok {
+		response.Error(w, apperror.Unauthorized("Authentication required"))
+		return
+	}
+	storyID, err := bson.ObjectIDFromHex(chi.URLParam(r, "storyId"))
+	if err != nil {
+		response.Error(w, apperror.NotFound("Story not found"))
+		return
+	}
+	var input struct {
+		Action string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, apperror.BadRequest("Invalid JSON payload"))
+		return
+	}
+	result, err := h.service.ToggleReaction(r.Context(), storyID, authUser.ID, input.Action)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
+}
+
+func (h *StoryHandler) Share(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := appctx.AuthUserFromContext(r.Context())
+	if !ok {
+		response.Error(w, apperror.Unauthorized("Authentication required"))
+		return
+	}
+	storyID, err := bson.ObjectIDFromHex(chi.URLParam(r, "storyId"))
+	if err != nil {
+		response.Error(w, apperror.NotFound("Story not found"))
+		return
+	}
+	result, err := h.service.TrackShare(r.Context(), storyID, authUser.ID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
+}
+
 func NewStoryHandler(service *storyapp.Service) *StoryHandler {
 	return &StoryHandler{service: service}
 }

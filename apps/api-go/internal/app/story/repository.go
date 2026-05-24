@@ -94,6 +94,15 @@ func (r *Repository) FindPublicBySlug(ctx context.Context, slug string) (*storyd
 	return &story, err
 }
 
+func (r *Repository) FindPublicByID(ctx context.Context, id bson.ObjectID) (*storydomain.Story, error) {
+	var story storydomain.Story
+	err := r.stories.FindOne(ctx, bson.M{"_id": id, "status": "published"}).Decode(&story)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	return &story, err
+}
+
 func (r *Repository) FindSlug(ctx context.Context, slug string) (*storydomain.Story, error) {
 	var story storydomain.Story
 	err := r.stories.FindOne(ctx, bson.M{"slug": slug}).Decode(&story)
@@ -116,6 +125,57 @@ func (r *Repository) Replace(ctx context.Context, story storydomain.Story) (*sto
 	story.UpdatedAt = time.Now()
 	_, err := r.stories.ReplaceOne(ctx, bson.M{"_id": story.ID}, story)
 	return &story, err
+}
+
+func (r *Repository) ToggleInteraction(ctx context.Context, storyID bson.ObjectID, userID bson.ObjectID, kind string) (bool, int64, int64, error) {
+	filter := bson.M{"storyId": storyID, "userId": userID, "kind": kind}
+	count, err := r.interactions.CountDocuments(ctx, filter)
+	if err != nil {
+		return false, 0, 0, err
+	}
+	active := false
+	if count > 0 {
+		_, err = r.interactions.DeleteOne(ctx, filter)
+	} else {
+		_, err = r.interactions.InsertOne(ctx, bson.M{
+			"storyId":   storyID,
+			"userId":    userID,
+			"kind":      kind,
+			"createdAt": time.Now(),
+			"updatedAt": time.Now(),
+		})
+		active = true
+	}
+	if err != nil {
+		return false, 0, 0, err
+	}
+	likes, err := r.interactions.CountDocuments(ctx, bson.M{"storyId": storyID, "kind": "like"})
+	if err != nil {
+		return false, 0, 0, err
+	}
+	bookmarks, err := r.interactions.CountDocuments(ctx, bson.M{"storyId": storyID, "kind": "bookmark"})
+	if err != nil {
+		return false, 0, 0, err
+	}
+	_, err = r.stories.UpdateOne(ctx, bson.M{"_id": storyID}, bson.M{"$set": bson.M{
+		"likesCount":     likes,
+		"bookmarksCount": bookmarks,
+		"reactionsCount": likes + bookmarks,
+		"updatedAt":      time.Now(),
+	}})
+	return active, likes, bookmarks, err
+}
+
+func (r *Repository) IncrementShares(ctx context.Context, storyID bson.ObjectID) (int64, error) {
+	_, err := r.stories.UpdateOne(ctx, bson.M{"_id": storyID}, bson.M{"$inc": bson.M{"sharesCount": 1}, "$set": bson.M{"updatedAt": time.Now()}})
+	if err != nil {
+		return 0, err
+	}
+	var story storydomain.Story
+	if err := r.stories.FindOne(ctx, bson.M{"_id": storyID}).Decode(&story); err != nil {
+		return 0, err
+	}
+	return story.SharesCount, nil
 }
 
 func (r *Repository) IncrementReadCount(ctx context.Context, storyID bson.ObjectID) {

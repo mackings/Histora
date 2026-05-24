@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -11,6 +13,41 @@ import (
 type CounterSyncJob struct {
 	TargetType string `json:"targetType"`
 	TargetID   string `json:"targetId"`
+}
+
+func (q *Queue) RunCounterWorker(ctx context.Context, handler func(context.Context, CounterSyncJob) error) {
+	if q == nil || q.redis == nil || handler == nil {
+		return
+	}
+	go func() {
+		for ctx.Err() == nil {
+			streams, err := q.redis.XRead(ctx, &redis.XReadArgs{
+				Streams: []string{"histora:jobs:counter-sync", "$"},
+				Count:   1,
+				Block:   5 * time.Second,
+			}).Result()
+			if err != nil {
+				if errors.Is(err, redis.Nil) || ctx.Err() != nil {
+					continue
+				}
+				slog.Warn("counter worker read failed", "error", err)
+				continue
+			}
+			for _, stream := range streams {
+				for _, message := range stream.Messages {
+					raw, _ := message.Values["payload"].(string)
+					var job CounterSyncJob
+					if err := json.Unmarshal([]byte(raw), &job); err != nil {
+						slog.Warn("counter worker invalid payload", "error", err)
+						continue
+					}
+					if err := handler(ctx, job); err != nil {
+						slog.Warn("counter worker job failed", "error", err, "targetType", job.TargetType, "targetId", job.TargetID)
+					}
+				}
+			}
+		}
+	}()
 }
 
 type Queue struct {
