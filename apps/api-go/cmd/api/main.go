@@ -62,11 +62,8 @@ func main() {
 			slog.Error("failed to close redis", "error", err)
 		}
 	}()
-	jobs.NewQueue(redisClients.Command).RunCounterWorker(ctx, func(context.Context, jobs.CounterSyncJob) error {
-		// Counter recalculation is intentionally idempotent; current ported routes update
-		// counters inline and enqueueing remains available for deeper reconciliation.
-		return nil
-	})
+	counterReconciler := jobs.NewCounterReconciler(mongoStore.DB)
+	jobs.NewQueue(redisClients.Command).RunCounterWorker(ctx, counterReconciler.Reconcile)
 
 	authService := authapp.NewService(cfg, authapp.NewRepository(mongoStore.DB))
 	router := httptransport.NewRouter(httptransport.Deps{
@@ -79,7 +76,8 @@ func main() {
 		ProfileService:       profileapp.NewService(cfg, mongoStore.DB),
 		AnonymousService:     anonymousapp.NewService(cfg, mongoStore.DB),
 		TranscriptionService: transcriptionapp.NewService(cfg),
-		EventsHandler:        realtime.NewHub(cfg, authService),
+		EventsHandler:        realtime.NewHub(cfg, authService, redisClients.Command, redisClients.Subscribe),
+		TranscriptionRelay:   realtime.NewTranscriptionRelay(cfg, authService),
 		Health: health.Service{
 			Mongo: mongoStore.Client,
 			Redis: redisClients.Command,

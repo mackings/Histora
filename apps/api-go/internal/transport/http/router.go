@@ -31,6 +31,7 @@ type Deps struct {
 	AnonymousService     *anonymousapp.Service
 	TranscriptionService *transcriptionapp.Service
 	EventsHandler        http.Handler
+	TranscriptionRelay   http.Handler
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -57,6 +58,9 @@ func NewRouter(deps Deps) http.Handler {
 	})
 	if deps.EventsHandler != nil {
 		r.Handle("/ws/events", deps.EventsHandler)
+	}
+	if deps.TranscriptionRelay != nil {
+		r.Handle("/ws/transcription", deps.TranscriptionRelay)
 	}
 
 	authHandler := NewAuthHandler(deps.Config, deps.AuthService)

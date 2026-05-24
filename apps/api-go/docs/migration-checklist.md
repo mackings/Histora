@@ -12,12 +12,12 @@ The Node API remains the production source of truth until every item below has r
 - [x] Route map matching current `/api/*` surface.
 - [ ] Redis rate limiting.
 - [ ] Redis cache helpers.
-- [ ] Redis pub/sub app events.
-- [x] WebSocket `/ws/events` scaffold.
-- [ ] WebSocket `/ws/transcriptions`.
+- [x] Redis pub/sub app events.
+- [x] WebSocket `/ws/events`.
+- [x] WebSocket `/ws/transcription`.
 - [ ] Queue worker replacement or deliberate BullMQ bridge.
   - [x] Redis Streams counter-worker scaffold.
-  - [ ] Counter reconciliation logic.
+  - [x] Counter reconciliation logic.
 - [ ] Structured request IDs through logs and responses.
 
 ## Feature Parity

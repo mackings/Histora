@@ -13,6 +13,7 @@ import (
 type CounterSyncJob struct {
 	TargetType string `json:"targetType"`
 	TargetID   string `json:"targetId"`
+	StatusID   string `json:"statusId"`
 }
 
 func (q *Queue) RunCounterWorker(ctx context.Context, handler func(context.Context, CounterSyncJob) error) {
@@ -39,11 +40,17 @@ func (q *Queue) RunCounterWorker(ctx context.Context, handler func(context.Conte
 					var job CounterSyncJob
 					if err := json.Unmarshal([]byte(raw), &job); err != nil {
 						slog.Warn("counter worker invalid payload", "error", err)
+						_ = q.redis.XDel(ctx, stream.Stream, message.ID).Err()
 						continue
+					}
+					if job.TargetID == "" {
+						job.TargetID = job.StatusID
 					}
 					if err := handler(ctx, job); err != nil {
 						slog.Warn("counter worker job failed", "error", err, "targetType", job.TargetType, "targetId", job.TargetID)
+						continue
 					}
+					_ = q.redis.XDel(ctx, stream.Stream, message.ID).Err()
 				}
 			}
 		}
