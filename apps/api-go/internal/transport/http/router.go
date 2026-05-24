@@ -89,9 +89,10 @@ func NewRouter(deps Deps) http.Handler {
 			authRoutes.Post("/auth/reset-password", authHandler.ResetPassword)
 			authRoutes.Post("/auth/verify-email", authHandler.VerifyEmail)
 			authRoutes.Post("/auth/resend-verification", authHandler.ResendVerification)
+			authRoutes.With(requireAuth).Post("/auth/ws-ticket", authHandler.WebSocketTicket)
 		})
-		api.Post("/auth/verify-device", notImplemented("auth/verify-device"))
-		api.Post("/auth/resend-device-verification", notImplemented("auth/resend-device-verification"))
+		api.Post("/auth/verify-device", authHandler.VerifyDevice)
+		api.Post("/auth/resend-device-verification", authHandler.ResendDeviceVerification)
 
 		if deps.StoryService != nil {
 			api.With(optionalAuth).Get("/stories/feed", storyHandler.Feed)

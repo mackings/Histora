@@ -51,6 +51,34 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	h.writeAuthPayload(w, result)
 }
 
+func (h *AuthHandler) VerifyDevice(w http.ResponseWriter, r *http.Request) {
+	var input authapp.VerifyDeviceInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, apperror.BadRequest("Invalid JSON payload"))
+		return
+	}
+	result, err := h.service.VerifyDevice(r.Context(), input, requestContext(r))
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	h.writeAuthPayload(w, result)
+}
+
+func (h *AuthHandler) ResendDeviceVerification(w http.ResponseWriter, r *http.Request) {
+	var input authapp.ResendDeviceVerificationInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, apperror.BadRequest("Invalid JSON payload"))
+		return
+	}
+	result, err := h.service.ResendDeviceVerification(r.Context(), input, requestContext(r))
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
+}
+
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	authUser, ok := appctx.AuthUserFromContext(r.Context())
 	if !ok {
@@ -79,6 +107,27 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	_ = h.service.Logout(r.Context(), refreshTokenFromRequest(r, h.cfg.RefreshCookieName))
 	http.SetCookie(w, h.expiredRefreshCookie())
 	response.JSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (h *AuthHandler) WebSocketTicket(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := appctx.AuthUserFromContext(r.Context())
+	if !ok || authUser.SessionID == "" {
+		response.Error(w, apperror.Unauthorized("Authentication required"))
+		return
+	}
+	var input struct {
+		Scope string `json:"scope"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, apperror.BadRequest("Invalid JSON payload"))
+		return
+	}
+	ticket, err := h.service.IssueWebSocketTicket(authUser.ID, authUser.SessionID, input.Scope)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, ticket)
 }
 
 func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {

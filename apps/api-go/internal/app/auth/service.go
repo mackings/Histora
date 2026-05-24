@@ -4,9 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"net"
+	"net/smtp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +49,11 @@ type AuthPayload struct {
 	User         AuthUserJSON `json:"user"`
 }
 
+type WebSocketTicket struct {
+	Ticket    string `json:"ticket"`
+	ExpiresIn int    `json:"expiresIn"`
+}
+
 type AuthUserJSON struct {
 	ID               string `json:"id"`
 	FullName         string `json:"fullName"`
@@ -65,6 +75,20 @@ type RegisterInput struct {
 type LoginInput struct {
 	Email      string `json:"email"`
 	Password   string `json:"password"`
+	DeviceID   string `json:"deviceId"`
+	DeviceName string `json:"deviceName"`
+}
+
+type VerifyDeviceInput struct {
+	ChallengeID string `json:"challengeId"`
+	Email       string `json:"email"`
+	OTP         string `json:"otp"`
+	DeviceID    string `json:"deviceId"`
+	DeviceName  string `json:"deviceName"`
+}
+
+type ResendDeviceVerificationInput struct {
+	Email      string `json:"email"`
 	DeviceID   string `json:"deviceId"`
 	DeviceName string `json:"deviceName"`
 }
@@ -151,19 +175,116 @@ func (s *Service) Login(ctx context.Context, input LoginInput, requestCtx Reques
 		return nil, err
 	}
 	if trusted == nil {
-		// Keep first Go migration pass usable for existing accounts while still producing
-		// the same error shape when a device id is supplied but not approved.
 		if input.DeviceID != "" {
+			challenge, _, err := s.issueDeviceVerificationChallenge(ctx, *foundUser, DeviceContext{DeviceID: input.DeviceID, DeviceName: input.DeviceName}, requestCtx)
+			if err != nil {
+				return nil, err
+			}
 			return nil, apperror.Error{
 				Status:  403,
 				Message: "This device must be approved before sign in.",
 				Code:    "DEVICE_VERIFICATION_REQUIRED",
-				Details: map[string]any{"email": foundUser.Email, "deviceName": input.DeviceName},
+				Details: map[string]any{"challengeId": challenge.ID.Hex(), "email": foundUser.Email, "deviceName": input.DeviceName},
 			}
 		}
 	}
 
 	return s.createSessionPayload(ctx, foundUser, requestCtx, DeviceContext{DeviceID: input.DeviceID, DeviceName: input.DeviceName})
+}
+
+func (s *Service) VerifyDevice(ctx context.Context, input VerifyDeviceInput, requestCtx RequestContext) (*AuthPayload, error) {
+	email := strings.ToLower(strings.TrimSpace(input.Email))
+	deviceID := strings.TrimSpace(input.DeviceID)
+	if email == "" || deviceID == "" {
+		return nil, apperror.BadRequest("Device verification payload is incomplete.")
+	}
+	challengeID, err := bson.ObjectIDFromHex(strings.TrimSpace(input.ChallengeID))
+	if err != nil {
+		return nil, apperror.Error{Status: 400, Message: "Device verification code is invalid or expired.", Code: "INVALID_DEVICE_VERIFICATION_CODE"}
+	}
+	deviceKeyHash := hashString(deviceID)
+	challenge, err := s.repo.FindActiveDeviceChallenge(ctx, challengeID, email, deviceKeyHash)
+	if err != nil {
+		return nil, err
+	}
+	if challenge == nil {
+		return nil, apperror.Error{Status: 400, Message: "Device verification code is invalid or expired.", Code: "INVALID_DEVICE_VERIFICATION_CODE"}
+	}
+	if challenge.FailedAttempts >= maxOTPAttempts {
+		_ = s.repo.DeleteActiveDeviceChallenges(ctx, challenge.UserID, challenge.DeviceKeyHash)
+		return nil, apperror.Error{Status: 429, Message: "Too many incorrect device codes. Request a new device approval code.", Code: "DEVICE_VERIFICATION_ATTEMPTS_EXCEEDED"}
+	}
+	if challenge.OTPHash != hashString(strings.TrimSpace(input.OTP)) {
+		nextAttempts := challenge.FailedAttempts + 1
+		_ = s.repo.UpdateDeviceChallengeAttempt(ctx, challenge.ID, nextAttempts)
+		if nextAttempts >= maxOTPAttempts {
+			return nil, apperror.Error{Status: 429, Message: "Too many incorrect device codes. Request a new device approval code.", Code: "DEVICE_VERIFICATION_ATTEMPTS_EXCEEDED"}
+		}
+		return nil, apperror.Error{Status: 400, Message: "Device verification code is invalid or expired.", Code: "INVALID_DEVICE_VERIFICATION_CODE"}
+	}
+	foundUser, err := s.repo.FindUserByID(ctx, challenge.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if foundUser == nil || !foundUser.EmailVerified {
+		return nil, apperror.Error{Status: 403, Message: "Verify your email before approving a device.", Code: "EMAIL_NOT_VERIFIED"}
+	}
+	deviceName := strings.TrimSpace(input.DeviceName)
+	if deviceName == "" {
+		deviceName = challenge.DeviceLabel
+	}
+	if deviceName == "" {
+		deviceName = "Trusted device"
+	}
+	if err := s.repo.UpsertTrustedDevice(ctx, authdomain.TrustedDevice{
+		UserID:        foundUser.ID,
+		DeviceKeyHash: challenge.DeviceKeyHash,
+		Label:         deviceName,
+		UserAgent:     fallbackString(requestCtx.UserAgent, challenge.UserAgent),
+		LastIPAddress: fallbackString(requestCtx.IPAddress, challenge.IPAddress),
+	}); err != nil {
+		return nil, err
+	}
+	if err := s.repo.ConsumeDeviceChallenge(ctx, challenge.ID); err != nil {
+		return nil, err
+	}
+	_ = s.repo.DeleteActiveDeviceChallenges(ctx, foundUser.ID, challenge.DeviceKeyHash)
+	return s.createSessionPayload(ctx, foundUser, requestCtx, DeviceContext{DeviceID: deviceID, DeviceName: deviceName})
+}
+
+func (s *Service) ResendDeviceVerification(ctx context.Context, input ResendDeviceVerificationInput, requestCtx RequestContext) (map[string]any, error) {
+	email := strings.ToLower(strings.TrimSpace(input.Email))
+	deviceID := strings.TrimSpace(input.DeviceID)
+	if email == "" || deviceID == "" {
+		return nil, apperror.BadRequest("Device verification payload is incomplete.")
+	}
+	foundUser, err := s.repo.FindUserByEmail(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	if foundUser == nil {
+		return map[string]any{"ok": true}, nil
+	}
+	if !foundUser.EmailVerified {
+		return nil, apperror.Error{Status: 403, Message: "Verify your email before approving a device.", Code: "EMAIL_NOT_VERIFIED"}
+	}
+	deviceKeyHash := hashString(deviceID)
+	trusted, err := s.repo.FindTrustedDevice(ctx, foundUser.ID, deviceKeyHash)
+	if err != nil {
+		return nil, err
+	}
+	if trusted != nil {
+		return map[string]any{"ok": true, "alreadyTrusted": true}, nil
+	}
+	challenge, otp, err := s.issueDeviceVerificationChallenge(ctx, *foundUser, DeviceContext{DeviceID: deviceID, DeviceName: input.DeviceName}, requestCtx)
+	if err != nil {
+		return nil, err
+	}
+	response := map[string]any{"ok": true, "challengeId": challenge.ID.Hex(), "email": foundUser.Email, "deviceName": input.DeviceName}
+	if s.cfg.NodeEnv != "production" {
+		response["otp"] = otp
+	}
+	return response, nil
 }
 
 func (s *Service) Me(ctx context.Context, userID bson.ObjectID) (AuthUserJSON, error) {
@@ -455,6 +576,35 @@ func (s *Service) VerifyAccessToken(tokenValue string) (bson.ObjectID, string, e
 	return userID, claims.SessionID, nil
 }
 
+func (s *Service) IssueWebSocketTicket(userID bson.ObjectID, sessionID, scope string) (WebSocketTicket, error) {
+	scope = normalizeWebSocketScope(scope)
+	if scope == "" || sessionID == "" {
+		return WebSocketTicket{}, apperror.BadRequest("Invalid WebSocket ticket request")
+	}
+	const ttl = 60
+	ticket, err := s.buildToken(userID.Hex(), sessionID, "ws:"+scope, []byte(s.cfg.JWTSecret), time.Now().Add(ttl*time.Second))
+	if err != nil {
+		return WebSocketTicket{}, err
+	}
+	return WebSocketTicket{Ticket: ticket, ExpiresIn: ttl}, nil
+}
+
+func (s *Service) VerifyWebSocketTicket(tokenValue, scope string) (bson.ObjectID, string, error) {
+	expectedType := "ws:" + normalizeWebSocketScope(scope)
+	if expectedType == "ws:" {
+		return bson.NilObjectID, "", fmt.Errorf("invalid websocket scope")
+	}
+	claims, err := s.verifyTypedToken(tokenValue, s.cfg.JWTSecret, expectedType)
+	if err != nil {
+		return bson.NilObjectID, "", err
+	}
+	userID, err := bson.ObjectIDFromHex(claims.Subject)
+	if err != nil {
+		return bson.NilObjectID, "", err
+	}
+	return userID, claims.SessionID, nil
+}
+
 func (s *Service) verifyToken(tokenValue string, refresh bool) (*tokenClaims, error) {
 	secret := s.cfg.JWTSecret
 	expectedType := "access"
@@ -464,20 +614,42 @@ func (s *Service) verifyToken(tokenValue string, refresh bool) (*tokenClaims, er
 			secret = s.cfg.JWTRefreshSecret
 		}
 	}
+	return s.verifyTypedToken(tokenValue, secret, expectedType)
+}
+
+func (s *Service) verifyTypedToken(tokenValue, secret, expectedType string) (*tokenClaims, error) {
 	claims := &tokenClaims{}
-	_, err := jwt.ParseWithClaims(tokenValue, claims, func(token *jwt.Token) (any, error) {
+	token, err := jwt.ParseWithClaims(tokenValue, claims, func(token *jwt.Token) (any, error) {
 		if token.Method != jwt.SigningMethodHS256 {
 			return nil, fmt.Errorf("unexpected signing method")
 		}
 		return []byte(secret), nil
 	})
-	if err != nil || claims.Type != expectedType {
+	if err != nil || token == nil || !token.Valid || claims.Type != expectedType {
 		return nil, fmt.Errorf("invalid token")
 	}
 	return claims, nil
 }
 
+func normalizeWebSocketScope(scope string) string {
+	switch strings.TrimSpace(scope) {
+	case "events":
+		return "events"
+	case "transcription":
+		return "transcription"
+	default:
+		return ""
+	}
+}
+
 func (s *Service) issueEmailVerificationOTP(ctx context.Context, userID bson.ObjectID, email string) (string, error) {
+	recent, err := s.repo.FindRecentActiveEmailToken(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if recent != nil && time.Since(recent.CreatedAt) < time.Minute {
+		return "", apperror.Error{Status: 429, Message: "Please wait a minute before requesting another code.", Code: "VERIFICATION_RESEND_COOLDOWN"}
+	}
 	_ = s.repo.DeleteActiveEmailTokens(ctx, userID)
 	otp, err := randomNumericCode(5)
 	if err != nil {
@@ -489,7 +661,54 @@ func (s *Service) issueEmailVerificationOTP(ctx context.Context, userID bson.Obj
 		CodeHash:  hashString(otp),
 		ExpiresAt: time.Now().Add(10 * time.Minute),
 	})
-	return otp, err
+	if err != nil {
+		return "", err
+	}
+	if err := s.sendVerificationEmail(email, otp); err != nil {
+		return "", err
+	}
+	return otp, nil
+}
+
+func (s *Service) issueDeviceVerificationChallenge(ctx context.Context, u user.User, device DeviceContext, requestCtx RequestContext) (*authdomain.DeviceVerificationChallenge, string, error) {
+	deviceID := strings.TrimSpace(device.DeviceID)
+	deviceName := strings.TrimSpace(device.DeviceName)
+	if deviceID == "" {
+		return nil, "", apperror.BadRequest("Device id is required.")
+	}
+	if deviceName == "" {
+		deviceName = "New device"
+	}
+	deviceKeyHash := hashString(deviceID)
+	recent, err := s.repo.FindRecentActiveDeviceChallenge(ctx, u.ID, deviceKeyHash)
+	if err != nil {
+		return nil, "", err
+	}
+	if recent != nil && time.Since(recent.CreatedAt) < time.Minute {
+		return nil, "", apperror.Error{Status: 429, Message: "A device approval code was already sent. Check your email or wait a minute.", Code: "DEVICE_VERIFICATION_COOLDOWN"}
+	}
+	_ = s.repo.DeleteActiveDeviceChallenges(ctx, u.ID, deviceKeyHash)
+	otp, err := randomNumericCode(5)
+	if err != nil {
+		return nil, "", err
+	}
+	challenge, err := s.repo.CreateDeviceChallenge(ctx, authdomain.DeviceVerificationChallenge{
+		UserID:        u.ID,
+		Email:         u.Email,
+		DeviceKeyHash: deviceKeyHash,
+		DeviceLabel:   deviceName,
+		UserAgent:     requestCtx.UserAgent,
+		IPAddress:     requestCtx.IPAddress,
+		OTPHash:       hashString(otp),
+		ExpiresAt:     time.Now().Add(10 * time.Minute),
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	if err := s.sendDeviceVerificationEmail(u.Email, otp, deviceName); err != nil {
+		return nil, "", err
+	}
+	return challenge, otp, nil
 }
 
 func hashString(value string) string {
@@ -515,6 +734,107 @@ func randomHexCode(bytesLen int) (string, error) {
 		return "", err
 	}
 	return strings.ToUpper(hex.EncodeToString(buffer)), nil
+}
+
+func (s *Service) sendVerificationEmail(email, otp string) error {
+	return s.sendEmail(email, "Histora verification code", "Your Histora verification code is "+otp+". It expires in 10 minutes.", []string{
+		"Verify your email",
+		"Use this 5-digit code to verify your Histora account.",
+		otp,
+		"This code expires in 10 minutes.",
+	})
+}
+
+func (s *Service) sendDeviceVerificationEmail(email, otp, deviceLabel string) error {
+	return s.sendEmail(email, "Histora device approval code", "A sign-in attempt from "+deviceLabel+" needs approval. Your Histora device code is "+otp+". It expires in 10 minutes.", []string{
+		"Approve this device",
+		"A new device is trying to sign in to your archive.",
+		"Device: " + deviceLabel,
+		"Code: " + otp,
+		"This code expires in 10 minutes. If this was not you, ignore this email.",
+	})
+}
+
+func (s *Service) sendEmail(to, subject, text string, lines []string) error {
+	if s.cfg.SMTPUser == "" || s.cfg.SMTPPassword == "" {
+		if s.cfg.NodeEnv == "production" {
+			return apperror.Error{Status: 500, Message: "SMTP is not configured on the server.", Code: "SMTP_NOT_CONFIGURED"}
+		}
+		return nil
+	}
+	host := strings.TrimSpace(s.cfg.SMTPHost)
+	if host == "" {
+		host = "smtp.gmail.com"
+	}
+	port := s.cfg.SMTPPort
+	if port == 0 {
+		port = 465
+	}
+	fromName := fallbackString(s.cfg.SMTPFromName, "Histora")
+	from := fmt.Sprintf("%s <%s>", fromName, s.cfg.SMTPUser)
+	htmlLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		htmlLines = append(htmlLines, "<p>"+htmlEscape(line)+"</p>")
+	}
+	message := strings.Join([]string{
+		"From: " + from,
+		"To: " + to,
+		"Subject: " + subject,
+		"MIME-Version: 1.0",
+		`Content-Type: multipart/alternative; boundary="histora-boundary"`,
+		"",
+		"--histora-boundary",
+		"Content-Type: text/plain; charset=UTF-8",
+		"Content-Transfer-Encoding: base64",
+		"",
+		base64.StdEncoding.EncodeToString([]byte(text)),
+		"--histora-boundary",
+		"Content-Type: text/html; charset=UTF-8",
+		"Content-Transfer-Encoding: base64",
+		"",
+		base64.StdEncoding.EncodeToString([]byte(`<div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; color: #1f2937;">` + strings.Join(htmlLines, "") + "</div>")),
+		"--histora-boundary--",
+		"",
+	}, "\r\n")
+
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	auth := smtp.PlainAuth("", s.cfg.SMTPUser, s.cfg.SMTPPassword, host)
+	if port == 465 {
+		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+		if err != nil {
+			return err
+		}
+		defer conn.Close()
+		client, err := smtp.NewClient(conn, host)
+		if err != nil {
+			return err
+		}
+		defer client.Quit()
+		if err := client.Auth(auth); err != nil {
+			return err
+		}
+		if err := client.Mail(s.cfg.SMTPUser); err != nil {
+			return err
+		}
+		if err := client.Rcpt(to); err != nil {
+			return err
+		}
+		writer, err := client.Data()
+		if err != nil {
+			return err
+		}
+		if _, err := writer.Write([]byte(message)); err != nil {
+			_ = writer.Close()
+			return err
+		}
+		return writer.Close()
+	}
+	return smtp.SendMail(addr, auth, s.cfg.SMTPUser, []string{to}, []byte(message))
+}
+
+func htmlEscape(value string) string {
+	replacer := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;")
+	return replacer.Replace(value)
 }
 
 func userJSON(u user.User) AuthUserJSON {

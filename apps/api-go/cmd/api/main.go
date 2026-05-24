@@ -76,7 +76,7 @@ func main() {
 		ProfileService:       profileapp.NewService(cfg, mongoStore.DB),
 		AnonymousService:     anonymousapp.NewService(cfg, mongoStore.DB),
 		TranscriptionService: transcriptionapp.NewService(cfg),
-		EventsHandler:        realtime.NewHub(cfg, authService, redisClients.Command, redisClients.Subscribe),
+		EventsHandler:        realtime.NewHub(cfg, authService, redisClients.Command, redisClients.Subscribe, mongoStore.DB),
 		TranscriptionRelay:   realtime.NewTranscriptionRelay(cfg, authService),
 		Health: health.Service{
 			Mongo: mongoStore.Client,

@@ -24,7 +24,7 @@ The Node API remains the production source of truth until every item below has r
 
 - [x] Auth register/login/refresh/logout.
 - [x] Email verification and password reset.
-- [ ] Trusted device verification.
+- [x] Trusted device verification.
 - [x] Profile dashboard, sessions, devices, push subscriptions.
 - [x] Follow system.
 - [x] Collaboration invites.
@@ -47,6 +47,6 @@ The Node API remains the production source of truth until every item below has r
 - [x] Go tests pass with unit and handler coverage.
 - [ ] Contract smoke tests pass against the web app's expected responses.
 - [ ] Seed/e2e scripts pass against Go API.
-- [ ] Production env variables verified.
+- [x] Production env variables verified.
 - [ ] Render deploy health checks pass.
 - [ ] Rollback plan documented.

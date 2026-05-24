@@ -139,6 +139,19 @@ func (r *Repository) CreateEmailToken(ctx context.Context, token authdomain.Emai
 	return &token, err
 }
 
+func (r *Repository) FindRecentActiveEmailToken(ctx context.Context, userID bson.ObjectID) (*authdomain.EmailVerificationToken, error) {
+	var out authdomain.EmailVerificationToken
+	err := r.emailVerificationTokens.FindOne(ctx, bson.M{
+		"userId":     userID,
+		"consumedAt": nil,
+		"expiresAt":  bson.M{"$gt": time.Now()},
+	}, options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}})).Decode(&out)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	return &out, err
+}
+
 func (r *Repository) FindActiveEmailToken(ctx context.Context, userID bson.ObjectID, email string) (*authdomain.EmailVerificationToken, error) {
 	var out authdomain.EmailVerificationToken
 	err := r.emailVerificationTokens.FindOne(ctx, bson.M{
@@ -193,6 +206,64 @@ func (r *Repository) UpsertTrustedDevice(ctx context.Context, device authdomain.
 		}, "$setOnInsert": bson.M{"createdAt": now}},
 		options.UpdateOne().SetUpsert(true),
 	)
+	return err
+}
+
+func (r *Repository) FindRecentActiveDeviceChallenge(ctx context.Context, userID bson.ObjectID, deviceKeyHash string) (*authdomain.DeviceVerificationChallenge, error) {
+	var out authdomain.DeviceVerificationChallenge
+	err := r.deviceVerificationRequests.FindOne(ctx, bson.M{
+		"userId":        userID,
+		"deviceKeyHash": deviceKeyHash,
+		"consumedAt":    nil,
+		"expiresAt":     bson.M{"$gt": time.Now()},
+	}, options.FindOne().SetSort(bson.D{{Key: "createdAt", Value: -1}})).Decode(&out)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	return &out, err
+}
+
+func (r *Repository) DeleteActiveDeviceChallenges(ctx context.Context, userID bson.ObjectID, deviceKeyHash string) error {
+	_, err := r.deviceVerificationRequests.DeleteMany(ctx, bson.M{"userId": userID, "deviceKeyHash": deviceKeyHash, "consumedAt": nil})
+	return err
+}
+
+func (r *Repository) CreateDeviceChallenge(ctx context.Context, challenge authdomain.DeviceVerificationChallenge) (*authdomain.DeviceVerificationChallenge, error) {
+	now := time.Now()
+	challenge.ID = bson.NewObjectID()
+	challenge.CreatedAt = now
+	challenge.UpdatedAt = now
+	_, err := r.deviceVerificationRequests.InsertOne(ctx, challenge)
+	return &challenge, err
+}
+
+func (r *Repository) FindActiveDeviceChallenge(ctx context.Context, id bson.ObjectID, email, deviceKeyHash string) (*authdomain.DeviceVerificationChallenge, error) {
+	var out authdomain.DeviceVerificationChallenge
+	err := r.deviceVerificationRequests.FindOne(ctx, bson.M{
+		"_id":           id,
+		"email":         email,
+		"deviceKeyHash": deviceKeyHash,
+		"consumedAt":    nil,
+		"expiresAt":     bson.M{"$gt": time.Now()},
+	}).Decode(&out)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	return &out, err
+}
+
+func (r *Repository) UpdateDeviceChallengeAttempt(ctx context.Context, id bson.ObjectID, failedAttempts int) error {
+	_, err := r.deviceVerificationRequests.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{
+		"failedAttempts": failedAttempts,
+		"lastAttemptAt":  time.Now(),
+		"updatedAt":      time.Now(),
+	}})
+	return err
+}
+
+func (r *Repository) ConsumeDeviceChallenge(ctx context.Context, id bson.ObjectID) error {
+	now := time.Now()
+	_, err := r.deviceVerificationRequests.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$set": bson.M{"consumedAt": now, "lastAttemptAt": now, "updatedAt": now}})
 	return err
 }
 

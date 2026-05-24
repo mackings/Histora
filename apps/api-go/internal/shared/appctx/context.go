@@ -9,9 +9,10 @@ import (
 type authUserKey struct{}
 
 type AuthUser struct {
-	ID       bson.ObjectID
-	Email    string
-	Username string
+	ID        bson.ObjectID
+	SessionID string
+	Email     string
+	Username  string
 }
 
 func WithAuthUser(ctx context.Context, user AuthUser) context.Context {

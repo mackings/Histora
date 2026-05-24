@@ -296,10 +296,21 @@ export const setLatestAccessToken = (token: string | null) => {
   latestAccessToken = token;
 };
 
-export const getEventsSocketUrl = (accessToken: string) => {
+type WebSocketTicketScope = "events" | "transcription";
+
+export async function issueWebSocketTicket(scope: WebSocketTicketScope, accessToken?: string | null) {
+  const result = await apiRequest<{ ticket: string; expiresIn: number }>("/auth/ws-ticket", {
+    method: "POST",
+    accessToken: accessToken ?? latestAccessToken,
+    body: { scope }
+  });
+  return result.ticket;
+}
+
+export const getEventsSocketUrl = (ticket: string) => {
   const baseUrl = new URL(apiBaseUrl);
   const protocol = baseUrl.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${baseUrl.host}/ws/events?token=${encodeURIComponent(accessToken)}`;
+  return `${protocol}//${baseUrl.host}/ws/events?ticket=${encodeURIComponent(ticket)}`;
 };
 
 export function createAppEventsConnection(
@@ -353,39 +364,55 @@ export function createAppEventsConnection(
       return;
     }
 
-    socket = new WebSocket(getEventsSocketUrl(accessToken));
+    void issueWebSocketTicket("events", accessToken)
+      .then((ticket) => {
+        if (closedManually) {
+          return;
+        }
+        socket = new WebSocket(getEventsSocketUrl(ticket));
 
-    socket.addEventListener("open", () => {
-      handlers?.onOpen?.();
-      flushSubscriptions();
-      flushPendingMessages();
-    });
+        socket.addEventListener("open", () => {
+          handlers?.onOpen?.();
+          flushSubscriptions();
+          flushPendingMessages();
+        });
 
-    socket.addEventListener("message", (event) => {
-      try {
-        handlers?.onMessage?.(JSON.parse(event.data as string));
-      } catch {
-        return;
-      }
-    });
+        socket.addEventListener("message", (event) => {
+          try {
+            handlers?.onMessage?.(JSON.parse(event.data as string));
+          } catch {
+            return;
+          }
+        });
 
-    socket.addEventListener("error", () => {
-      handlers?.onError?.();
-      socket?.close();
-    });
+        socket.addEventListener("error", () => {
+          handlers?.onError?.();
+          socket?.close();
+        });
 
-    socket.addEventListener("close", () => {
-      handlers?.onClose?.();
-      socket = null;
-      if (closedManually || typeof window === "undefined") {
-        return;
-      }
+        socket.addEventListener("close", () => {
+          handlers?.onClose?.();
+          socket = null;
+          if (closedManually || typeof window === "undefined") {
+            return;
+          }
 
-      cleanupReconnectTimer();
-      reconnectTimer = window.setTimeout(() => {
-        connect();
-      }, 1000);
-    });
+          cleanupReconnectTimer();
+          reconnectTimer = window.setTimeout(() => {
+            connect();
+          }, 1000);
+        });
+      })
+      .catch(() => {
+        handlers?.onError?.();
+        if (closedManually || typeof window === "undefined") {
+          return;
+        }
+        cleanupReconnectTimer();
+        reconnectTimer = window.setTimeout(() => {
+          connect();
+        }, 1000);
+      });
   };
 
   connect();

@@ -18,12 +18,12 @@ func RequireAuth(authService *authapp.Service) func(http.Handler) http.Handler {
 				response.Error(w, apperror.Unauthorized("Authentication required"))
 				return
 			}
-			userID, _, err := authService.VerifyAccessToken(tokenValue)
+			userID, sessionID, err := authService.VerifyAccessToken(tokenValue)
 			if err != nil {
 				response.Error(w, apperror.Unauthorized("Invalid or expired access token"))
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(appctx.WithAuthUser(r.Context(), appctx.AuthUser{ID: userID})))
+			next.ServeHTTP(w, r.WithContext(appctx.WithAuthUser(r.Context(), appctx.AuthUser{ID: userID, SessionID: sessionID})))
 		})
 	}
 }
@@ -36,12 +36,12 @@ func OptionalAuth(authService *authapp.Service) func(http.Handler) http.Handler 
 				next.ServeHTTP(w, r)
 				return
 			}
-			userID, _, err := authService.VerifyAccessToken(tokenValue)
+			userID, sessionID, err := authService.VerifyAccessToken(tokenValue)
 			if err != nil {
 				next.ServeHTTP(w, r)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(appctx.WithAuthUser(r.Context(), appctx.AuthUser{ID: userID})))
+			next.ServeHTTP(w, r.WithContext(appctx.WithAuthUser(r.Context(), appctx.AuthUser{ID: userID, SessionID: sessionID})))
 		})
 	}
 }

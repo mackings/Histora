@@ -1,7 +1,15 @@
 import { Fragment, useEffect, useRef, useState, type ChangeEvent, type RefObject } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { type ApiStory, type ProfileDashboard, type SignedReadResponse, apiRequest, createAppEventsConnection, uploadMediaAsset } from "../../lib/api-client";
+import {
+  type ApiStory,
+  type ProfileDashboard,
+  type SignedReadResponse,
+  apiRequest,
+  createAppEventsConnection,
+  issueWebSocketTicket,
+  uploadMediaAsset
+} from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
 import { sanitizeStudioRichText } from "../../lib/safe-content";
 import type { FeedIconComponent, FeedSectionLabelComponent } from "../feed/ui-types";
@@ -2871,12 +2879,13 @@ export function StudioPage({
     return null;
   };
 
-  const getRelaySocketUrl = (language: string) => {
+  const getRelaySocketUrl = async (language: string) => {
     const apiUrl = new URL(apiBaseUrl);
     const protocol = apiUrl.protocol === "https:" ? "wss:" : "ws:";
     const relayUrl = new URL(`${protocol}//${apiUrl.host}/ws/transcription`);
+    const ticket = await issueWebSocketTicket("transcription", accessToken);
     relayUrl.searchParams.set("language", language);
-    relayUrl.searchParams.set("token", accessToken);
+    relayUrl.searchParams.set("ticket", ticket);
     return relayUrl;
   };
 
@@ -2938,7 +2947,7 @@ export function StudioPage({
 
         const sourceNode = audioContext.createMediaStreamSource(stream);
         const processorNode = audioContext.createScriptProcessor(4096, 1, 1);
-        const relaySocket = new WebSocket(getRelaySocketUrl(transcriptionLanguage));
+        const relaySocket = new WebSocket(await getRelaySocketUrl(transcriptionLanguage));
         relaySocket.binaryType = "arraybuffer";
 
         transcriptionStreamRef.current = stream;
