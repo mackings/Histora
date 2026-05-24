@@ -17,10 +17,10 @@ func RequestLogger(next http.Handler) http.Handler {
 		started := time.Now()
 		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
 		next.ServeHTTP(ww, r)
-		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/health" {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
 			slog.Info("request complete",
 				"method", r.Method,
-				"path", r.URL.RequestURI(),
+				"path", r.URL.Path,
 				"status", ww.Status(),
 				"duration_ms", time.Since(started).Milliseconds(),
 				"request_id", middleware.GetReqID(r.Context()),
@@ -57,7 +57,7 @@ func CORS(cfg config.Config) func(http.Handler) http.Handler {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 			}
 			if r.Method == http.MethodOptions {
