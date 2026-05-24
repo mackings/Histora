@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: histora-backend
+    name: histora-go-api
     runtime: go
     repo: https://github.com/mackings/Histora.git
     branch: main
