@@ -5,15 +5,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	authapp "github.com/mackings/histora/apps/api-go/internal/app/auth"
 	"github.com/mackings/histora/apps/api-go/internal/app/health"
+	storyapp "github.com/mackings/histora/apps/api-go/internal/app/story"
 	"github.com/mackings/histora/apps/api-go/internal/config"
 	"github.com/mackings/histora/apps/api-go/internal/shared/apperror"
 	"github.com/mackings/histora/apps/api-go/internal/shared/response"
 )
 
 type Deps struct {
-	Config config.Config
-	Health health.Service
+	Config       config.Config
+	Health       health.Service
+	AuthService  *authapp.Service
+	StoryService *storyapp.Service
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -39,24 +43,43 @@ func NewRouter(deps Deps) http.Handler {
 		response.JSON(w, httpStatus, status)
 	})
 
+	authHandler := NewAuthHandler(deps.Config, deps.AuthService)
+	storyHandler := NewStoryHandler(deps.StoryService)
+	requireAuth := RequireAuth(deps.AuthService)
+	optionalAuth := OptionalAuth(deps.AuthService)
+
 	r.Route("/api", func(api chi.Router) {
-		api.Get("/auth/me", notImplemented("auth/me"))
-		api.Post("/auth/register", notImplemented("auth/register"))
-		api.Post("/auth/login", notImplemented("auth/login"))
-		api.Post("/auth/refresh", notImplemented("auth/refresh"))
-		api.Post("/auth/logout", notImplemented("auth/logout"))
-		api.Post("/auth/forgot-password", notImplemented("auth/forgot-password"))
-		api.Post("/auth/reset-password", notImplemented("auth/reset-password"))
-		api.Post("/auth/verify-email", notImplemented("auth/verify-email"))
-		api.Post("/auth/resend-verification", notImplemented("auth/resend-verification"))
+		api.Group(func(authRoutes chi.Router) {
+			if deps.AuthService != nil {
+				authRoutes.With(requireAuth).Get("/auth/me", authHandler.Me)
+			} else {
+				authRoutes.Get("/auth/me", notImplemented("auth/me"))
+			}
+			authRoutes.Post("/auth/register", authHandler.Register)
+			authRoutes.Post("/auth/login", authHandler.Login)
+			authRoutes.Post("/auth/refresh", authHandler.Refresh)
+			authRoutes.Post("/auth/logout", authHandler.Logout)
+			authRoutes.Post("/auth/forgot-password", authHandler.ForgotPassword)
+			authRoutes.Post("/auth/reset-password", authHandler.ResetPassword)
+			authRoutes.Post("/auth/verify-email", authHandler.VerifyEmail)
+			authRoutes.Post("/auth/resend-verification", authHandler.ResendVerification)
+		})
 		api.Post("/auth/verify-device", notImplemented("auth/verify-device"))
 		api.Post("/auth/resend-device-verification", notImplemented("auth/resend-device-verification"))
 
-		api.Get("/stories/feed", notImplemented("stories/feed"))
-		api.Get("/stories/mine", notImplemented("stories/mine"))
-		api.Get("/stories/collaborative", notImplemented("stories/collaborative"))
-		api.Get("/stories/mine/{storyId}", notImplemented("stories/mine/:storyId"))
-		api.Get("/stories/public/{slug}", notImplemented("stories/public/:slug"))
+		if deps.StoryService != nil {
+			api.With(optionalAuth).Get("/stories/feed", storyHandler.Feed)
+			api.With(requireAuth).Get("/stories/mine", storyHandler.Mine)
+			api.With(requireAuth).Get("/stories/collaborative", storyHandler.Collaborative)
+			api.With(requireAuth).Get("/stories/mine/{storyId}", storyHandler.MineOne)
+			api.With(optionalAuth).Get("/stories/public/{slug}", storyHandler.PublicBySlug)
+		} else {
+			api.Get("/stories/feed", notImplemented("stories/feed"))
+			api.Get("/stories/mine", notImplemented("stories/mine"))
+			api.Get("/stories/collaborative", notImplemented("stories/collaborative"))
+			api.Get("/stories/mine/{storyId}", notImplemented("stories/mine/:storyId"))
+			api.Get("/stories/public/{slug}", notImplemented("stories/public/:slug"))
+		}
 		api.Post("/stories", notImplemented("stories/create"))
 		api.Patch("/stories/{storyId}", notImplemented("stories/update"))
 		api.Post("/stories/{storyId}/reactions", notImplemented("stories/reactions"))

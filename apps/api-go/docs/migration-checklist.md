@@ -20,13 +20,15 @@ The Node API remains the production source of truth until every item below has r
 
 ## Feature Parity
 
-- [ ] Auth register/login/refresh/logout.
-- [ ] Email verification and password reset.
+- [x] Auth register/login/refresh/logout.
+- [x] Email verification and password reset.
 - [ ] Trusted device verification.
 - [ ] Profile dashboard, sessions, devices, push subscriptions.
 - [ ] Follow system.
 - [ ] Collaboration invites.
 - [ ] Stories feed, mine, collaborative, public story, create/update.
+  - [x] Read paths: feed, mine, collaborative, mine by id, public by slug.
+  - [ ] Write paths: create/update, revision conflicts, encrypted writes, collaboration broadcasts.
 - [ ] Story reactions, bookmarks, shares, read tracking.
 - [ ] Studio collaboration realtime updates.
 - [ ] Comments create/list for status, story chapter, anonymous message.

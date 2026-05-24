@@ -9,7 +9,9 @@ import (
 	"syscall"
 	"time"
 
+	authapp "github.com/mackings/histora/apps/api-go/internal/app/auth"
 	"github.com/mackings/histora/apps/api-go/internal/app/health"
+	storyapp "github.com/mackings/histora/apps/api-go/internal/app/story"
 	"github.com/mackings/histora/apps/api-go/internal/config"
 	"github.com/mackings/histora/apps/api-go/internal/platform/httpserver"
 	mongoplatform "github.com/mackings/histora/apps/api-go/internal/platform/mongo"
@@ -55,7 +57,9 @@ func main() {
 	}()
 
 	router := httptransport.NewRouter(httptransport.Deps{
-		Config: cfg,
+		Config:       cfg,
+		AuthService:  authapp.NewService(cfg, authapp.NewRepository(mongoStore.DB)),
+		StoryService: storyapp.NewService(cfg, storyapp.NewRepository(mongoStore.DB)),
 		Health: health.Service{
 			Mongo: mongoStore.Client,
 			Redis: redisClients.Command,
