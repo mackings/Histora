@@ -46,14 +46,20 @@ func (r *Repository) Insert(ctx context.Context, status statusdomain.Status) (*s
 }
 
 func (r *Repository) Feed(ctx context.Context, userID *bson.ObjectID) ([]statusdomain.Status, error) {
-	filter := bson.M{"$or": bson.A{bson.M{"expiresAt": bson.M{"$gt": time.Now()}}, bson.M{"createdAt": bson.M{"$gt": time.Now().Add(-24 * time.Hour)}}}}
+	freshFilter := bson.M{
+		"$or": bson.A{
+			bson.M{"expiresAt": bson.M{"$gt": time.Now()}},
+			bson.M{"createdAt": bson.M{"$gt": time.Now().Add(-24 * time.Hour)}},
+		},
+	}
+	filter := freshFilter
 	if userID == nil {
 		filter["visibility"] = "public"
 	} else {
-		filter["$and"] = bson.A{
-			filter,
+		filter = bson.M{"$and": bson.A{
+			freshFilter,
 			bson.M{"$or": bson.A{bson.M{"visibility": "public"}, bson.M{"authorId": *userID}}},
-		}
+		}}
 	}
 	cursor, err := r.statuses.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "createdAt", Value: -1}}).SetLimit(40))
 	if err != nil {
