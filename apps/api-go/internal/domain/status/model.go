@@ -12,11 +12,15 @@ type Status struct {
 	AuthorName     string          `bson:"authorName" json:"authorName"`
 	AuthorUsername string          `bson:"authorUsername" json:"authorUsername"`
 	Body           string          `bson:"body" json:"body"`
-	MediaURLs      []string        `bson:"mediaUrls,omitempty" json:"mediaUrls"`
+	BodyEncrypted  string          `bson:"bodyEncrypted,omitempty" json:"-"`
+	Anonymous      bool            `bson:"anonymous" json:"anonymous"`
+	ImageURL       string          `bson:"imageUrl,omitempty" json:"imageUrl,omitempty"`
+	ImageKey       string          `bson:"imageKey,omitempty" json:"imageKey,omitempty"`
 	Visibility     string          `bson:"visibility" json:"visibility"`
 	AllowedUserIDs []bson.ObjectID `bson:"allowedUserIds,omitempty" json:"allowedUserIds,omitempty"`
 	ShareSlug      string          `bson:"shareSlug,omitempty" json:"shareSlug,omitempty"`
-	ReactionsCount int64           `bson:"reactionsCount" json:"reactionsCount"`
+	LikesCount     int64           `bson:"likesCount" json:"likesCount"`
+	BookmarksCount int64           `bson:"bookmarksCount" json:"bookmarksCount"`
 	CommentsCount  int64           `bson:"commentsCount" json:"commentsCount"`
 	ExpiresAt      time.Time       `bson:"expiresAt" json:"expiresAt"`
 	CreatedAt      time.Time       `bson:"createdAt" json:"createdAt"`

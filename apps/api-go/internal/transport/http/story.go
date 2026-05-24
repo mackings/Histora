@@ -1,6 +1,7 @@
 package httptransport
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -13,6 +14,49 @@ import (
 
 type StoryHandler struct {
 	service *storyapp.Service
+}
+
+func (h *StoryHandler) Create(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := appctx.AuthUserFromContext(r.Context())
+	if !ok {
+		response.Error(w, apperror.Unauthorized("Authentication required"))
+		return
+	}
+	var input storyapp.SaveInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, apperror.BadRequest("Invalid JSON payload"))
+		return
+	}
+	story, err := h.service.Save(r.Context(), authUser.ID, input, nil)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusCreated, story)
+}
+
+func (h *StoryHandler) Update(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := appctx.AuthUserFromContext(r.Context())
+	if !ok {
+		response.Error(w, apperror.Unauthorized("Authentication required"))
+		return
+	}
+	storyID, err := bson.ObjectIDFromHex(chi.URLParam(r, "storyId"))
+	if err != nil {
+		response.Error(w, apperror.NotFound("Story not found"))
+		return
+	}
+	var input storyapp.SaveInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		response.Error(w, apperror.BadRequest("Invalid JSON payload"))
+		return
+	}
+	story, err := h.service.Save(r.Context(), authUser.ID, input, &storyID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, story)
 }
 
 func NewStoryHandler(service *storyapp.Service) *StoryHandler {

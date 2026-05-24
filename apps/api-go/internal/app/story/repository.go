@@ -5,6 +5,7 @@ import (
 	"time"
 
 	storydomain "github.com/mackings/histora/apps/api-go/internal/domain/story"
+	"github.com/mackings/histora/apps/api-go/internal/domain/user"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -13,13 +14,24 @@ import (
 type Repository struct {
 	stories      *mongo.Collection
 	interactions *mongo.Collection
+	users        *mongo.Collection
 }
 
 func NewRepository(db *mongo.Database) *Repository {
 	return &Repository{
 		stories:      db.Collection("stories"),
 		interactions: db.Collection("storyinteractions"),
+		users:        db.Collection("users"),
 	}
+}
+
+func (r *Repository) FindUserByID(ctx context.Context, id bson.ObjectID) (*user.User, error) {
+	var out user.User
+	err := r.users.FindOne(ctx, bson.M{"_id": id}).Decode(&out)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	return &out, err
 }
 
 func (r *Repository) FindFeed(ctx context.Context, limit int) ([]storydomain.Story, error) {
@@ -79,6 +91,30 @@ func (r *Repository) FindPublicBySlug(ctx context.Context, slug string) (*storyd
 	if err == mongo.ErrNoDocuments {
 		return nil, nil
 	}
+	return &story, err
+}
+
+func (r *Repository) FindSlug(ctx context.Context, slug string) (*storydomain.Story, error) {
+	var story storydomain.Story
+	err := r.stories.FindOne(ctx, bson.M{"slug": slug}).Decode(&story)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	return &story, err
+}
+
+func (r *Repository) Insert(ctx context.Context, story storydomain.Story) (*storydomain.Story, error) {
+	now := time.Now()
+	story.ID = bson.NewObjectID()
+	story.CreatedAt = now
+	story.UpdatedAt = now
+	_, err := r.stories.InsertOne(ctx, story)
+	return &story, err
+}
+
+func (r *Repository) Replace(ctx context.Context, story storydomain.Story) (*storydomain.Story, error) {
+	story.UpdatedAt = time.Now()
+	_, err := r.stories.ReplaceOne(ctx, bson.M{"_id": story.ID}, story)
 	return &story, err
 }
 

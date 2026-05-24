@@ -6,7 +6,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	authapp "github.com/mackings/histora/apps/api-go/internal/app/auth"
+	commentapp "github.com/mackings/histora/apps/api-go/internal/app/comment"
 	"github.com/mackings/histora/apps/api-go/internal/app/health"
+	statusapp "github.com/mackings/histora/apps/api-go/internal/app/status"
 	storyapp "github.com/mackings/histora/apps/api-go/internal/app/story"
 	"github.com/mackings/histora/apps/api-go/internal/config"
 	"github.com/mackings/histora/apps/api-go/internal/shared/apperror"
@@ -14,10 +16,12 @@ import (
 )
 
 type Deps struct {
-	Config       config.Config
-	Health       health.Service
-	AuthService  *authapp.Service
-	StoryService *storyapp.Service
+	Config         config.Config
+	Health         health.Service
+	AuthService    *authapp.Service
+	StoryService   *storyapp.Service
+	CommentService *commentapp.Service
+	StatusService  *statusapp.Service
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -45,6 +49,8 @@ func NewRouter(deps Deps) http.Handler {
 
 	authHandler := NewAuthHandler(deps.Config, deps.AuthService)
 	storyHandler := NewStoryHandler(deps.StoryService)
+	commentHandler := NewCommentHandler(deps.CommentService)
+	statusHandler := NewStatusHandler(deps.StatusService)
 	requireAuth := RequireAuth(deps.AuthService)
 	optionalAuth := OptionalAuth(deps.AuthService)
 
@@ -80,20 +86,38 @@ func NewRouter(deps Deps) http.Handler {
 			api.Get("/stories/mine/{storyId}", notImplemented("stories/mine/:storyId"))
 			api.Get("/stories/public/{slug}", notImplemented("stories/public/:slug"))
 		}
-		api.Post("/stories", notImplemented("stories/create"))
-		api.Patch("/stories/{storyId}", notImplemented("stories/update"))
+		if deps.StoryService != nil {
+			api.With(requireAuth).Post("/stories", storyHandler.Create)
+			api.With(requireAuth).Patch("/stories/{storyId}", storyHandler.Update)
+		} else {
+			api.Post("/stories", notImplemented("stories/create"))
+			api.Patch("/stories/{storyId}", notImplemented("stories/update"))
+		}
 		api.Post("/stories/{storyId}/reactions", notImplemented("stories/reactions"))
 		api.Post("/stories/{storyId}/share", notImplemented("stories/share"))
 
-		api.Get("/statuses/mine", notImplemented("statuses/mine"))
-		api.Get("/statuses/share/{shareSlug}", notImplemented("statuses/share/:shareSlug"))
-		api.Get("/statuses", notImplemented("statuses/feed"))
-		api.Post("/statuses", notImplemented("statuses/create"))
+		if deps.StatusService != nil {
+			api.With(requireAuth).Get("/statuses/mine", statusHandler.Mine)
+			api.Get("/statuses/share/{shareSlug}", statusHandler.Share)
+			api.With(optionalAuth).Get("/statuses", statusHandler.Feed)
+			api.With(requireAuth).Post("/statuses", statusHandler.Create)
+			api.With(requireAuth).Delete("/statuses/{statusId}", statusHandler.Delete)
+		} else {
+			api.Get("/statuses/mine", notImplemented("statuses/mine"))
+			api.Get("/statuses/share/{shareSlug}", notImplemented("statuses/share/:shareSlug"))
+			api.Get("/statuses", notImplemented("statuses/feed"))
+			api.Post("/statuses", notImplemented("statuses/create"))
+			api.Delete("/statuses/{statusId}", notImplemented("statuses/delete"))
+		}
 		api.Post("/statuses/{statusId}/reactions", notImplemented("statuses/reactions"))
-		api.Delete("/statuses/{statusId}", notImplemented("statuses/delete"))
 
-		api.Get("/comments", notImplemented("comments/list"))
-		api.Post("/comments", notImplemented("comments/create"))
+		if deps.CommentService != nil {
+			api.With(optionalAuth).Get("/comments", commentHandler.List)
+			api.With(requireAuth).Post("/comments", commentHandler.Create)
+		} else {
+			api.Get("/comments", notImplemented("comments/list"))
+			api.Post("/comments", notImplemented("comments/create"))
+		}
 
 		api.Get("/anonymous-messages/inbox", notImplemented("anonymous/inbox"))
 		api.Get("/anonymous-messages/sent", notImplemented("anonymous/sent"))

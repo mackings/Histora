@@ -28,11 +28,14 @@ The Node API remains the production source of truth until every item below has r
 - [ ] Collaboration invites.
 - [ ] Stories feed, mine, collaborative, public story, create/update.
   - [x] Read paths: feed, mine, collaborative, mine by id, public by slug.
-  - [ ] Write paths: create/update, revision conflicts, encrypted writes, collaboration broadcasts.
+  - [x] Write paths: create/update, revision conflicts, encrypted writes.
+  - [ ] Realtime collaboration broadcasts.
 - [ ] Story reactions, bookmarks, shares, read tracking.
 - [ ] Studio collaboration realtime updates.
-- [ ] Comments create/list for status, story chapter, anonymous message.
+- [x] Comments create/list for status, story chapter, anonymous message.
 - [ ] Status feed/create/reactions/delete/share.
+  - [x] Feed, mine, create, delete, anonymous share lookup.
+  - [ ] Reactions.
 - [ ] Anonymous messages and helper contact flow.
 - [ ] Media signed upload/direct upload/signed read.
 - [ ] Transcription create and streaming token.

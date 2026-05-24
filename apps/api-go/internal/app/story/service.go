@@ -2,7 +2,11 @@ package story
 
 import (
 	"context"
+	"encoding/json"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mackings/histora/apps/api-go/internal/config"
 	storydomain "github.com/mackings/histora/apps/api-go/internal/domain/story"
@@ -14,6 +18,40 @@ import (
 type Service struct {
 	cfg  config.Config
 	repo *Repository
+}
+
+type SaveInput struct {
+	Title            string             `json:"title"`
+	Summary          string             `json:"summary"`
+	CoverImageURL    string             `json:"coverImageUrl,omitempty"`
+	Visibility       string             `json:"visibility"`
+	Anonymous        bool               `json:"anonymous"`
+	AllowedViewerIDs []string           `json:"allowedViewerIds"`
+	Tags             []string           `json:"tags"`
+	Links            []StoryLinkContent `json:"links"`
+	Status           string             `json:"status"`
+	ExpectedRevision *int               `json:"expectedRevision,omitempty"`
+	Chapters         []ChapterInput     `json:"chapters"`
+}
+
+type ChapterInput struct {
+	ID           string        `json:"id,omitempty"`
+	Title        string        `json:"title"`
+	Body         string        `json:"body"`
+	Type         string        `json:"type"`
+	Order        int           `json:"order"`
+	ImageURLs    []string      `json:"imageUrls"`
+	VoiceNoteURL string        `json:"voiceNoteUrl,omitempty"`
+	Moments      []MomentInput `json:"moments"`
+}
+
+type MomentInput struct {
+	ID           string   `json:"id,omitempty"`
+	Title        string   `json:"title"`
+	Description  string   `json:"description"`
+	HappenedAt   string   `json:"happenedAt"`
+	ImageURLs    []string `json:"imageUrls"`
+	VoiceNoteURL string   `json:"voiceNoteUrl,omitempty"`
 }
 
 type StoryTextContent struct {
@@ -116,6 +154,132 @@ type SerializedMoment struct {
 
 func NewService(cfg config.Config, repo *Repository) *Service {
 	return &Service{cfg: cfg, repo: repo}
+}
+
+func (s *Service) Save(ctx context.Context, authorID bson.ObjectID, input SaveInput, storyID *bson.ObjectID) (SerializedStory, error) {
+	actor, err := s.repo.FindUserByID(ctx, authorID)
+	if err != nil {
+		return SerializedStory{}, err
+	}
+	if actor == nil {
+		return SerializedStory{}, apperror.NotFound("User not found")
+	}
+	if err := validateSaveInput(input); err != nil {
+		return SerializedStory{}, err
+	}
+	if actor.SubscriptionTier != "premium" && exceedsFreeLimits(input) {
+		return SerializedStory{}, apperror.Forbidden("Free accounts can save up to 2 images, 1 voice note, and 2 chapters per story.")
+	}
+	var existing *storydomain.Story
+	if storyID != nil {
+		existing, err = s.repo.FindEditableByID(ctx, *storyID, authorID)
+		if err != nil {
+			return SerializedStory{}, err
+		}
+		if existing == nil {
+			return SerializedStory{}, apperror.NotFound("Story not found")
+		}
+		if input.ExpectedRevision != nil && *input.ExpectedRevision != existing.CollaborationRevision {
+			return SerializedStory{}, apperror.Conflict(
+				"A newer collaborative version is available. Load the latest version before saving again.",
+				"STORY_REVISION_CONFLICT",
+				map[string]int{"latestRevision": existing.CollaborationRevision},
+			)
+		}
+	}
+	slug, err := s.uniqueSlug(ctx, input.Title, storyID)
+	if err != nil {
+		return SerializedStory{}, err
+	}
+	now := time.Now()
+	textContent := StoryTextContent{
+		Title:    input.Title,
+		Summary:  input.Summary,
+		Tags:     input.Tags,
+		Links:    input.Links,
+		Chapters: make([]ChapterContent, 0, len(input.Chapters)),
+	}
+	chapters := make([]storydomain.Chapter, 0, len(input.Chapters))
+	for index, chapter := range input.Chapters {
+		textContent.Chapters = append(textContent.Chapters, ChapterContent{
+			Title:   chapter.Title,
+			Body:    chapter.Body,
+			Moments: momentTextContent(chapter.Moments),
+		})
+		chapters = append(chapters, s.storedChapter(chapter, existing, index, actor.FullName, actor.Username, now))
+	}
+	contentEncrypted, err := cryptoutil.EncryptJSON(s.cfg.DataEncryptionKey, textContent)
+	if err != nil {
+		return SerializedStory{}, err
+	}
+	allowedViewerIDs := parseObjectIDs(input.AllowedViewerIDs)
+	status := input.Status
+	if status != "published" {
+		status = "draft"
+	}
+	visibility := input.Visibility
+	if visibility == "" {
+		visibility = "private"
+	}
+	if existing != nil && existing.AuthorID != authorID {
+		visibility = existing.Visibility
+		input.Anonymous = existing.Anonymous
+		allowedViewerIDs = existing.AllowedViewerIDs
+	}
+	stored := storydomain.Story{
+		Slug:                 slug,
+		Status:               status,
+		Title:                cryptoutil.EncryptedContentPlaceholder,
+		Summary:              cryptoutil.EncryptedContentPlaceholder,
+		ContentEncrypted:     contentEncrypted,
+		CoverImageURL:        normalizeMedia(input.CoverImageURL),
+		Visibility:           visibility,
+		Anonymous:            input.Anonymous,
+		AllowedViewerIDs:     allowedViewerIDs,
+		AuthorID:             authorID,
+		AuthorName:           actor.FullName,
+		AuthorUsername:       actor.Username,
+		LastEditedByUserID:   authorID,
+		LastEditedByName:     actor.FullName,
+		LastEditedByUsername: actor.Username,
+		LastEditedAt:         now,
+		Tags:                 []string{},
+		Links:                []storydomain.ExternalLink{},
+		Chapters:             chapters,
+	}
+	if input.Anonymous {
+		stored.AuthorName = "Anonymous"
+		stored.AuthorUsername = "anonymous"
+	}
+	if existing == nil {
+		stored.CollaborationRevision = 1
+		stored.Collaborators = []storydomain.Collaborator{}
+		saved, err := s.repo.Insert(ctx, stored)
+		if err != nil {
+			return SerializedStory{}, err
+		}
+		return s.serialize(*saved, &authorID)
+	}
+	stored.ID = existing.ID
+	stored.AuthorID = existing.AuthorID
+	stored.Collaborators = existing.Collaborators
+	stored.ReadCount = existing.ReadCount
+	stored.ReactionsCount = existing.ReactionsCount
+	stored.LikesCount = existing.LikesCount
+	stored.BookmarksCount = existing.BookmarksCount
+	stored.SharesCount = existing.SharesCount
+	stored.CommentsCount = existing.CommentsCount
+	stored.CreatedAt = existing.CreatedAt
+	stored.CollaborationRevision = existing.CollaborationRevision + 1
+	if existing.AuthorID != authorID {
+		stored.AuthorName = existing.AuthorName
+		stored.AuthorUsername = existing.AuthorUsername
+	}
+	saved, err := s.repo.Replace(ctx, stored)
+	if err != nil {
+		return SerializedStory{}, err
+	}
+	return s.serialize(*saved, &authorID)
 }
 
 func (s *Service) Feed(ctx context.Context, viewerID *bson.ObjectID) ([]SerializedStory, error) {
@@ -340,4 +504,175 @@ func mediaKey(value string) string {
 		return value
 	}
 	return value
+}
+
+func validateSaveInput(input SaveInput) error {
+	if strings.TrimSpace(input.Title) == "" || len(strings.TrimSpace(input.Title)) < 3 {
+		return apperror.BadRequest("Add a clearer story title before continuing.")
+	}
+	if len(strings.Fields(input.Summary)) < 20 {
+		return apperror.BadRequest("Add a fuller story summary with at least 20 words.")
+	}
+	if len(input.Chapters) == 0 {
+		return apperror.BadRequest("At least one chapter is required.")
+	}
+	return nil
+}
+
+func exceedsFreeLimits(input SaveInput) bool {
+	images := 0
+	voices := 0
+	for _, chapter := range input.Chapters {
+		images += len(chapter.ImageURLs)
+		if chapter.VoiceNoteURL != "" {
+			voices += 1
+		}
+	}
+	return len(input.Chapters) > 2 || images > 2 || voices > 1
+}
+
+func (s *Service) uniqueSlug(ctx context.Context, title string, storyID *bson.ObjectID) (string, error) {
+	base := slugify(title)
+	if base == "" {
+		base = "story"
+	}
+	next := base
+	for suffix := 1; ; suffix++ {
+		existing, err := s.repo.FindSlug(ctx, next)
+		if err != nil {
+			return "", err
+		}
+		if existing == nil || (storyID != nil && existing.ID == *storyID) {
+			return next, nil
+		}
+		next = base + "-" + strconv.Itoa(suffix+1)
+	}
+}
+
+func slugify(value string) string {
+	normalized := strings.ToLower(value)
+	re := regexp.MustCompile(`[^a-z0-9]+`)
+	slug := strings.Trim(re.ReplaceAllString(normalized, "-"), "-")
+	if len(slug) > 72 {
+		return slug[:72]
+	}
+	return slug
+}
+
+func momentTextContent(moments []MomentInput) []MomentContent {
+	out := make([]MomentContent, 0, len(moments))
+	for _, moment := range moments {
+		out = append(out, MomentContent{Title: moment.Title, Description: moment.Description})
+	}
+	return out
+}
+
+func (s *Service) storedChapter(input ChapterInput, existing *storydomain.Story, index int, editorName string, editorUsername string, occurredAt time.Time) storydomain.Chapter {
+	chapterID := input.ID
+	var existingChapter *storydomain.Chapter
+	if existing != nil {
+		for chapterIndex := range existing.Chapters {
+			if existing.Chapters[chapterIndex].ID == input.ID || chapterIndex == index {
+				existingChapter = &existing.Chapters[chapterIndex]
+				if chapterID == "" {
+					chapterID = existing.Chapters[chapterIndex].ID
+				}
+				break
+			}
+		}
+	}
+	if chapterID == "" {
+		chapterID = "chapter-" + bson.NewObjectID().Hex()
+	}
+	moments := make([]storydomain.Moment, 0, len(input.Moments))
+	for momentIndex, moment := range input.Moments {
+		happenedAt, _ := time.Parse(time.RFC3339, moment.HappenedAt)
+		if happenedAt.IsZero() {
+			happenedAt = occurredAt
+		}
+		momentID := moment.ID
+		if existingChapter != nil && momentIndex < len(existingChapter.Moments) && momentID == "" {
+			momentID = existingChapter.Moments[momentIndex].ID
+		}
+		if momentID == "" {
+			momentID = "moment-" + bson.NewObjectID().Hex()
+		}
+		moments = append(moments, storydomain.Moment{
+			ID:                   momentID,
+			Title:                cryptoutil.EncryptedContentPlaceholder,
+			Description:          cryptoutil.EncryptedContentPlaceholder,
+			HappenedAt:           happenedAt,
+			ImageURLs:            normalizeMediaList(moment.ImageURLs),
+			VoiceNoteURL:         normalizeMedia(moment.VoiceNoteURL),
+			CreatedByName:        editorName,
+			CreatedByUsername:    editorUsername,
+			CreatedAt:            occurredAt,
+			LastEditedByName:     editorName,
+			LastEditedByUsername: editorUsername,
+			LastEditedAt:         occurredAt,
+		})
+	}
+	chapterType := input.Type
+	if chapterType == "" {
+		chapterType = "memory"
+	}
+	order := input.Order
+	if order <= 0 {
+		order = index + 1
+	}
+	return storydomain.Chapter{
+		ID:                   chapterID,
+		Title:                cryptoutil.EncryptedContentPlaceholder,
+		Body:                 cryptoutil.EncryptedContentPlaceholder,
+		Type:                 chapterType,
+		Order:                order,
+		ImageURLs:            normalizeMediaList(input.ImageURLs),
+		VoiceNoteURL:         normalizeMedia(input.VoiceNoteURL),
+		Moments:              moments,
+		CreatedByName:        editorName,
+		CreatedByUsername:    editorUsername,
+		CreatedAt:            occurredAt,
+		LastEditedByName:     editorName,
+		LastEditedByUsername: editorUsername,
+		LastEditedAt:         occurredAt,
+	}
+}
+
+func parseObjectIDs(values []string) []bson.ObjectID {
+	out := make([]bson.ObjectID, 0, len(values))
+	for _, value := range values {
+		if id, err := bson.ObjectIDFromHex(value); err == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func normalizeMediaList(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if normalized := normalizeMedia(value); normalized != "" {
+			out = append(out, normalized)
+		}
+	}
+	return out
+}
+
+func normalizeMedia(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "users/") {
+		return value
+	}
+	if index := strings.Index(value, "users/"); index >= 0 {
+		return value[index:]
+	}
+	return value
+}
+
+func snapshotsEqual(left SerializedStory, input SaveInput) bool {
+	payload, _ := json.Marshal(left)
+	next, _ := json.Marshal(input)
+	return string(payload) == string(next)
 }

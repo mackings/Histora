@@ -10,7 +10,9 @@ import (
 	"time"
 
 	authapp "github.com/mackings/histora/apps/api-go/internal/app/auth"
+	commentapp "github.com/mackings/histora/apps/api-go/internal/app/comment"
 	"github.com/mackings/histora/apps/api-go/internal/app/health"
+	statusapp "github.com/mackings/histora/apps/api-go/internal/app/status"
 	storyapp "github.com/mackings/histora/apps/api-go/internal/app/story"
 	"github.com/mackings/histora/apps/api-go/internal/config"
 	"github.com/mackings/histora/apps/api-go/internal/platform/httpserver"
@@ -57,9 +59,11 @@ func main() {
 	}()
 
 	router := httptransport.NewRouter(httptransport.Deps{
-		Config:       cfg,
-		AuthService:  authapp.NewService(cfg, authapp.NewRepository(mongoStore.DB)),
-		StoryService: storyapp.NewService(cfg, storyapp.NewRepository(mongoStore.DB)),
+		Config:         cfg,
+		AuthService:    authapp.NewService(cfg, authapp.NewRepository(mongoStore.DB)),
+		StoryService:   storyapp.NewService(cfg, storyapp.NewRepository(mongoStore.DB)),
+		CommentService: commentapp.NewService(cfg, commentapp.NewRepository(mongoStore.DB)),
+		StatusService:  statusapp.NewService(cfg, statusapp.NewRepository(mongoStore.DB)),
 		Health: health.Service{
 			Mongo: mongoStore.Client,
 			Redis: redisClients.Command,

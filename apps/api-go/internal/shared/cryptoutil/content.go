@@ -3,6 +3,7 @@ package cryptoutil
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -25,6 +26,43 @@ func DecryptJSON[T any](encryptionKey string, payload string) (*T, error) {
 		return nil, err
 	}
 	return &out, nil
+}
+
+func EncryptJSON(encryptionKey string, value any) (string, error) {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return EncryptSensitiveValue(encryptionKey, string(payload))
+}
+
+func EncryptSensitiveValue(encryptionKey string, value string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", errors.New("cannot encrypt an empty value")
+	}
+	if strings.TrimSpace(encryptionKey) == "" {
+		return "", errors.New("data encryption key is not configured")
+	}
+	key := sha256.Sum256([]byte(encryptionKey))
+	block, err := aes.NewCipher(key[:])
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	iv := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(iv); err != nil {
+		return "", err
+	}
+	sealed := gcm.Seal(nil, iv, []byte(value), nil)
+	tagSize := gcm.Overhead()
+	encrypted := sealed[:len(sealed)-tagSize]
+	tag := sealed[len(sealed)-tagSize:]
+	return base64.StdEncoding.EncodeToString(iv) + "." +
+		base64.StdEncoding.EncodeToString(tag) + "." +
+		base64.StdEncoding.EncodeToString(encrypted), nil
 }
 
 func DecryptSensitiveValue(encryptionKey string, payload string) (string, error) {
