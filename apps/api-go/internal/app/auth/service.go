@@ -665,6 +665,7 @@ func (s *Service) issueEmailVerificationOTP(ctx context.Context, userID bson.Obj
 		return "", err
 	}
 	if err := s.sendVerificationEmail(email, otp); err != nil {
+		_ = s.repo.DeleteActiveEmailTokens(ctx, userID)
 		return "", err
 	}
 	return otp, nil
@@ -706,6 +707,7 @@ func (s *Service) issueDeviceVerificationChallenge(ctx context.Context, u user.U
 		return nil, "", err
 	}
 	if err := s.sendDeviceVerificationEmail(u.Email, otp, deviceName); err != nil {
+		_ = s.repo.DeleteActiveDeviceChallenges(ctx, u.ID, deviceKeyHash)
 		return nil, "", err
 	}
 	return challenge, otp, nil
@@ -799,42 +801,67 @@ func (s *Service) sendEmail(to, subject, text string, lines []string) error {
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	auth := smtp.PlainAuth("", s.cfg.SMTPUser, s.cfg.SMTPPassword, host)
+	timeout := 10 * time.Second
+	dialer := net.Dialer{Timeout: timeout}
 	if port == 465 {
-		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+		conn, err := tls.DialWithDialer(&dialer, "tcp", addr, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
 		if err != nil {
 			return err
 		}
+		_ = conn.SetDeadline(time.Now().Add(timeout))
 		defer conn.Close()
 		client, err := smtp.NewClient(conn, host)
 		if err != nil {
 			return err
 		}
 		defer client.Quit()
-		if err := client.Auth(auth); err != nil {
-			return err
-		}
-		if err := client.Mail(s.cfg.SMTPUser); err != nil {
-			return err
-		}
-		if err := client.Rcpt(to); err != nil {
-			return err
-		}
-		writer, err := client.Data()
-		if err != nil {
-			return err
-		}
-		if _, err := writer.Write([]byte(message)); err != nil {
-			_ = writer.Close()
-			return err
-		}
-		return writer.Close()
+		return sendSMTPMessage(client, auth, s.cfg.SMTPUser, to, []byte(message))
 	}
-	return smtp.SendMail(addr, auth, s.cfg.SMTPUser, []string{to}, []byte(message))
+	conn, err := dialer.Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+	_ = conn.SetDeadline(time.Now().Add(timeout))
+	defer conn.Close()
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		return err
+	}
+	defer client.Quit()
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		if err := client.StartTLS(&tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}); err != nil {
+			return err
+		}
+	}
+	return sendSMTPMessage(client, auth, s.cfg.SMTPUser, to, []byte(message))
 }
 
 func htmlEscape(value string) string {
 	replacer := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;", "'", "&#39;")
 	return replacer.Replace(value)
+}
+
+func sendSMTPMessage(client *smtp.Client, auth smtp.Auth, from, to string, message []byte) error {
+	if ok, _ := client.Extension("AUTH"); ok {
+		if err := client.Auth(auth); err != nil {
+			return err
+		}
+	}
+	if err := client.Mail(from); err != nil {
+		return err
+	}
+	if err := client.Rcpt(to); err != nil {
+		return err
+	}
+	writer, err := client.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := writer.Write(message); err != nil {
+		_ = writer.Close()
+		return err
+	}
+	return writer.Close()
 }
 
 func userJSON(u user.User) AuthUserJSON {
