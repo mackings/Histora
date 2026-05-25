@@ -41,6 +41,7 @@ const smokeUsername = `gosmoke${runID.replace(/[^a-z0-9]/gi, "").slice(-10)}`.sl
 const smokePassword = "SmokePass12345!";
 const trustedDeviceID = `codex-trusted-${runID}`;
 const untrustedDeviceID = `codex-untrusted-${runID}`;
+const resendDeviceID = `codex-resend-${runID}`;
 const deviceName = "Codex API smoke device";
 const results = [];
 
@@ -264,7 +265,7 @@ const main = async () => {
     }), 403);
     await check("POST /auth/resend-device-verification sends OTP", () => request("/auth/resend-device-verification", {
       method: "POST",
-      body: { email: smokeEmail, deviceId: untrustedDeviceID, deviceName: "Untrusted smoke device" },
+      body: { email: smokeEmail, deviceId: resendDeviceID, deviceName: "Resend smoke device" },
       timeoutMs: 30000
     }), 200);
 
