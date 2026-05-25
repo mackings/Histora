@@ -4,6 +4,8 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   apiRequest,
   type ApiComment,
+  type ApiStory,
+  type SignedReadResponse,
   getCachedStory,
   prefetchStoryBySlug,
   subscribeToAppEvents,
@@ -54,6 +56,83 @@ const getErrorMessage = (error: unknown, fallback: string) =>
 
 const bumpStorySaveCount = (value: string, delta: number) =>
   String(Math.max(0, Number.parseInt(value, 10) + delta || 0));
+
+const isOwnedStorageObjectKey = (value?: string | null): value is string =>
+  typeof value === "string" && /^users\/[^/]+\/.+/.test(value);
+
+async function resolveStoryMediaUrl(accessToken: string, storyId: string, value?: string | null) {
+  if (!isOwnedStorageObjectKey(value)) {
+    return value ?? null;
+  }
+
+  const query = new URLSearchParams({ objectKey: value, storyId });
+  const signedRead = await apiRequest<SignedReadResponse>(`/media/signed-read?${query.toString()}`, { accessToken });
+  return signedRead.readUrl;
+}
+
+async function hydrateApiStoryMedia(accessToken: string, story: ApiStory): Promise<ApiStory> {
+  const coverImageUrl = await resolveStoryMediaUrl(accessToken, story.id, story.coverImageKey ?? story.coverImageUrl ?? null);
+  const chapters = await Promise.all(
+    story.chapters.map(async (chapter) => {
+      const imageUrls = await Promise.all(
+        (chapter.imageKeys?.length ? chapter.imageKeys : chapter.imageUrls ?? []).map((imageUrl) =>
+          resolveStoryMediaUrl(accessToken, story.id, imageUrl).catch(() => imageUrl)
+        )
+      );
+      const voiceNoteUrl = await resolveStoryMediaUrl(
+        accessToken,
+        story.id,
+        chapter.voiceNoteKey ?? chapter.voiceNoteUrl ?? null
+      ).catch(() => chapter.voiceNoteUrl ?? null);
+
+      return {
+        ...chapter,
+        imageUrls: imageUrls.filter((imageUrl): imageUrl is string => Boolean(imageUrl)),
+        voiceNoteUrl
+      };
+    })
+  );
+
+  return {
+    ...story,
+    coverImageUrl,
+    chapters
+  };
+}
+
+async function hydrateStoryRecordMedia(accessToken: string, story: FeedStoryRecord): Promise<FeedStoryRecord> {
+  const coverImageUrl = await resolveStoryMediaUrl(accessToken, story.id, story.coverImageUrl ?? null).catch(
+    () => story.coverImageUrl ?? null
+  );
+  const chapters = await Promise.all(
+    story.chapters.map(async (chapter) => {
+      const images = await Promise.all(
+        chapter.images.map(async (image) => ({
+          ...image,
+          src: (await resolveStoryMediaUrl(accessToken, story.id, image.src).catch(() => image.src)) ?? image.src
+        }))
+      );
+      const voiceNotes = await Promise.all(
+        chapter.voiceNotes.map(async (voice) => ({
+          ...voice,
+          src: (await resolveStoryMediaUrl(accessToken, story.id, voice.src).catch(() => voice.src)) ?? voice.src
+        }))
+      );
+
+      return {
+        ...chapter,
+        images,
+        voiceNotes
+      };
+    })
+  );
+
+  return {
+    ...story,
+    coverImageUrl,
+    chapters
+  };
+}
 
 const getStoryAudienceLabel = (visibility: string) => {
   if (visibility === "PRIVATE") {
@@ -197,6 +276,20 @@ export function FeedStoryPage({
   const activeChapterNumber = activeChapterIndex >= 0 ? activeChapterIndex + 1 : 1;
 
   useEffect(() => {
+    if (!prefetchedStory || prefetchedStory.slug !== storySlug) {
+      return;
+    }
+
+    void hydrateStoryRecordMedia(accessToken, prefetchedStory).then((hydratedStory) => {
+      setStories((current) =>
+        current.some((entry) => entry.id === hydratedStory.id)
+          ? current.map((entry) => (entry.id === hydratedStory.id ? hydratedStory : entry))
+          : [hydratedStory]
+      );
+    });
+  }, [accessToken, prefetchedStory, storySlug]);
+
+  useEffect(() => {
     let cancelled = false;
 
     if (!storySlug) {
@@ -214,16 +307,21 @@ export function FeedStoryPage({
         chapterCount: cachedStory.chapters.length,
         commentCount: cachedStory.commentsCount
       });
-      setStories([nextStory]);
+      void hydrateStoryRecordMedia(accessToken, nextStory).then((hydratedStory) => {
+        if (!cancelled) {
+          setStories([hydratedStory]);
+        }
+      });
       setIsStoryLoading(false);
     }
 
     void prefetchStoryBySlug(storySlug, accessToken)
       .then(async (storyPayload) => {
+        const hydratedPayload = await hydrateApiStoryMedia(accessToken, storyPayload);
         const nextStory = toFeedStoryRecord({
-          ...storyPayload,
-          chapterCount: storyPayload.chapters.length,
-          commentCount: storyPayload.commentsCount
+          ...hydratedPayload,
+          chapterCount: hydratedPayload.chapters.length,
+          commentCount: hydratedPayload.commentsCount
         });
 
         if (cancelled) {
@@ -234,9 +332,9 @@ export function FeedStoryPage({
         setIsStoryLoading(false);
 
         const chapterComments = await Promise.allSettled(
-          storyPayload.chapters.map(async (chapter) => {
+          hydratedPayload.chapters.map(async (chapter) => {
             const comments = await apiRequest<ApiComment[]>(
-              `/comments?targetType=storyChapter&targetId=${encodeURIComponent(`${storyPayload.id}:${chapter.order}`)}`,
+              `/comments?targetType=storyChapter&targetId=${encodeURIComponent(`${hydratedPayload.id}:${chapter.order}`)}`,
               { accessToken }
             );
 
