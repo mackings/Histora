@@ -207,10 +207,12 @@ func NewRouter(deps Deps) http.Handler {
 		if deps.MediaService != nil {
 			api.With(requireAuth).Post("/media/signed-upload", mediaHandler.SignedUpload)
 			api.With(requireAuth).Get("/media/signed-read", mediaHandler.SignedRead)
+			api.Get("/media/public-read", mediaHandler.PublicRead)
 			api.With(requireAuth).Post("/media/upload", mediaHandler.Upload)
 		} else {
 			api.Post("/media/signed-upload", notImplemented("media/signed-upload"))
 			api.Get("/media/signed-read", notImplemented("media/signed-read"))
+			api.Get("/media/public-read", notImplemented("media/public-read"))
 			api.Post("/media/upload", notImplemented("media/upload"))
 		}
 

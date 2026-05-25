@@ -80,6 +80,23 @@ func (s *Service) SignedRead(ctx context.Context, userID bson.ObjectID, objectKe
 	return map[string]any{"objectKey": objectKey, "readUrl": result.URL}, nil
 }
 
+func (s *Service) PublicRead(ctx context.Context, objectKey string, storyID string, statusID string) (map[string]any, error) {
+	if err := s.assertConfigured(); err != nil {
+		return nil, err
+	}
+	if !s.canReadPublicStoryMedia(ctx, objectKey, storyID) && !s.canReadPublicStatusMedia(ctx, objectKey, statusID) {
+		return nil, apperror.Forbidden("You do not have access to this media object.")
+	}
+	result, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.cfg.R2BucketName),
+		Key:    aws.String(objectKey),
+	}, s3.WithPresignExpires(15*time.Minute))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"objectKey": objectKey, "readUrl": result.URL}, nil
+}
+
 func (s *Service) UploadDirect(ctx context.Context, userID string, fileName string, contentType string, body []byte) (map[string]any, error) {
 	if err := s.assertConfigured(); err != nil {
 		return nil, err
@@ -113,12 +130,27 @@ func (s *Service) UploadDirect(ctx context.Context, userID string, fileName stri
 }
 
 func (s *Service) canReadStatusMedia(ctx context.Context, userID bson.ObjectID, objectKey string, statusID string) bool {
-	if s.db == nil || objectKey == "" || statusID == "" {
+	status, ok := s.findStatusMediaAudience(ctx, objectKey, statusID)
+	if !ok {
 		return false
+	}
+	return status.Visibility == "public" || status.AuthorID == userID
+}
+
+func (s *Service) findStatusMediaAudience(ctx context.Context, objectKey string, statusID string) (struct {
+	AuthorID   bson.ObjectID
+	Visibility string
+}, bool) {
+	var empty struct {
+		AuthorID   bson.ObjectID
+		Visibility string
+	}
+	if s.db == nil || objectKey == "" || statusID == "" {
+		return empty, false
 	}
 	id, err := bson.ObjectIDFromHex(strings.TrimSpace(statusID))
 	if err != nil {
-		return false
+		return empty, false
 	}
 	var status struct {
 		AuthorID   bson.ObjectID `bson:"authorId"`
@@ -132,21 +164,77 @@ func (s *Service) canReadStatusMedia(ctx context.Context, userID bson.ObjectID, 
 		options.FindOne().SetProjection(bson.M{"authorId": 1, "visibility": 1, "imageUrl": 1, "imageKey": 1}),
 	).Decode(&status)
 	if err != nil {
-		return false
+		return empty, false
 	}
 	if !storyReferencesObject(status.ImageURL, objectKey) && !storyReferencesObject(status.ImageKey, objectKey) {
-		return false
+		return empty, false
 	}
-	return status.Visibility == "public" || status.AuthorID == userID
+	return struct {
+		AuthorID   bson.ObjectID
+		Visibility string
+	}{AuthorID: status.AuthorID, Visibility: status.Visibility}, true
+}
+
+func (s *Service) canReadPublicStoryMedia(ctx context.Context, objectKey string, storyID string) bool {
+	story, ok := s.findStoryMediaAudience(ctx, objectKey, storyID)
+	return ok && story.Status == "published" && story.Visibility == "public"
+}
+
+func (s *Service) canReadPublicStatusMedia(ctx context.Context, objectKey string, statusID string) bool {
+	status, ok := s.findStatusMediaAudience(ctx, objectKey, statusID)
+	return ok && status.Visibility == "public"
 }
 
 func (s *Service) canReadStoryMedia(ctx context.Context, userID bson.ObjectID, objectKey string, storyID string) bool {
-	if s.db == nil || objectKey == "" || storyID == "" {
+	story, ok := s.findStoryMediaAudience(ctx, objectKey, storyID)
+	if !ok {
 		return false
+	}
+	if story.Status == "published" && story.Visibility == "public" {
+		return true
+	}
+	if story.AuthorID == userID {
+		return true
+	}
+	for _, collaborator := range story.Collaborators {
+		if collaborator.UserID == userID {
+			return true
+		}
+	}
+	if story.Status == "published" {
+		for _, viewerID := range story.AllowedViewerIDs {
+			if viewerID == userID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Service) findStoryMediaAudience(ctx context.Context, objectKey string, storyID string) (struct {
+	Status           string
+	Visibility       string
+	AuthorID         bson.ObjectID
+	AllowedViewerIDs []bson.ObjectID
+	Collaborators    []struct {
+		UserID bson.ObjectID `bson:"userId"`
+	}
+}, bool) {
+	var empty struct {
+		Status           string
+		Visibility       string
+		AuthorID         bson.ObjectID
+		AllowedViewerIDs []bson.ObjectID
+		Collaborators    []struct {
+			UserID bson.ObjectID `bson:"userId"`
+		}
+	}
+	if s.db == nil || objectKey == "" || storyID == "" {
+		return empty, false
 	}
 	id, err := bson.ObjectIDFromHex(strings.TrimSpace(storyID))
 	if err != nil {
-		return false
+		return empty, false
 	}
 	var story struct {
 		Status           string          `bson:"status"`
@@ -193,28 +281,24 @@ func (s *Service) canReadStoryMedia(ctx context.Context, userID bson.ObjectID, o
 			}
 		}
 		if err != nil || !found {
-			return false
+			return empty, false
 		}
 	}
-	if story.Status == "published" && story.Visibility == "public" {
-		return true
-	}
-	if story.AuthorID == userID {
-		return true
-	}
-	for _, collaborator := range story.Collaborators {
-		if collaborator.UserID == userID {
-			return true
+	return struct {
+		Status           string
+		Visibility       string
+		AuthorID         bson.ObjectID
+		AllowedViewerIDs []bson.ObjectID
+		Collaborators    []struct {
+			UserID bson.ObjectID `bson:"userId"`
 		}
-	}
-	if story.Status == "published" {
-		for _, viewerID := range story.AllowedViewerIDs {
-			if viewerID == userID {
-				return true
-			}
-		}
-	}
-	return false
+	}{
+		Status:           story.Status,
+		Visibility:       story.Visibility,
+		AuthorID:         story.AuthorID,
+		AllowedViewerIDs: story.AllowedViewerIDs,
+		Collaborators:    story.Collaborators,
+	}, true
 }
 
 func storyReferencesAny(values []string, objectKey string) bool {

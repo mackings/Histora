@@ -66,7 +66,7 @@ async function resolveStoryMediaUrl(accessToken: string, storyId: string, value?
   }
 
   const query = new URLSearchParams({ objectKey: value, storyId });
-  const signedRead = await apiRequest<SignedReadResponse>(`/media/signed-read?${query.toString()}`, { accessToken });
+  const signedRead = await apiRequest<SignedReadResponse>(`/media/public-read?${query.toString()}`, { accessToken });
   return signedRead.readUrl;
 }
 
@@ -911,9 +911,7 @@ export function FeedStoryPage({
                             <strong>{voice.name}</strong>
                             <span>{voice.detail}</span>
                           </div>
-                          <audio className="voice-note-player" controls preload="none">
-                            <source src={voice.src} type="audio/mpeg" />
-                          </audio>
+                          <audio className="voice-note-player" controls preload="metadata" src={voice.src} />
                         </article>
                       ))}
                     </div>

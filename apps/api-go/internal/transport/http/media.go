@@ -59,6 +59,20 @@ func (h *MediaHandler) SignedRead(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, result)
 }
 
+func (h *MediaHandler) PublicRead(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.PublicRead(
+		r.Context(),
+		r.URL.Query().Get("objectKey"),
+		r.URL.Query().Get("storyId"),
+		r.URL.Query().Get("statusId"),
+	)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, result)
+}
+
 func (h *MediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	authUser, ok := appctx.AuthUserFromContext(r.Context())
 	if !ok {

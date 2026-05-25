@@ -186,7 +186,7 @@ async function resolveFeedMediaUrl(accessToken: string, storyId: string, value?:
   try {
     const objectKey = value;
     const query = new URLSearchParams({ objectKey, storyId });
-    const signedRead = await apiRequest<SignedReadResponse>(`/media/signed-read?${query.toString()}`, { accessToken });
+    const signedRead = await apiRequest<SignedReadResponse>(`/media/public-read?${query.toString()}`, { accessToken });
     return signedRead.readUrl;
   } catch {
     return value;
@@ -200,7 +200,7 @@ async function resolveStatusMediaUrl(accessToken: string, statusId: string, valu
   try {
     const objectKey = value;
     const query = new URLSearchParams({ objectKey, statusId });
-    const signedRead = await apiRequest<SignedReadResponse>(`/media/signed-read?${query.toString()}`, { accessToken });
+    const signedRead = await apiRequest<SignedReadResponse>(`/media/public-read?${query.toString()}`, { accessToken });
     return signedRead.readUrl;
   } catch {
     return value;
@@ -232,9 +232,15 @@ async function hydrateFeedStoryMedia(accessToken: string, story: ApiFeedStory): 
           resolveFeedMediaUrl(accessToken, story.id, imageUrl)
         )
       );
+      const voiceNoteUrl = await resolveFeedMediaUrl(
+        accessToken,
+        story.id,
+        chapter.voiceNoteKey ?? chapter.voiceNoteUrl ?? null
+      );
       return {
         ...chapter,
-        imageUrls: imageUrls.filter((imageUrl): imageUrl is string => Boolean(imageUrl))
+        imageUrls: imageUrls.filter((imageUrl): imageUrl is string => Boolean(imageUrl)),
+        voiceNoteUrl: voiceNoteUrl ?? chapter.voiceNoteUrl
       };
     })
   );
