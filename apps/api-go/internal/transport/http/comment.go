@@ -1,6 +1,7 @@
 package httptransport
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -11,12 +12,13 @@ import (
 )
 
 type CommentHandler struct {
-	service *commentapp.Service
-	events  EventPublisher
+	service  *commentapp.Service
+	events   EventPublisher
+	notifier PushNotifier
 }
 
-func NewCommentHandler(service *commentapp.Service, events EventPublisher) *CommentHandler {
-	return &CommentHandler{service: service, events: events}
+func NewCommentHandler(service *commentapp.Service, events EventPublisher, notifier PushNotifier) *CommentHandler {
+	return &CommentHandler{service: service, events: events, notifier: notifier}
 }
 
 func (h *CommentHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -47,6 +49,7 @@ func (h *CommentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.publishCommentCreated(r, comment)
+	h.publishCommentNotification(r, comment)
 	response.JSON(w, http.StatusCreated, comment)
 }
 
@@ -66,5 +69,25 @@ func (h *CommentHandler) publishCommentCreated(r *http.Request, comment commenta
 		}
 		seen[channel] = true
 		h.events.Publish(r.Context(), channel, payload)
+	}
+}
+
+func (h *CommentHandler) publishCommentNotification(r *http.Request, comment commentapp.Response) {
+	if h.events == nil {
+		return
+	}
+	notification := h.service.NotificationTarget(r.Context(), comment)
+	if notification == nil {
+		return
+	}
+	payload := map[string]any{
+		"kind":  "notification.generic",
+		"title": notification.Title,
+		"body":  notification.Body,
+		"url":   notification.URL,
+	}
+	h.events.Publish(r.Context(), "user:"+notification.UserID, payload)
+	if h.notifier != nil {
+		go h.notifier.SendPushNotification(context.Background(), notification.UserID, notification.Title, notification.Body, notification.URL)
 	}
 }

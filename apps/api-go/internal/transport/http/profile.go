@@ -1,8 +1,10 @@
 package httptransport
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	profileapp "github.com/mackings/histora/apps/api-go/internal/app/profile"
@@ -12,10 +14,18 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-type ProfileHandler struct{ service *profileapp.Service }
+type PushNotifier interface {
+	SendPushNotification(rctx context.Context, userID string, title string, body string, path string)
+}
 
-func NewProfileHandler(service *profileapp.Service) *ProfileHandler {
-	return &ProfileHandler{service: service}
+type ProfileHandler struct {
+	service  *profileapp.Service
+	events   EventPublisher
+	notifier PushNotifier
+}
+
+func NewProfileHandler(service *profileapp.Service, events EventPublisher, notifier PushNotifier) *ProfileHandler {
+	return &ProfileHandler{service: service, events: events, notifier: notifier}
 }
 
 func (h *ProfileHandler) Me(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +59,44 @@ func (h *ProfileHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, http.StatusOK, result)
+}
+
+func (h *ProfileHandler) publishFollowUpdated(r *http.Request, result profileapp.FollowResult) {
+	if h.events == nil {
+		return
+	}
+	followPayload := map[string]any{
+		"kind":      "follow.updated",
+		"username":  result.Username,
+		"active":    result.Active,
+		"following": result.Following,
+	}
+	if result.FollowerUserID != "" {
+		h.events.Publish(r.Context(), "user:"+result.FollowerUserID, followPayload)
+	}
+	if !result.Active || result.TargetUserID == "" || result.FollowerUserID == result.TargetUserID {
+		return
+	}
+	body := strings.TrimSpace(result.FollowerName)
+	if body == "" {
+		body = "Someone"
+	}
+	if result.FollowerHandle != "" {
+		body += " (@" + result.FollowerHandle + ")"
+	}
+	body += " followed your archive."
+	notificationPayload := map[string]any{
+		"kind":     "notification.followed",
+		"username": result.FollowerHandle,
+		"fullName": result.FollowerName,
+		"title":    "New follower",
+		"body":     body,
+		"url":      "/profile/network",
+	}
+	h.events.Publish(r.Context(), "user:"+result.TargetUserID, notificationPayload)
+	if h.notifier != nil {
+		go h.notifier.SendPushNotification(context.Background(), result.TargetUserID, "New follower", body, "/profile/network")
+	}
 }
 
 func (h *ProfileHandler) Sessions(w http.ResponseWriter, r *http.Request) {
@@ -99,6 +147,7 @@ func (h *ProfileHandler) ToggleFollow(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	h.publishFollowUpdated(r, result)
 	response.JSON(w, http.StatusOK, result)
 }
 
@@ -352,5 +401,6 @@ func (h *ProfileHandler) ToggleStoryAuthorFollow(w http.ResponseWriter, r *http.
 		response.Error(w, err)
 		return
 	}
+	h.publishFollowUpdated(r, result)
 	response.JSON(w, http.StatusOK, result)
 }

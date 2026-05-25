@@ -28,11 +28,19 @@ type Response struct {
 	ID               string `json:"id"`
 	TargetType       string `json:"targetType"`
 	TargetID         string `json:"targetId"`
+	AuthorID         string `json:"authorId"`
 	AuthorName       string `json:"authorName"`
 	AuthorUsername   string `json:"authorUsername"`
 	Body             string `json:"body"`
 	ReplyToCommentID string `json:"replyToCommentId,omitempty"`
 	CreatedAt        any    `json:"createdAt"`
+}
+
+type Notification struct {
+	UserID string
+	Title  string
+	Body   string
+	URL    string
 }
 
 func NewService(cfg config.Config, repo *Repository) *Service {
@@ -121,6 +129,30 @@ func (s *Service) RealtimeChannels(ctx context.Context, comment Response) []stri
 	}
 }
 
+func (s *Service) NotificationTarget(ctx context.Context, comment Response) *Notification {
+	switch comment.TargetType {
+	case "storyChapter":
+		story, err := s.repo.StoryAudience(ctx, comment.TargetID)
+		if err != nil || story == nil || story.AuthorID.IsZero() || story.AuthorID.Hex() == comment.AuthorID {
+			return nil
+		}
+		if story.Status != "published" {
+			return nil
+		}
+		body := comment.AuthorName + " (@" + comment.AuthorUsername + ") commented on your story."
+		return &Notification{UserID: story.AuthorID.Hex(), Title: "New story comment", Body: body, URL: "/feed/story/" + story.Slug}
+	case "status":
+		status, err := s.repo.StatusAudience(ctx, comment.TargetID)
+		if err != nil || status == nil || status.AuthorID.IsZero() || status.AuthorID.Hex() == comment.AuthorID {
+			return nil
+		}
+		body := comment.AuthorName + " (@" + comment.AuthorUsername + ") commented on your status."
+		return &Notification{UserID: status.AuthorID.Hex(), Title: "New status comment", Body: body, URL: "/feed"}
+	default:
+		return nil
+	}
+}
+
 func (s *Service) assertTarget(ctx context.Context, targetType string, targetID string) error {
 	var ok bool
 	var err error
@@ -162,6 +194,7 @@ func (s *Service) toResponse(comment commentdomain.Comment, anonymous bool) (Res
 		ID:               comment.ID.Hex(),
 		TargetType:       comment.TargetType,
 		TargetID:         comment.TargetID,
+		AuthorID:         comment.AuthorID.Hex(),
 		AuthorName:       authorName,
 		AuthorUsername:   authorUsername,
 		Body:             body,

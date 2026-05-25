@@ -23,11 +23,14 @@ type StoryAudience struct {
 	ID         bson.ObjectID `bson:"_id"`
 	Status     string        `bson:"status"`
 	Visibility string        `bson:"visibility"`
+	AuthorID   bson.ObjectID `bson:"authorId"`
+	Slug       string        `bson:"slug"`
 }
 
 type StatusAudience struct {
 	ID         bson.ObjectID `bson:"_id"`
 	Visibility string        `bson:"visibility"`
+	AuthorID   bson.ObjectID `bson:"authorId"`
 }
 
 func NewRepository(db *mongo.Database) *Repository {
@@ -97,7 +100,7 @@ func (r *Repository) StoryAudience(ctx context.Context, targetID string) (*Story
 	err := r.stories.FindOne(
 		ctx,
 		bson.M{"_id": storyID},
-		options.FindOne().SetProjection(bson.M{"status": 1, "visibility": 1}),
+		options.FindOne().SetProjection(bson.M{"status": 1, "visibility": 1, "authorId": 1, "slug": 1}),
 	).Decode(&story)
 	if err == mongo.ErrNoDocuments {
 		return nil, nil
@@ -129,7 +132,7 @@ func (r *Repository) StatusAudience(ctx context.Context, statusID string) (*Stat
 	err = r.statuses.FindOne(
 		ctx,
 		bson.M{"_id": id},
-		options.FindOne().SetProjection(bson.M{"visibility": 1}),
+		options.FindOne().SetProjection(bson.M{"visibility": 1, "authorId": 1}),
 	).Decode(&status)
 	if err == mongo.ErrNoDocuments {
 		return nil, nil

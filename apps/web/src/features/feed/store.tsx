@@ -57,6 +57,9 @@ type RealtimeEventMessage =
             kind: "notification.followed";
             username: string;
             fullName: string;
+            body?: string;
+            title?: string;
+            url?: string;
           }
         | {
             kind: "notification.status.reacted";
@@ -455,11 +458,12 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
 
   if (payload.kind === "notification.followed") {
     if (typeof window !== "undefined") {
-      const body = `${payload.fullName} (@${payload.username}) followed your archive.`;
+      const body = payload.body ?? `${payload.fullName} (@${payload.username}) followed your archive.`;
+      const title = payload.title ?? "New follower";
       window.dispatchEvent(
         new CustomEvent("histora-live-notification", {
           detail: {
-            title: "New follower",
+            title,
             body
           }
         })
@@ -467,7 +471,7 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
 
       if ("Notification" in window && Notification.permission === "granted") {
         void Promise.resolve().then(() => {
-          new Notification("New follower", { body });
+          new Notification(title, { body });
         });
       }
     }

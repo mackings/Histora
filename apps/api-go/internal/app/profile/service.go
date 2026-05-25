@@ -4,10 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/mackings/histora/apps/api-go/internal/config"
 	storydomain "github.com/mackings/histora/apps/api-go/internal/domain/story"
 	"github.com/mackings/histora/apps/api-go/internal/domain/user"
@@ -66,6 +70,18 @@ type PushSubscriptionInput struct {
 
 type PushSubscriptionDeleteInput struct {
 	Endpoint string `json:"endpoint"`
+}
+
+type FollowResult struct {
+	Username       string `json:"username"`
+	Active         bool   `json:"active"`
+	Following      bool   `json:"following"`
+	FollowerUserID string `json:"followerUserId"`
+	FollowerName   string `json:"followerName"`
+	FollowerHandle string `json:"followerUsername"`
+	TargetUserID   string `json:"targetUserId"`
+	TargetName     string `json:"targetName"`
+	TargetUsername string `json:"targetUsername"`
 }
 
 type storyTextContent struct {
@@ -244,37 +260,25 @@ func (s *Service) PushPublicKey() map[string]any {
 	return map[string]any{"publicKey": s.cfg.VAPIDPublicKey}
 }
 
-func (s *Service) ToggleFollow(ctx context.Context, followerID bson.ObjectID, username string) (map[string]any, error) {
+func (s *Service) ToggleFollow(ctx context.Context, followerID bson.ObjectID, username string) (FollowResult, error) {
 	target := user.User{}
 	err := s.db.Collection("users").FindOne(ctx, bson.M{"username": username}).Decode(&target)
 	if err == mongo.ErrNoDocuments {
-		return nil, apperror.NotFound("User not found")
+		return FollowResult{}, apperror.NotFound("User not found")
 	}
 	if err != nil {
-		return nil, err
+		return FollowResult{}, err
 	}
 	if target.ID == followerID {
-		return nil, apperror.BadRequest("You cannot follow yourself.")
+		return FollowResult{}, apperror.BadRequest("You cannot follow yourself.")
 	}
-	filter := bson.M{"followerUserId": followerID, "followeeUserId": target.ID}
-	count, err := s.db.Collection("follows").CountDocuments(ctx, filter)
-	if err != nil {
-		return nil, err
-	}
-	following := false
-	if count > 0 {
-		_, err = s.db.Collection("follows").DeleteOne(ctx, filter)
-	} else {
-		_, err = s.db.Collection("follows").InsertOne(ctx, bson.M{"followerUserId": followerID, "followeeUserId": target.ID, "createdAt": time.Now(), "updatedAt": time.Now()})
-		following = true
-	}
-	return map[string]any{"username": username, "active": following, "following": following}, err
+	return s.toggleFollowTargetWithUser(ctx, followerID, target)
 }
 
-func (s *Service) ToggleStoryAuthorFollow(ctx context.Context, followerID bson.ObjectID, storyID bson.ObjectID) (map[string]any, error) {
+func (s *Service) ToggleStoryAuthorFollow(ctx context.Context, followerID bson.ObjectID, storyID bson.ObjectID) (FollowResult, error) {
 	var story storydomain.Story
 	if err := s.db.Collection("stories").FindOne(ctx, bson.M{"_id": storyID}).Decode(&story); err != nil {
-		return nil, apperror.NotFound("Story not found")
+		return FollowResult{}, apperror.NotFound("Story not found")
 	}
 	return s.toggleFollowTarget(ctx, followerID, story.AuthorID)
 }
@@ -561,18 +565,26 @@ func (s *Service) Following(ctx context.Context, userID bson.ObjectID) ([]map[st
 	return s.relationships(ctx, bson.M{"followerUserId": userID}, "followeeUserId", userID)
 }
 
-func (s *Service) toggleFollowTarget(ctx context.Context, followerID, targetID bson.ObjectID) (map[string]any, error) {
+func (s *Service) toggleFollowTarget(ctx context.Context, followerID, targetID bson.ObjectID) (FollowResult, error) {
 	var target user.User
 	if err := s.db.Collection("users").FindOne(ctx, bson.M{"_id": targetID}).Decode(&target); err != nil {
-		return nil, apperror.NotFound("User not found")
+		return FollowResult{}, apperror.NotFound("User not found")
 	}
+	return s.toggleFollowTargetWithUser(ctx, followerID, target)
+}
+
+func (s *Service) toggleFollowTargetWithUser(ctx context.Context, followerID bson.ObjectID, target user.User) (FollowResult, error) {
 	if target.ID == followerID {
-		return nil, apperror.BadRequest("You cannot follow yourself")
+		return FollowResult{}, apperror.BadRequest("You cannot follow yourself")
+	}
+	var follower user.User
+	if err := s.db.Collection("users").FindOne(ctx, bson.M{"_id": followerID}).Decode(&follower); err != nil {
+		return FollowResult{}, apperror.NotFound("User not found")
 	}
 	filter := bson.M{"followerUserId": followerID, "followeeUserId": target.ID}
 	count, err := s.db.Collection("follows").CountDocuments(ctx, filter)
 	if err != nil {
-		return nil, err
+		return FollowResult{}, err
 	}
 	active := false
 	if count > 0 {
@@ -581,7 +593,80 @@ func (s *Service) toggleFollowTarget(ctx context.Context, followerID, targetID b
 		_, err = s.db.Collection("follows").InsertOne(ctx, bson.M{"followerUserId": followerID, "followeeUserId": target.ID, "createdAt": time.Now(), "updatedAt": time.Now()})
 		active = true
 	}
-	return map[string]any{"username": target.Username, "active": active, "following": active}, err
+	if err != nil {
+		return FollowResult{}, err
+	}
+	return FollowResult{
+		Username:       target.Username,
+		Active:         active,
+		Following:      active,
+		FollowerUserID: follower.ID.Hex(),
+		FollowerName:   follower.FullName,
+		FollowerHandle: follower.Username,
+		TargetUserID:   target.ID.Hex(),
+		TargetName:     target.FullName,
+		TargetUsername: target.Username,
+	}, nil
+}
+
+func (s *Service) SendPushNotification(ctx context.Context, userID string, title string, body string, path string) {
+	if s.cfg.VAPIDPublicKey == "" || s.cfg.VAPIDPrivateKey == "" {
+		return
+	}
+	recipientID, err := bson.ObjectIDFromHex(strings.TrimSpace(userID))
+	if err != nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"title": title,
+		"body":  body,
+		"tag":   "histora-alert",
+		"data":  map[string]string{"url": first(path, "/")},
+	})
+	if err != nil {
+		return
+	}
+	cur, err := s.db.Collection("pushsubscriptions").Find(ctx, bson.M{"userId": recipientID, "revokedAt": nil})
+	if err != nil {
+		return
+	}
+	defer cur.Close(ctx)
+	var rows []bson.M
+	if err := cur.All(ctx, &rows); err != nil {
+		return
+	}
+	for _, row := range rows {
+		endpoint := fallbackString(row["endpoint"], "")
+		p256dh := fallbackString(row["p256dh"], "")
+		auth := fallbackString(row["auth"], "")
+		if endpoint == "" || p256dh == "" || auth == "" {
+			continue
+		}
+		subscription := &webpush.Subscription{
+			Endpoint: endpoint,
+			Keys: webpush.Keys{
+				P256dh: p256dh,
+				Auth:   auth,
+			},
+		}
+		pushCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		response, err := webpush.SendNotificationWithContext(pushCtx, payload, subscription, &webpush.Options{
+			Subscriber:      first(s.cfg.VAPIDSubject, "mailto:security@histora.app"),
+			VAPIDPublicKey:  s.cfg.VAPIDPublicKey,
+			VAPIDPrivateKey: s.cfg.VAPIDPrivateKey,
+			TTL:             60,
+		})
+		cancel()
+		if response != nil {
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusGone || response.StatusCode == http.StatusNotFound {
+				_, _ = s.db.Collection("pushsubscriptions").UpdateOne(ctx, bson.M{"endpoint": endpoint}, bson.M{"$set": bson.M{"revokedAt": time.Now(), "updatedAt": time.Now()}})
+			}
+		}
+		if err != nil && errors.Is(err, context.Canceled) {
+			return
+		}
+	}
 }
 
 func (s *Service) user(ctx context.Context, id bson.ObjectID) (*user.User, error) {
