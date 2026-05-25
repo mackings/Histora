@@ -40,6 +40,68 @@ type StatusImageSelection = {
   objectUrl: string | null;
 };
 
+const isOwnedStorageObjectKey = (value?: string | null): value is string =>
+  typeof value === "string" && /^users\/[^/]+\/.+/.test(value);
+
+const getRenderableMediaUrl = (value?: string | null) =>
+  value && !isOwnedStorageObjectKey(value) ? value : null;
+
+function FeedCardImage({ post, index }: { post: FeedStoryRecord; index: number }) {
+  const primaryMedia = post.coverImageUrl || post.chapters[0]?.images[0]?.src || null;
+  const imageSrc = getRenderableMediaUrl(post.coverImageUrl) ?? getRenderableMediaUrl(post.chapters[0]?.images[0]?.src);
+
+  if (imageSrc) {
+    return (
+      <img
+        alt={post.title}
+        className="post-image"
+        decoding="async"
+        fetchPriority={index === 0 ? "high" : "auto"}
+        loading={index < 2 ? "eager" : "lazy"}
+        src={imageSrc}
+      />
+    );
+  }
+
+  if (primaryMedia) {
+    return <div aria-label={`${post.title} image loading`} className="feed-media-skeleton" role="img" />;
+  }
+
+  return <img alt={post.title} className="post-image" decoding="async" loading="lazy" src={feedStory} />;
+}
+
+function StatusAvatarMedia({ entry, fallback = "S" }: { entry?: StatusEntry | null; fallback?: string }) {
+  const imageSrc = getRenderableMediaUrl(entry?.imageUrl);
+
+  if (imageSrc) {
+    return <img alt="" className="status-avatar-image" src={imageSrc} />;
+  }
+
+  if (entry?.imageUrl) {
+    return <span aria-hidden="true" className="status-avatar-image status-avatar-skeleton" />;
+  }
+
+  return <span className="status-avatar">{entry ? getStatusAvatarLabel(entry, fallback) : fallback}</span>;
+}
+
+function StatusStageMedia({ entry }: { entry: StatusEntry }) {
+  const imageSrc = getRenderableMediaUrl(entry.imageUrl);
+
+  if (imageSrc) {
+    return (
+      <div className="status-stage-image-frame">
+        <img alt="" className="status-stage-image" src={imageSrc} />
+      </div>
+    );
+  }
+
+  if (entry.imageUrl) {
+    return <div aria-label="Status image loading" className="status-stage-image-frame status-stage-image-skeleton" role="img" />;
+  }
+
+  return null;
+}
+
 type RealtimeEventMessage =
   | {
       type: "event";
@@ -556,11 +618,7 @@ function StoryCirclesRow({
             <button className={`status-bubble my-status-bubble ${myStatusBubble ? "" : "status-bubble-empty"}`} onClick={openMyStatus} type="button">
               <span className="status-ring-shell">
                 <span className={`status-ring ${myStatusBubble ? `tone-${myStatusBubble.primaryEntry.tone}` : "tone-blue"} my-status-ring`}>
-                  {myStatusBubble?.primaryEntry.imageUrl ? (
-                    <img alt="" className="status-avatar-image" src={myStatusBubble.primaryEntry.imageUrl} />
-                  ) : (
-                    <span className="status-avatar">{myStatusBubble?.primaryEntry ? getStatusAvatarLabel(myStatusBubble.primaryEntry, "Y") : "Y"}</span>
-                  )}
+                  <StatusAvatarMedia entry={myStatusBubble?.primaryEntry} fallback="Y" />
                 </span>
                 {myStatusBubble && myStatusBubble.count > 1 ? <span className="status-bubble-count">{myStatusBubble.count}</span> : null}
               </span>
@@ -586,11 +644,7 @@ function StoryCirclesRow({
             <button className={`status-bubble ${isSeen ? "status-bubble-seen" : ""}`} key={group.key} onClick={() => openStory(circle.id)} type="button">
               <span className="status-ring-shell">
                 <span className={`status-ring tone-${circle.tone}`}>
-                  {circle.imageUrl ? (
-                    <img alt="" className="status-avatar-image" src={circle.imageUrl} />
-                  ) : (
-                    <span className="status-avatar">{getStatusAvatarLabel(circle)}</span>
-                  )}
+                  <StatusAvatarMedia entry={circle} />
                 </span>
                 {group.count > 1 ? <span className="status-bubble-count">{group.count}</span> : null}
               </span>
@@ -681,11 +735,7 @@ function StoryCirclesRow({
             <div className="story-viewer-top">
               <div className="story-viewer-author">
                 <span className={`status-ring tone-${activeStatus.tone}`}>
-                  {activeStatus.imageUrl ? (
-                    <img alt="" className="status-avatar-image" src={activeStatus.imageUrl} />
-                  ) : (
-                    <span className="status-avatar">{getStatusAvatarLabel(activeStatus)}</span>
-                  )}
+                  <StatusAvatarMedia entry={activeStatus} />
                 </span>
                 <div>
                   <strong>
@@ -718,11 +768,7 @@ function StoryCirclesRow({
               onPointerUp={handleStatusStagePointerUp}
             >
               <div className="story-stage-card">
-                {activeStatus.imageUrl ? (
-                  <div className="status-stage-image-frame">
-                    <img alt="" className="status-stage-image" src={activeStatus.imageUrl} />
-                  </div>
-                ) : null}
+                <StatusStageMedia entry={activeStatus} />
                 {activeStatus.contentBody ? <p>{activeStatus.contentBody}</p> : null}
                 <div className="story-react-row">
                   {["❤️", "👏", "🔥", "😭"].map((emoji) => (
@@ -1196,7 +1242,7 @@ export function FeedPage({
                   <span className="story-tag">{getStoryAudienceLabel(post.visibility)}</span>
                 </div>
                 <div className="image-frame">
-                  <img alt={post.title} className="post-image" decoding="async" fetchPriority={index === 0 ? "high" : "auto"} loading={index < 2 ? "eager" : "lazy"} src={post.coverImageUrl || post.chapters[0]?.images[0]?.src || feedStory} />
+                  <FeedCardImage post={post} index={index} />
                 </div>
                 <div className="post-body">
                   <div className="post-meta-row">

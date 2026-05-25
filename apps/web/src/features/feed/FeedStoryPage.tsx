@@ -60,6 +60,29 @@ const bumpStorySaveCount = (value: string, delta: number) =>
 const isOwnedStorageObjectKey = (value?: string | null): value is string =>
   typeof value === "string" && /^users\/[^/]+\/.+/.test(value);
 
+const getRenderableMediaUrl = (value?: string | null) =>
+  value && !isOwnedStorageObjectKey(value) ? value : null;
+
+function StoryReaderImage({ image }: { image: { alt: string; src: string } }) {
+  const imageSrc = getRenderableMediaUrl(image.src);
+
+  if (imageSrc) {
+    return <img alt={image.alt} className="post-image story-reader-image" decoding="async" loading="lazy" src={imageSrc} />;
+  }
+
+  return <div aria-label={`${image.alt} image loading`} className="story-reader-image story-reader-media-skeleton" role="img" />;
+}
+
+function StoryReaderVoiceNote({ voice }: { voice: { name: string; detail: string; src: string } }) {
+  const voiceSrc = getRenderableMediaUrl(voice.src);
+
+  if (voiceSrc) {
+    return <audio className="voice-note-player" controls preload="metadata" src={voiceSrc} />;
+  }
+
+  return <div aria-label={`${voice.name} loading`} className="voice-note-player voice-note-player-skeleton" role="img" />;
+}
+
 async function resolveStoryMediaUrl(accessToken: string, storyId: string, value?: string | null) {
   if (!isOwnedStorageObjectKey(value)) {
     return value ?? null;
@@ -887,7 +910,7 @@ export function FeedStoryPage({
                     <div className="feed-reader-media-grid">
                       {activeChapter.images.map((image, index) => (
                         <figure className="feed-reader-media-frame" key={image.alt}>
-                          <img alt={image.alt} className="post-image story-reader-image" decoding="async" loading="lazy" src={image.src} />
+                          <StoryReaderImage image={image} />
                           <figcaption>{`Attachment ${index + 1} // ${image.alt}`}</figcaption>
                         </figure>
                       ))}
@@ -911,7 +934,7 @@ export function FeedStoryPage({
                             <strong>{voice.name}</strong>
                             <span>{voice.detail}</span>
                           </div>
-                          <audio className="voice-note-player" controls preload="metadata" src={voice.src} />
+                          <StoryReaderVoiceNote voice={voice} />
                         </article>
                       ))}
                     </div>

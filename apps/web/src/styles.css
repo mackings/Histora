@@ -652,6 +652,10 @@ textarea {
   border: 3px solid #fff;
 }
 
+.status-avatar-skeleton {
+  display: block;
+}
+
 .status-avatar,
 .post-avatar {
   width: 42px;
@@ -816,6 +820,21 @@ textarea {
 }
 
 .feed-column .post-image {
+  aspect-ratio: 16 / 7.4;
+}
+
+.feed-media-skeleton,
+.story-reader-media-skeleton,
+.status-stage-image-skeleton,
+.voice-note-player-skeleton,
+.status-avatar-skeleton {
+  background: linear-gradient(90deg, rgba(226, 235, 255, 0.78) 0%, rgba(255, 255, 255, 0.95) 45%, rgba(226, 235, 255, 0.78) 100%);
+  background-size: 220% 100%;
+  animation: media-skeleton-shimmer 1.3s ease-in-out infinite;
+}
+
+.feed-media-skeleton {
+  width: 100%;
   aspect-ratio: 16 / 7.4;
 }
 
@@ -1534,6 +1553,10 @@ textarea {
   border-radius: 16px;
 }
 
+.story-reader-media-skeleton {
+  width: 100%;
+}
+
 .feed-reader-media-frame figcaption,
 .feed-reader-support-card span,
 .feed-reader-support-card p,
@@ -1584,6 +1607,11 @@ textarea {
 .voice-note-player {
   width: 100%;
   min-width: min(320px, 100%);
+}
+
+.voice-note-player-skeleton {
+  min-height: 54px;
+  border-radius: 999px;
 }
 
 .chapter-thread-footer {
@@ -3496,6 +3524,10 @@ textarea {
   inset: 0;
   z-index: -1;
   pointer-events: none;
+}
+
+.status-stage-image-skeleton {
+  z-index: -1;
 }
 
 .status-stage-image {
