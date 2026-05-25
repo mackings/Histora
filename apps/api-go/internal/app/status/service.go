@@ -128,15 +128,19 @@ func (s *Service) ByShareSlug(ctx context.Context, slug string) (Response, error
 	return s.serialize(*status)
 }
 
-func (s *Service) Delete(ctx context.Context, statusID bson.ObjectID, userID bson.ObjectID) error {
+func (s *Service) Delete(ctx context.Context, statusID bson.ObjectID, userID bson.ObjectID) (Response, error) {
 	status, err := s.repo.FindByID(ctx, statusID)
 	if err != nil {
-		return err
+		return Response{}, err
 	}
 	if status == nil || status.AuthorID != userID {
-		return apperror.NotFound("Status not found")
+		return Response{}, apperror.NotFound("Status not found")
 	}
-	return s.repo.DeleteOwned(ctx, statusID, userID)
+	response, err := s.serialize(*status)
+	if err != nil {
+		return Response{}, err
+	}
+	return response, s.repo.DeleteOwned(ctx, statusID, userID)
 }
 
 func (s *Service) ToggleReaction(ctx context.Context, statusID bson.ObjectID, userID bson.ObjectID, action string) (map[string]any, error) {
@@ -154,7 +158,14 @@ func (s *Service) ToggleReaction(ctx context.Context, statusID bson.ObjectID, us
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"statusId": statusID.Hex(), "action": action, "active": active, "likesCount": likes, "bookmarksCount": bookmarks}, nil
+	return map[string]any{
+		"statusId":       statusID.Hex(),
+		"action":         action,
+		"active":         active,
+		"likesCount":     likes,
+		"bookmarksCount": bookmarks,
+		"visibility":     status.Visibility,
+	}, nil
 }
 
 func (s *Service) serializeMany(statuses []statusdomain.Status) ([]Response, error) {

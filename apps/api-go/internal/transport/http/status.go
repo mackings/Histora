@@ -14,10 +14,11 @@ import (
 
 type StatusHandler struct {
 	service *statusapp.Service
+	events  EventPublisher
 }
 
-func NewStatusHandler(service *statusapp.Service) *StatusHandler {
-	return &StatusHandler{service: service}
+func NewStatusHandler(service *statusapp.Service, events EventPublisher) *StatusHandler {
+	return &StatusHandler{service: service, events: events}
 }
 
 func (h *StatusHandler) Feed(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +73,7 @@ func (h *StatusHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	h.publishStatusCreated(r, authUser.ID.Hex(), status)
 	response.JSON(w, http.StatusCreated, status)
 }
 
@@ -86,10 +88,12 @@ func (h *StatusHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, apperror.NotFound("Status not found"))
 		return
 	}
-	if err := h.service.Delete(r.Context(), statusID, authUser.ID); err != nil {
+	status, err := h.service.Delete(r.Context(), statusID, authUser.ID)
+	if err != nil {
 		response.Error(w, err)
 		return
 	}
+	h.publishStatusDeleted(r, authUser.ID.Hex(), status)
 	response.JSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -116,5 +120,54 @@ func (h *StatusHandler) ToggleReaction(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	h.publishStatusReaction(r, authUser.ID.Hex(), result)
 	response.JSON(w, http.StatusOK, result)
+}
+
+func (h *StatusHandler) publishStatusCreated(r *http.Request, userID string, status statusapp.Response) {
+	if h.events == nil {
+		return
+	}
+	payload := map[string]any{"kind": "status.created", "status": status}
+	h.events.Publish(r.Context(), "user:"+userID, payload)
+	if status.Visibility == "public" {
+		h.events.Publish(r.Context(), "feed", payload)
+	}
+	if status.Visibility == "public" && status.Anonymous && status.ShareSlug != nil {
+		h.events.Publish(r.Context(), "anonymous:public", map[string]any{
+			"kind": "anonymous.public.created",
+			"message": map[string]any{
+				"id":            status.ID,
+				"shareSlug":     status.ShareSlug,
+				"body":          status.Body,
+				"commentsCount": status.CommentsCount,
+				"createdAt":     status.CreatedAt,
+			},
+		})
+	}
+}
+
+func (h *StatusHandler) publishStatusDeleted(r *http.Request, userID string, status statusapp.Response) {
+	if h.events == nil {
+		return
+	}
+	payload := map[string]any{"kind": "status.deleted", "statusId": status.ID}
+	h.events.Publish(r.Context(), "user:"+userID, payload)
+	if status.Visibility == "public" {
+		h.events.Publish(r.Context(), "feed", payload)
+	}
+}
+
+func (h *StatusHandler) publishStatusReaction(r *http.Request, userID string, result map[string]any) {
+	if h.events == nil {
+		return
+	}
+	payload := map[string]any{"kind": "status.reaction.updated"}
+	for key, value := range result {
+		payload[key] = value
+	}
+	if result["visibility"] == "public" {
+		h.events.Publish(r.Context(), "feed", payload)
+	}
+	h.events.Publish(r.Context(), "user:"+userID, payload)
 }

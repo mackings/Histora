@@ -66,6 +66,7 @@ func main() {
 	jobs.NewQueue(redisClients.Command).RunCounterWorker(ctx, counterReconciler.Reconcile)
 
 	authService := authapp.NewService(cfg, authapp.NewRepository(mongoStore.DB))
+	eventsHub := realtime.NewHub(cfg, authService, redisClients.Command, redisClients.Subscribe, mongoStore.DB)
 	router := httptransport.NewRouter(httptransport.Deps{
 		Config:               cfg,
 		AuthService:          authService,
@@ -76,7 +77,8 @@ func main() {
 		ProfileService:       profileapp.NewService(cfg, mongoStore.DB),
 		AnonymousService:     anonymousapp.NewService(cfg, mongoStore.DB),
 		TranscriptionService: transcriptionapp.NewService(cfg),
-		EventsHandler:        realtime.NewHub(cfg, authService, redisClients.Command, redisClients.Subscribe, mongoStore.DB),
+		EventsHandler:        eventsHub,
+		EventsPublisher:      eventsHub,
 		TranscriptionRelay:   realtime.NewTranscriptionRelay(cfg, authService),
 		Health: health.Service{
 			Mongo: mongoStore.Client,

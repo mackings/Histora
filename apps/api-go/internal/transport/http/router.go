@@ -1,6 +1,7 @@
 package httptransport
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -31,7 +32,12 @@ type Deps struct {
 	AnonymousService     *anonymousapp.Service
 	TranscriptionService *transcriptionapp.Service
 	EventsHandler        http.Handler
+	EventsPublisher      EventPublisher
 	TranscriptionRelay   http.Handler
+}
+
+type EventPublisher interface {
+	Publish(context.Context, string, any)
 }
 
 func NewRouter(deps Deps) http.Handler {
@@ -64,9 +70,9 @@ func NewRouter(deps Deps) http.Handler {
 	}
 
 	authHandler := NewAuthHandler(deps.Config, deps.AuthService)
-	storyHandler := NewStoryHandler(deps.StoryService)
+	storyHandler := NewStoryHandler(deps.StoryService, deps.EventsPublisher)
 	commentHandler := NewCommentHandler(deps.CommentService)
-	statusHandler := NewStatusHandler(deps.StatusService)
+	statusHandler := NewStatusHandler(deps.StatusService, deps.EventsPublisher)
 	mediaHandler := NewMediaHandler(deps.MediaService)
 	profileHandler := NewProfileHandler(deps.ProfileService)
 	anonymousHandler := NewAnonymousHandler(deps.AnonymousService)

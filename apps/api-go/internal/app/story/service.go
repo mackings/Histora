@@ -91,6 +91,7 @@ type SerializedStory struct {
 	Anonymous             bool                       `json:"anonymous"`
 	AuthorName            string                     `json:"authorName"`
 	AuthorUsername        string                     `json:"authorUsername"`
+	AuthorID              string                     `json:"-"`
 	IsOwner               bool                       `json:"isOwner"`
 	CanEdit               bool                       `json:"canEdit"`
 	Collaborative         bool                       `json:"collaborative"`
@@ -109,6 +110,8 @@ type SerializedStory struct {
 	BookmarksCount        int64                      `json:"bookmarksCount"`
 	SharesCount           int64                      `json:"sharesCount"`
 	CommentsCount         int64                      `json:"commentsCount"`
+	ChapterCount          int                        `json:"chapterCount"`
+	CommentCount          int64                      `json:"commentCount"`
 	Liked                 bool                       `json:"liked"`
 	Bookmarked            bool                       `json:"bookmarked"`
 	Chapters              []SerializedChapter        `json:"chapters"`
@@ -179,7 +182,7 @@ func (s *Service) Save(ctx context.Context, authorID bson.ObjectID, input SaveIn
 		if existing == nil {
 			return SerializedStory{}, apperror.NotFound("Story not found")
 		}
-		if input.ExpectedRevision != nil && *input.ExpectedRevision != existing.CollaborationRevision {
+		if input.ExpectedRevision != nil && isCollaborativeStory(*existing) && *input.ExpectedRevision != existing.CollaborationRevision {
 			return SerializedStory{}, apperror.Conflict(
 				"A newer collaborative version is available. Load the latest version before saving again.",
 				"STORY_REVISION_CONFLICT",
@@ -342,6 +345,8 @@ type ReactionResult struct {
 	LikesCount     int64  `json:"likesCount"`
 	BookmarksCount int64  `json:"bookmarksCount"`
 	ReactionsCount int64  `json:"reactionsCount"`
+	Status         string `json:"status"`
+	Visibility     string `json:"visibility"`
 }
 
 func (s *Service) ToggleReaction(ctx context.Context, storyID bson.ObjectID, userID bson.ObjectID, action string) (ReactionResult, error) {
@@ -365,7 +370,16 @@ func (s *Service) ToggleReaction(ctx context.Context, storyID bson.ObjectID, use
 	if err != nil {
 		return ReactionResult{}, err
 	}
-	return ReactionResult{StoryID: storyID.Hex(), Action: action, Active: active, LikesCount: likes, BookmarksCount: bookmarks, ReactionsCount: likes + bookmarks}, nil
+	return ReactionResult{
+		StoryID:        storyID.Hex(),
+		Action:         action,
+		Active:         active,
+		LikesCount:     likes,
+		BookmarksCount: bookmarks,
+		ReactionsCount: likes + bookmarks,
+		Status:         story.Status,
+		Visibility:     story.Visibility,
+	}, nil
 }
 
 func (s *Service) TrackShare(ctx context.Context, storyID bson.ObjectID, userID bson.ObjectID) (map[string]any, error) {
@@ -386,7 +400,12 @@ func (s *Service) TrackShare(ctx context.Context, storyID bson.ObjectID, userID 
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"storyId": storyID.Hex(), "sharesCount": count}, nil
+	return map[string]any{
+		"storyId":     storyID.Hex(),
+		"sharesCount": count,
+		"status":      story.Status,
+		"visibility":  story.Visibility,
+	}, nil
 }
 
 func (s *Service) serializeMany(stories []storydomain.Story, viewerID *bson.ObjectID) ([]SerializedStory, error) {
@@ -468,6 +487,7 @@ func (s *Service) serialize(story storydomain.Story, viewerID *bson.ObjectID) (S
 		Anonymous:             story.Anonymous,
 		AuthorName:            story.AuthorName,
 		AuthorUsername:        story.AuthorUsername,
+		AuthorID:              story.AuthorID.Hex(),
 		IsOwner:               isOwner,
 		CanEdit:               canEdit,
 		Collaborators:         story.Collaborators,
@@ -486,6 +506,8 @@ func (s *Service) serialize(story storydomain.Story, viewerID *bson.ObjectID) (S
 		BookmarksCount:        story.BookmarksCount,
 		SharesCount:           story.SharesCount,
 		CommentsCount:         story.CommentsCount,
+		ChapterCount:          len(chapters),
+		CommentCount:          story.CommentsCount,
 		Liked:                 false,
 		Bookmarked:            false,
 		Chapters:              chapters,
@@ -523,6 +545,10 @@ func canEditStory(story storydomain.Story, userID bson.ObjectID) bool {
 		}
 	}
 	return false
+}
+
+func isCollaborativeStory(story storydomain.Story) bool {
+	return len(story.Collaborators) > 0
 }
 
 func convertLinks(links []storydomain.ExternalLink) []StoryLinkContent {

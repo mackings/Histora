@@ -18,6 +18,10 @@ type RealtimeEventMessage =
       channel: string;
       payload:
         | {
+            kind: "story.created" | "story.updated";
+            story: ApiFeedStory;
+          }
+        | {
             kind: "story.reaction.updated";
             storyId: string;
             action?: "like" | "bookmark";
@@ -177,6 +181,19 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
   }
 
   const payload = message.payload;
+  if (payload.kind === "story.created" || payload.kind === "story.updated") {
+    const story = payload.story;
+    updateCachedStoryCounts(story.id, () => story);
+    updateFeedPosts((current) => {
+      if (story.status !== "published" || story.visibility !== "public") {
+        return current.filter((post) => post.id !== story.id);
+      }
+      const next = current.filter((post) => post.id !== story.id);
+      return [toFeedStoryRecord(story), ...next];
+    });
+    return;
+  }
+
   if (payload.kind === "story.reaction.updated") {
     updateCachedStoryCounts(payload.storyId, (story) => ({
       ...story,
