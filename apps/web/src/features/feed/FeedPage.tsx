@@ -64,7 +64,13 @@ function FeedCardImage({ post, index }: { post: FeedStoryRecord; index: number }
   }
 
   if (primaryMedia) {
-    return <div aria-label={`${post.title} image loading`} className="feed-media-skeleton" role="img" />;
+    return (
+      <div aria-label={`${post.title} image loading`} className="feed-media-skeleton feed-media-preview-skeleton" role="img">
+        <span className="feed-media-preview-label">{post.genre}</span>
+        <strong>{post.title}</strong>
+        <span>{post.chapterCount} chapters // {post.reads} reads</span>
+      </div>
+    );
   }
 
   return <img alt={post.title} className="post-image" decoding="async" loading="lazy" src={feedStory} />;

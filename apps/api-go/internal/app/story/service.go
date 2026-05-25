@@ -8,6 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/mackings/histora/apps/api-go/internal/config"
 	storydomain "github.com/mackings/histora/apps/api-go/internal/domain/story"
 	"github.com/mackings/histora/apps/api-go/internal/shared/apperror"
@@ -16,8 +19,9 @@ import (
 )
 
 type Service struct {
-	cfg  config.Config
-	repo *Repository
+	cfg     config.Config
+	repo    *Repository
+	presign *s3.PresignClient
 }
 
 type SaveInput struct {
@@ -156,7 +160,16 @@ type SerializedMoment struct {
 }
 
 func NewService(cfg config.Config, repo *Repository) *Service {
-	return &Service{cfg: cfg, repo: repo}
+	var presign *s3.PresignClient
+	if cfg.R2AccountID != "" && cfg.R2AccessKeyID != "" && cfg.R2SecretAccessKey != "" {
+		client := s3.New(s3.Options{
+			Region:       "auto",
+			Credentials:  aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(cfg.R2AccessKeyID, cfg.R2SecretAccessKey, "")),
+			BaseEndpoint: aws.String("https://" + cfg.R2AccountID + ".r2.cloudflarestorage.com"),
+		})
+		presign = s3.NewPresignClient(client)
+	}
+	return &Service{cfg: cfg, repo: repo, presign: presign}
 }
 
 func (s *Service) Save(ctx context.Context, authorID bson.ObjectID, input SaveInput, storyID *bson.ObjectID) (SerializedStory, error) {
@@ -261,7 +274,7 @@ func (s *Service) Save(ctx context.Context, authorID bson.ObjectID, input SaveIn
 		if err != nil {
 			return SerializedStory{}, err
 		}
-		return s.serialize(*saved, &authorID)
+		return s.serialize(ctx, *saved, &authorID)
 	}
 	stored.ID = existing.ID
 	stored.AuthorID = existing.AuthorID
@@ -282,7 +295,7 @@ func (s *Service) Save(ctx context.Context, authorID bson.ObjectID, input SaveIn
 	if err != nil {
 		return SerializedStory{}, err
 	}
-	return s.serialize(*saved, &authorID)
+	return s.serialize(ctx, *saved, &authorID)
 }
 
 func (s *Service) Feed(ctx context.Context, viewerID *bson.ObjectID) ([]SerializedStory, error) {
@@ -290,7 +303,7 @@ func (s *Service) Feed(ctx context.Context, viewerID *bson.ObjectID) ([]Serializ
 	if err != nil {
 		return nil, err
 	}
-	return s.serializeMany(stories, viewerID)
+	return s.serializeMany(ctx, stories, viewerID)
 }
 
 func (s *Service) Mine(ctx context.Context, userID bson.ObjectID) ([]SerializedStory, error) {
@@ -298,7 +311,7 @@ func (s *Service) Mine(ctx context.Context, userID bson.ObjectID) ([]SerializedS
 	if err != nil {
 		return nil, err
 	}
-	return s.serializeMany(stories, &userID)
+	return s.serializeMany(ctx, stories, &userID)
 }
 
 func (s *Service) Collaborative(ctx context.Context, userID bson.ObjectID) ([]SerializedStory, error) {
@@ -306,7 +319,7 @@ func (s *Service) Collaborative(ctx context.Context, userID bson.ObjectID) ([]Se
 	if err != nil {
 		return nil, err
 	}
-	return s.serializeMany(stories, &userID)
+	return s.serializeMany(ctx, stories, &userID)
 }
 
 func (s *Service) MineOne(ctx context.Context, storyID, userID bson.ObjectID) (SerializedStory, error) {
@@ -317,7 +330,7 @@ func (s *Service) MineOne(ctx context.Context, storyID, userID bson.ObjectID) (S
 	if story == nil {
 		return SerializedStory{}, apperror.NotFound("Story not found")
 	}
-	return s.serialize(*story, &userID)
+	return s.serialize(ctx, *story, &userID)
 }
 
 func (s *Service) PublicBySlug(ctx context.Context, slug string, viewerID *bson.ObjectID) (SerializedStory, error) {
@@ -335,7 +348,7 @@ func (s *Service) PublicBySlug(ctx context.Context, slug string, viewerID *bson.
 	}
 	s.repo.IncrementReadCount(ctx, story.ID)
 	story.ReadCount += 1
-	return s.serialize(*story, viewerID)
+	return s.serialize(ctx, *story, viewerID)
 }
 
 type ReactionResult struct {
@@ -408,10 +421,10 @@ func (s *Service) TrackShare(ctx context.Context, storyID bson.ObjectID, userID 
 	}, nil
 }
 
-func (s *Service) serializeMany(stories []storydomain.Story, viewerID *bson.ObjectID) ([]SerializedStory, error) {
+func (s *Service) serializeMany(ctx context.Context, stories []storydomain.Story, viewerID *bson.ObjectID) ([]SerializedStory, error) {
 	out := make([]SerializedStory, 0, len(stories))
 	for _, item := range stories {
-		serialized, err := s.serialize(item, viewerID)
+		serialized, err := s.serialize(ctx, item, viewerID)
 		if err != nil {
 			return nil, err
 		}
@@ -420,11 +433,13 @@ func (s *Service) serializeMany(stories []storydomain.Story, viewerID *bson.Obje
 	return out, nil
 }
 
-func (s *Service) serialize(story storydomain.Story, viewerID *bson.ObjectID) (SerializedStory, error) {
+func (s *Service) serialize(ctx context.Context, story storydomain.Story, viewerID *bson.ObjectID) (SerializedStory, error) {
 	text, err := s.resolveStoryText(story)
 	if err != nil {
 		return SerializedStory{}, err
 	}
+	coverImageKey := mediaKey(story.CoverImageURL)
+	coverImageURL := s.readableMediaURL(ctx, story.CoverImageURL)
 	chapters := make([]SerializedChapter, 0, len(story.Chapters))
 	for chapterIndex, chapter := range story.Chapters {
 		chapterText := ChapterContent{Title: chapter.Title, Body: chapter.Body}
@@ -437,6 +452,8 @@ func (s *Service) serialize(story storydomain.Story, viewerID *bson.ObjectID) (S
 			if momentIndex < len(chapterText.Moments) {
 				momentText = chapterText.Moments[momentIndex]
 			}
+			momentImageKeys := mediaKeys(moment.ImageURLs)
+			momentVoiceNoteKey := mediaKey(moment.VoiceNoteURL)
 			moments = append(moments, SerializedMoment{
 				ID:                   moment.ID,
 				Title:                momentText.Title,
@@ -448,12 +465,14 @@ func (s *Service) serialize(story storydomain.Story, viewerID *bson.ObjectID) (S
 				LastEditedByName:     moment.LastEditedByName,
 				LastEditedByUsername: moment.LastEditedByUsername,
 				LastEditedAt:         moment.LastEditedAt,
-				ImageURLs:            moment.ImageURLs,
-				ImageKeys:            mediaKeys(moment.ImageURLs),
-				VoiceNoteURL:         moment.VoiceNoteURL,
-				VoiceNoteKey:         mediaKey(moment.VoiceNoteURL),
+				ImageURLs:            s.readableMediaURLs(ctx, moment.ImageURLs),
+				ImageKeys:            momentImageKeys,
+				VoiceNoteURL:         s.readableMediaURL(ctx, moment.VoiceNoteURL),
+				VoiceNoteKey:         momentVoiceNoteKey,
 			})
 		}
+		chapterImageKeys := mediaKeys(chapter.ImageURLs)
+		chapterVoiceNoteKey := mediaKey(chapter.VoiceNoteURL)
 		chapters = append(chapters, SerializedChapter{
 			ID:                   chapter.ID,
 			Title:                chapterText.Title,
@@ -466,10 +485,10 @@ func (s *Service) serialize(story storydomain.Story, viewerID *bson.ObjectID) (S
 			LastEditedByName:     chapter.LastEditedByName,
 			LastEditedByUsername: chapter.LastEditedByUsername,
 			LastEditedAt:         chapter.LastEditedAt,
-			ImageURLs:            chapter.ImageURLs,
-			ImageKeys:            mediaKeys(chapter.ImageURLs),
-			VoiceNoteURL:         chapter.VoiceNoteURL,
-			VoiceNoteKey:         mediaKey(chapter.VoiceNoteURL),
+			ImageURLs:            s.readableMediaURLs(ctx, chapter.ImageURLs),
+			ImageKeys:            chapterImageKeys,
+			VoiceNoteURL:         s.readableMediaURL(ctx, chapter.VoiceNoteURL),
+			VoiceNoteKey:         chapterVoiceNoteKey,
 			Moments:              moments,
 		})
 	}
@@ -481,8 +500,8 @@ func (s *Service) serialize(story storydomain.Story, viewerID *bson.ObjectID) (S
 		Status:                story.Status,
 		Title:                 text.Title,
 		Summary:               text.Summary,
-		CoverImageURL:         story.CoverImageURL,
-		CoverImageKey:         mediaKey(story.CoverImageURL),
+		CoverImageURL:         coverImageURL,
+		CoverImageKey:         coverImageKey,
 		Visibility:            story.Visibility,
 		Anonymous:             story.Anonymous,
 		AuthorName:            story.AuthorName,
@@ -584,6 +603,37 @@ func mediaKey(value string) string {
 		return value
 	}
 	return value
+}
+
+func (s *Service) readableMediaURLs(ctx context.Context, values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if rendered := s.readableMediaURL(ctx, value); rendered != "" {
+			out = append(out, rendered)
+		}
+	}
+	return out
+}
+
+func (s *Service) readableMediaURL(ctx context.Context, value string) string {
+	normalized := strings.TrimSpace(value)
+	if normalized == "" || !strings.HasPrefix(normalized, "users/") {
+		return normalized
+	}
+	if s.cfg.R2PublicBaseURL != "" {
+		return strings.TrimRight(s.cfg.R2PublicBaseURL, "/") + "/" + normalized
+	}
+	if s.presign == nil || s.cfg.R2BucketName == "" {
+		return normalized
+	}
+	result, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.cfg.R2BucketName),
+		Key:    aws.String(normalized),
+	}, s3.WithPresignExpires(15*time.Minute))
+	if err != nil {
+		return normalized
+	}
+	return result.URL
 }
 
 func validateSaveInput(input SaveInput) error {

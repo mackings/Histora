@@ -838,6 +838,63 @@ textarea {
   aspect-ratio: 16 / 7.4;
 }
 
+.feed-media-preview-skeleton {
+  position: relative;
+  display: flex;
+  min-height: 190px;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 24px;
+  overflow: hidden;
+  color: #172033;
+}
+
+.feed-media-preview-skeleton::before {
+  content: "";
+  position: absolute;
+  inset: 18px 18px auto auto;
+  width: min(38%, 220px);
+  aspect-ratio: 4 / 3;
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(49, 94, 251, 0.18), rgba(255, 122, 69, 0.18)),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.7), rgba(226, 235, 255, 0.7));
+  border: 1px solid rgba(219, 231, 255, 0.9);
+  box-shadow: 0 18px 50px rgba(49, 94, 251, 0.12);
+}
+
+.feed-media-preview-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.78));
+}
+
+.feed-media-preview-skeleton > * {
+  position: relative;
+  z-index: 1;
+  max-width: min(58%, 520px);
+}
+
+.feed-media-preview-skeleton strong {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: clamp(1.25rem, 3vw, 2rem);
+  line-height: 1.05;
+}
+
+.feed-media-preview-skeleton span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.feed-media-preview-label {
+  color: var(--orange) !important;
+  font-size: 0.78rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .overlay-card,
 .metric-strip {
   padding: 14px;
