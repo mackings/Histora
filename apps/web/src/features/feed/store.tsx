@@ -255,6 +255,45 @@ async function hydrateFeedStoriesMedia(accessToken: string, stories: ApiFeedStor
   return Promise.all(stories.map((story) => hydrateFeedStoryMedia(accessToken, story)));
 }
 
+const preserveResolvedFeedPostMedia = (
+  post: FeedStoryRecord,
+  existing?: FeedStoryRecord
+): FeedStoryRecord => {
+  if (!existing) {
+    return post;
+  }
+
+  return {
+    ...post,
+    coverImageUrl:
+      isOwnedStorageObjectKey(post.coverImageUrl) && existing.coverImageUrl && !isOwnedStorageObjectKey(existing.coverImageUrl)
+        ? existing.coverImageUrl
+        : post.coverImageUrl,
+    chapters: post.chapters.map((chapter, chapterIndex) => {
+      const existingChapter = existing.chapters[chapterIndex];
+      if (!existingChapter) {
+        return chapter;
+      }
+
+      return {
+        ...chapter,
+        images: chapter.images.map((image, imageIndex) => {
+          const existingImage = existingChapter.images[imageIndex];
+          return existingImage && isOwnedStorageObjectKey(image.src) && !isOwnedStorageObjectKey(existingImage.src)
+            ? { ...image, src: existingImage.src }
+            : image;
+        }),
+        voiceNotes: chapter.voiceNotes.map((voice, voiceIndex) => {
+          const existingVoice = existingChapter.voiceNotes[voiceIndex];
+          return existingVoice && isOwnedStorageObjectKey(voice.src) && !isOwnedStorageObjectKey(existingVoice.src)
+            ? { ...voice, src: existingVoice.src }
+            : voice;
+        })
+      };
+    })
+  };
+};
+
 const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: string, accessToken: string) => {
   if (message.type !== "event") {
     return;
@@ -268,8 +307,10 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
         if (story.status !== "published" || story.visibility !== "public") {
           return current.filter((post) => post.id !== story.id);
         }
+        const nextPost = toFeedStoryRecord(story);
+        const existing = current.find((post) => post.id === story.id);
         const next = current.filter((post) => post.id !== story.id);
-        return [toFeedStoryRecord(story), ...next];
+        return [preserveResolvedFeedPostMedia(nextPost, existing), ...next];
       });
     });
     return;
@@ -500,7 +541,13 @@ async function loadFeedStore(accessToken: string, options?: { force?: boolean; s
     .then(([stories, statuses, myStatuses]) => {
       setFeedStoreState((current) => ({
         ...current,
-        feedPosts: stories.map((story) => toFeedStoryRecord(story)),
+        feedPosts: stories.map((story) => {
+          const nextPost = toFeedStoryRecord(story);
+          return preserveResolvedFeedPostMedia(
+            nextPost,
+            current.feedPosts.find((post) => post.id === nextPost.id)
+          );
+        }),
         feedStatuses: statuses,
         myStatusIds: new Set(myStatuses.map((status) => status.id)),
         hydrated: true,
@@ -519,7 +566,7 @@ async function loadFeedStore(accessToken: string, options?: { force?: boolean; s
             const existing = current.feedPosts.find((entry) => entry.id === post.id);
             return existing
               ? {
-                  ...post,
+                  ...preserveResolvedFeedPostMedia(post, existing),
                   likes: existing.likes,
                   saves: existing.saves,
                   comments: existing.comments,
