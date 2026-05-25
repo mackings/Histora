@@ -34,6 +34,10 @@ type Config struct {
 	SMTPUser              string
 	SMTPPassword          string
 	SMTPFromName          string
+	MailjetAPIKey         string
+	MailjetAPISecret      string
+	MailjetFromEmail      string
+	MailjetFromName       string
 	VAPIDPublicKey        string
 	VAPIDPrivateKey       string
 	VAPIDSubject          string
@@ -72,6 +76,10 @@ func Load() (Config, error) {
 		SMTPUser:              strings.TrimSpace(os.Getenv("SMTP_USER")),
 		SMTPPassword:          strings.TrimSpace(os.Getenv("SMTP_PASSWORD")),
 		SMTPFromName:          stringEnv("SMTP_FROM_NAME", "Histora"),
+		MailjetAPIKey:         strings.TrimSpace(os.Getenv("MAILJET_API_KEY")),
+		MailjetAPISecret:      strings.TrimSpace(os.Getenv("MAILJET_API_SECRET")),
+		MailjetFromEmail:      strings.TrimSpace(os.Getenv("MAILJET_FROM_EMAIL")),
+		MailjetFromName:       stringEnv("MAILJET_FROM_NAME", "Histora"),
 		VAPIDPublicKey:        strings.TrimSpace(os.Getenv("VAPID_PUBLIC_KEY")),
 		VAPIDPrivateKey:       strings.TrimSpace(os.Getenv("VAPID_PRIVATE_KEY")),
 		VAPIDSubject:          stringEnv("VAPID_SUBJECT", "mailto:security@histora.app"),

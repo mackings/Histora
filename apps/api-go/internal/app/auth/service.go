@@ -1,15 +1,18 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"net"
+	"net/http"
 	"net/smtp"
 	"strconv"
 	"strings"
@@ -758,6 +761,9 @@ func (s *Service) sendDeviceVerificationEmail(email, otp, deviceLabel string) er
 }
 
 func (s *Service) sendEmail(to, subject, text string, lines []string) error {
+	if s.cfg.MailjetAPIKey != "" && s.cfg.MailjetAPISecret != "" && s.cfg.MailjetFromEmail != "" {
+		return s.sendMailjetEmail(to, subject, text, lines)
+	}
 	if s.cfg.SMTPUser == "" || s.cfg.SMTPPassword == "" {
 		if s.cfg.NodeEnv == "production" {
 			return apperror.Error{Status: 500, Message: "SMTP is not configured on the server.", Code: "SMTP_NOT_CONFIGURED"}
@@ -834,6 +840,66 @@ func (s *Service) sendEmail(to, subject, text string, lines []string) error {
 		}
 	}
 	return sendSMTPMessage(client, auth, s.cfg.SMTPUser, to, []byte(message))
+}
+
+func (s *Service) sendMailjetEmail(to, subject, text string, lines []string) error {
+	htmlLines := make([]string, 0, len(lines))
+	for _, line := range lines {
+		htmlLines = append(htmlLines, "<p>"+htmlEscape(line)+"</p>")
+	}
+	body := map[string]any{
+		"Messages": []map[string]any{
+			{
+				"From": map[string]string{
+					"Email": s.cfg.MailjetFromEmail,
+					"Name":  fallbackString(s.cfg.MailjetFromName, "Histora"),
+				},
+				"To": []map[string]string{
+					{"Email": to},
+				},
+				"Subject":  subject,
+				"TextPart": text,
+				"HTMLPart": `<div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; color: #1f2937;">` + strings.Join(htmlLines, "") + "</div>",
+			},
+		},
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://api.mailjet.com/v3.1/send", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.SetBasicAuth(s.cfg.MailjetAPIKey, s.cfg.MailjetAPISecret)
+	req.Header.Set("Content-Type", "application/json")
+	client := http.Client{Timeout: 15 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		var out struct {
+			ErrorMessage string `json:"ErrorMessage"`
+			Messages     []struct {
+				Errors []struct {
+					ErrorMessage string `json:"ErrorMessage"`
+					ErrorCode    string `json:"ErrorCode"`
+				} `json:"Errors"`
+			} `json:"Messages"`
+		}
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		message := out.ErrorMessage
+		if message == "" && len(out.Messages) > 0 && len(out.Messages[0].Errors) > 0 {
+			message = out.Messages[0].Errors[0].ErrorMessage
+		}
+		if message == "" {
+			message = "Mailjet email delivery failed."
+		}
+		return apperror.Error{Status: 502, Message: message, Code: "EMAIL_DELIVERY_FAILED"}
+	}
+	return nil
 }
 
 func htmlEscape(value string) string {
