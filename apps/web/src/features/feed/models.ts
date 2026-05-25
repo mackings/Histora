@@ -104,14 +104,14 @@ export const toFeedStoryRecord = (story: ApiFeedStory): FeedStoryRecord => ({
     likes: 0,
     liked: false,
     comments: [],
-    images: chapter.imageUrls.map((src, index) => ({
+    images: (chapter.imageUrls ?? []).map((src, index) => ({
       src,
       alt: `${chapter.title} attachment ${index + 1}`
     })),
     voiceNotes: chapter.voiceNoteUrl
       ? [{ name: `Voice note ${chapter.order}`, detail: "Attached voice note", src: chapter.voiceNoteUrl }]
       : [],
-    timeline: chapter.moments.map((moment) => ({
+    timeline: (chapter.moments ?? []).map((moment) => ({
       label: new Date(moment.happenedAt).toLocaleDateString(),
       title: moment.title,
       body: moment.description

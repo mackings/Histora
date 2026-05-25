@@ -1369,6 +1369,7 @@ export function StudioPage({
   const [chapterTitleDraft, setChapterTitleDraft] = useState("");
   const [draftHistory, setDraftHistory] = useState<string[]>(["Studio opened."]);
   const [studioNotice, setStudioNotice] = useState<StudioNoticeState | null>(null);
+  const [chapterSwitchPrompt, setChapterSwitchPrompt] = useState<{ title: string; isNew?: boolean } | null>(null);
   const [storyLibrary, setStoryLibrary] = useState<ApiStory[]>([]);
   const [collaborationLibrary, setCollaborationLibrary] = useState<ApiStory[]>([]);
   const [isStoryLibraryLoading, setIsStoryLibraryLoading] = useState(false);
@@ -2512,6 +2513,47 @@ export function StudioPage({
     );
   };
 
+  const snapshotActiveChapterEdits = (sourceChapters: StudioChapter[] = chaptersRef.current) => {
+    const activeIndex = sourceChapters.findIndex((chapter) => chapter.title === activeChapterRef.current);
+    const safeIndex = activeIndex >= 0 ? activeIndex : 0;
+    const latestBody = getLatestChapterBody();
+    const latestText = getPlainTextFromHtml(latestBody);
+
+    return sourceChapters.map((chapter, index) =>
+      index === safeIndex
+        ? {
+            ...chapter,
+            body: latestBody,
+            words: latestText.trim().length === 0 ? 0 : latestText.trim().split(/\s+/).length,
+            imageAttachments: [...imageAttachmentsRef.current],
+            voiceNotes: [...voiceNotesRef.current],
+            timelineEntries: [...timelineEntriesRef.current]
+          }
+        : chapter
+    );
+  };
+
+  const applyChapterSelection = (chapterTitle: string, sourceChapters: StudioChapter[]) => {
+    const targetChapter = sourceChapters.find((chapter) => chapter.title === chapterTitle);
+    setActiveChapter(chapterTitle);
+    setChapterType(targetChapter?.type ?? "memory");
+    setImageAttachments(sanitizeStudioAttachments(targetChapter?.imageAttachments ?? []));
+    setVoiceNotes(sanitizeStudioAttachments(targetChapter?.voiceNotes ?? [], "Recorded in studio"));
+    setTimelineEntries(targetChapter?.timelineEntries?.length ? targetChapter.timelineEntries : [createEmptyTimelineEntry()]);
+    if (chapterBodyRef.current) {
+      chapterBodyRef.current.innerHTML = sanitizeStudioRichText(targetChapter?.body ?? "");
+    }
+    setIsStudioEditorOpen(true);
+  };
+
+  const switchToChapter = (chapterTitle: string) => {
+    const snapshot = snapshotActiveChapterEdits();
+    chaptersRef.current = snapshot;
+    setChapters(snapshot);
+    applyChapterSelection(chapterTitle, snapshot);
+    setStudioMessage(`Now writing ${chapterTitle}.`);
+  };
+
   const updateActiveChapterTitle = (nextTitle: string) => {
     lastLocalStoryMetaActivityAtRef.current = Date.now();
     setChapters((current) => {
@@ -3410,7 +3452,12 @@ export function StudioPage({
       )
     );
     void ensureStoryMediaUploaded(snapshot)
-      .then((uploadedChapters) => persistStory(buildStoryPayload("published", uploadedChapters), "Story published."))
+      .then((uploadedChapters) =>
+        persistStory(
+          buildStoryPayload("published", uploadedChapters),
+          isEditingPublishedStory ? "Story update published." : "Story published."
+        )
+      )
       .catch((error) => {
         setStudioMessage(getErrorMessage(error, "Could not publish story media."));
       });
@@ -4265,14 +4312,16 @@ export function StudioPage({
       return;
     }
 
+    const snapshot = snapshotActiveChapterEdits();
     const nextChapter = {
-      ...createInitialStudioChapter(chapters.length),
-      title: getUniqueChapterTitle(`Chapter ${chapters.length + 1}`, chapters)
+      ...createInitialStudioChapter(snapshot.length),
+      title: getUniqueChapterTitle(`Chapter ${snapshot.length + 1}`, snapshot)
     };
-    setChapters((current) => ensureUniqueStudioChapterTitles([...current, nextChapter]));
-    setActiveChapter(nextChapter.title);
-    setIsStudioEditorOpen(true);
-    setStudioMessage(`${nextChapter.title} added.`);
+    const nextChapters = ensureUniqueStudioChapterTitles([...snapshot, nextChapter]);
+    chaptersRef.current = nextChapters;
+    setChapters(nextChapters);
+    applyChapterSelection(nextChapter.title, nextChapters);
+    setStudioMessage(`${nextChapter.title} added. Start fresh in this chapter.`);
     setDraftHistory((current) => [`${nextChapter.title} added.`, ...current].slice(0, 6));
     invalidatePreviewReview();
   };
@@ -4369,6 +4418,7 @@ export function StudioPage({
         storyTitle,
         storySummary,
         storyLinks,
+        currentStoryStatus,
         activeChapterNumberLabel,
         activeChapter: uploadedActiveChapter?.title || activeChapterLabel,
         chapterType,
@@ -4421,7 +4471,20 @@ export function StudioPage({
       return;
     }
 
-    setActiveChapter(chapterTitle);
+    if (chapterTitle === activeChapterRef.current) {
+      return;
+    }
+
+    setChapterSwitchPrompt({ title: chapterTitle });
+  };
+
+  const confirmChapterSwitch = () => {
+    if (!chapterSwitchPrompt) {
+      return;
+    }
+
+    switchToChapter(chapterSwitchPrompt.title);
+    setChapterSwitchPrompt(null);
   };
 
   const insertStructureBlock = (kind: "opening" | "conflict" | "reflection" | "closing") => {
@@ -4527,7 +4590,9 @@ export function StudioPage({
         </div>
       ) : null}
       <div className="chapter-controls">
-        <button className="primary-action" onClick={() => void handlePreviewToggle()} type="button">FINISH AND PREVIEW</button>
+        <button className="primary-action" onClick={() => void handlePreviewToggle()} type="button">
+          {isEditingPublishedStory ? "PREVIEW NEW UPDATE" : "FINISH AND PREVIEW"}
+        </button>
       </div>
     </article>
   );
@@ -4910,6 +4975,13 @@ export function StudioPage({
               </div>
             </div>
             <div className="form-grid">
+              <div className="studio-current-chapter-banner">
+                <span>{activeChapterNumberLabel}</span>
+                <strong>{activeChapterLabel}</strong>
+                <button className="ghost-action slim-action" onClick={() => takeUserToStudioTarget("chapters")} type="button">
+                  Change chapter
+                </button>
+              </div>
               <label>
                 Chapter type
                 <select onChange={(event) => {
@@ -5402,6 +5474,39 @@ export function StudioPage({
                 </button>
               ) : null}
               <button className="ghost-action" onClick={() => setStudioNotice(null)} type="button">DISMISS</button>
+            </div>
+          </article>
+        </div>
+      ) : null}
+
+      {chapterSwitchPrompt ? (
+        <div className="status-viewer-backdrop" onClick={() => setChapterSwitchPrompt(null)} role="presentation">
+          <article className="share-sheet-modal chapter-switch-sheet" onClick={(event) => event.stopPropagation()}>
+            <div className="section-head">
+              <div>
+                <SectionLabelComponent>CHAPTER_SWITCH</SectionLabelComponent>
+                <h2>{`Move to ${chapterSwitchPrompt.title}?`}</h2>
+                <p className="studio-section-helper">
+                  Your current chapter is saved before the editor opens the next one.
+                </p>
+              </div>
+              <button aria-label="Close chapter switch" className="icon-chip" onClick={() => setChapterSwitchPrompt(null)} type="button">
+                <IconComponent className="button-icon" name="close" />
+              </button>
+            </div>
+            <div className="chapter-switch-sheet-summary">
+              <span>Current</span>
+              <strong>{activeChapterLabel}</strong>
+              <span>Next</span>
+              <strong>{chapterSwitchPrompt.title}</strong>
+            </div>
+            <div className="share-sheet-actions">
+              <button className="primary-action" onClick={confirmChapterSwitch} type="button">
+                Continue to chapter
+              </button>
+              <button className="ghost-action" onClick={() => setChapterSwitchPrompt(null)} type="button">
+                Stay here
+              </button>
             </div>
           </article>
         </div>

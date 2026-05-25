@@ -1860,6 +1860,28 @@ textarea {
   box-shadow: 0 0 0 2px rgba(49, 94, 251, 0.08);
 }
 
+.studio-current-chapter-banner {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #f8fbff;
+}
+
+.studio-current-chapter-banner span {
+  color: var(--muted);
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.studio-current-chapter-banner strong {
+  min-width: 0;
+}
+
 .chapter-pill-locked {
   background: linear-gradient(180deg, #fff8f2, #fff1e6);
   border-style: dashed;
@@ -3712,6 +3734,27 @@ textarea {
 
 .share-sheet-modal p {
   color: var(--muted);
+}
+
+.chapter-switch-sheet {
+  align-self: end;
+  border-radius: 24px 24px 0 0;
+}
+
+.chapter-switch-sheet-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.chapter-switch-sheet-summary span {
+  color: var(--muted);
+  font-weight: 800;
+  text-transform: uppercase;
 }
 
 .share-sheet-actions {

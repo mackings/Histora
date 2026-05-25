@@ -73,6 +73,7 @@ export type StudioPreviewPayload = {
   storyTitle: string;
   storySummary: string;
   storyLinks: StudioExternalLink[];
+  currentStoryStatus?: "draft" | "published";
   activeChapterNumberLabel: string;
   activeChapter: string;
   chapterType: string;

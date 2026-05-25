@@ -610,14 +610,16 @@ export async function uploadMediaAsset(
   let signedUpload: SignedUploadResponse | null = null;
 
   try {
-    signedUpload = await apiRequest<SignedUploadResponse>("/media/signed-upload", {
-      method: "POST",
-      accessToken,
-      body: {
-        fileName: asset.fileName,
-        contentType: normalizedContentType
-      }
-    });
+    signedUpload = await retryMediaStep(() =>
+      apiRequest<SignedUploadResponse>("/media/signed-upload", {
+        method: "POST",
+        accessToken,
+        body: {
+          fileName: asset.fileName,
+          contentType: normalizedContentType
+        }
+      })
+    );
   } catch (error) {
     if (!(error instanceof ApiRequestError) || error.code !== "MEDIA_SCAN_REQUIRED") {
       throw error;
@@ -639,13 +641,15 @@ export async function uploadMediaAsset(
   }
 
   try {
-    const uploadResponse = await fetch(signedUpload.uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Type": normalizedContentType
-      },
-      body: asset.blob
-    });
+    const uploadResponse = await retryMediaStep(() =>
+      fetch(signedUpload.uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": normalizedContentType
+        },
+        body: asset.blob
+      })
+    );
 
     if (!uploadResponse.ok) {
       throw new Error("Direct upload failed.");
@@ -658,11 +662,13 @@ export async function uploadMediaAsset(
       };
     }
 
-    const signedRead = await apiRequest<SignedReadResponse>(
-      `/media/signed-read?objectKey=${encodeURIComponent(signedUpload.objectKey)}`,
-      {
-        accessToken
-      }
+    const signedRead = await retryMediaStep(() =>
+      apiRequest<SignedReadResponse>(
+        `/media/signed-read?objectKey=${encodeURIComponent(signedUpload.objectKey)}`,
+        {
+          accessToken
+        }
+      )
     );
 
     return {
@@ -682,4 +688,19 @@ export async function uploadMediaAsset(
       }
     );
   }
+}
+
+async function retryMediaStep<T>(operation: () => Promise<T>, attempts = 2): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) {
+        await new Promise((resolve) => globalThis.setTimeout(resolve, 350));
+      }
+    }
+  }
+  throw lastError;
 }

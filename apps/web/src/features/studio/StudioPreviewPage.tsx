@@ -110,7 +110,13 @@ export function StudioPreviewPage({
           }}
           type="button"
         >
-          {isPublishing ? "Publishing..." : "Publish"}
+          {isPublishing
+            ? preview?.currentStoryStatus === "published"
+              ? "Publishing update..."
+              : "Publishing..."
+            : preview?.currentStoryStatus === "published"
+              ? "Publish new update"
+              : "Publish"}
         </button>
       </section>
       {previewError ? <p className="status-feedback">{previewError}</p> : null}
