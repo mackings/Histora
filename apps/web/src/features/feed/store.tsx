@@ -5,6 +5,7 @@ import {
   type ApiComment,
   type ApiFeedStory,
   type ApiStatus,
+  type SignedReadResponse,
   subscribeToAppEvents,
   updateCachedStoriesByAuthorUsername,
   updateCachedStoryCounts
@@ -175,21 +176,95 @@ const applyLocalStatusUpdate = (payload: {
   }
 };
 
-const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: string) => {
+const isOwnedStorageObjectKey = (value?: string | null): value is string =>
+  typeof value === "string" && /^users\/[^/]+\/.+/.test(value);
+
+async function resolveFeedMediaUrl(accessToken: string, storyId: string, value?: string | null) {
+  if (!isOwnedStorageObjectKey(value)) {
+    return value ?? null;
+  }
+  try {
+    const objectKey = value;
+    const query = new URLSearchParams({ objectKey, storyId });
+    const signedRead = await apiRequest<SignedReadResponse>(`/media/signed-read?${query.toString()}`, { accessToken });
+    return signedRead.readUrl;
+  } catch {
+    return value;
+  }
+}
+
+async function resolveStatusMediaUrl(accessToken: string, statusId: string, value?: string | null) {
+  if (!isOwnedStorageObjectKey(value)) {
+    return value ?? null;
+  }
+  try {
+    const objectKey = value;
+    const query = new URLSearchParams({ objectKey, statusId });
+    const signedRead = await apiRequest<SignedReadResponse>(`/media/signed-read?${query.toString()}`, { accessToken });
+    return signedRead.readUrl;
+  } catch {
+    return value;
+  }
+}
+
+async function hydrateStatusMedia(accessToken: string, status: ApiStatus): Promise<ApiStatus> {
+  const imageUrl = await resolveStatusMediaUrl(accessToken, status.id, status.imageKey ?? status.imageUrl ?? null);
+  return {
+    ...status,
+    imageUrl
+  };
+}
+
+async function hydrateStatusesMedia(accessToken: string, statuses: ApiStatus[]) {
+  return Promise.all(statuses.map((status) => hydrateStatusMedia(accessToken, status)));
+}
+
+async function hydrateFeedStoryMedia(accessToken: string, story: ApiFeedStory): Promise<ApiFeedStory> {
+  const coverImageUrl = await resolveFeedMediaUrl(
+    accessToken,
+    story.id,
+    story.coverImageKey ?? story.coverImageUrl ?? null
+  );
+  const chapters = await Promise.all(
+    story.chapters.map(async (chapter) => {
+      const imageUrls = await Promise.all(
+        (chapter.imageKeys?.length ? chapter.imageKeys : chapter.imageUrls).map((imageUrl) =>
+          resolveFeedMediaUrl(accessToken, story.id, imageUrl)
+        )
+      );
+      return {
+        ...chapter,
+        imageUrls: imageUrls.filter((imageUrl): imageUrl is string => Boolean(imageUrl))
+      };
+    })
+  );
+  return {
+    ...story,
+    coverImageUrl,
+    chapters
+  };
+}
+
+async function hydrateFeedStoriesMedia(accessToken: string, stories: ApiFeedStory[]) {
+  return Promise.all(stories.map((story) => hydrateFeedStoryMedia(accessToken, story)));
+}
+
+const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: string, accessToken: string) => {
   if (message.type !== "event") {
     return;
   }
 
   const payload = message.payload;
   if (payload.kind === "story.created" || payload.kind === "story.updated") {
-    const story = payload.story;
-    updateCachedStoryCounts(story.id, () => story);
-    updateFeedPosts((current) => {
-      if (story.status !== "published" || story.visibility !== "public") {
-        return current.filter((post) => post.id !== story.id);
-      }
-      const next = current.filter((post) => post.id !== story.id);
-      return [toFeedStoryRecord(story), ...next];
+    void hydrateFeedStoryMedia(accessToken, payload.story).then((story) => {
+      updateCachedStoryCounts(story.id, () => story);
+      updateFeedPosts((current) => {
+        if (story.status !== "published" || story.visibility !== "public") {
+          return current.filter((post) => post.id !== story.id);
+        }
+        const next = current.filter((post) => post.id !== story.id);
+        return [toFeedStoryRecord(story), ...next];
+      });
     });
     return;
   }
@@ -247,13 +322,15 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
 
   if (payload.kind === "status.created") {
     const statusEvent = (payload as { kind: "status.created"; status: ApiStatus }).status;
-    updateFeedStatuses((current) => {
-      const next = current.filter((status) => status.id !== statusEvent.id);
-      return [statusEvent, ...next];
+    void hydrateStatusMedia(accessToken, statusEvent).then((status) => {
+      updateFeedStatuses((current) => {
+        const next = current.filter((entry) => entry.id !== status.id);
+        return [status, ...next];
+      });
+      if (message.channel === `user:${currentUserId}`) {
+        updateMyStatusIds((current) => new Set([...current, status.id]));
+      }
     });
-    if (message.channel === `user:${currentUserId}`) {
-      updateMyStatusIds((current) => new Set([...current, statusEvent.id]));
-    }
     return;
   }
 
@@ -302,6 +379,17 @@ const applyRealtimeMessage = (message: RealtimeEventMessage, currentUserId: stri
   if (payload.kind === "comment.created" && payload.comment.targetType === "storyChapter") {
     const [storyId] = payload.comment.targetId.split(":");
     updateFeedPosts((current) => current.map((post) => (post.id === storyId ? { ...post, comments: post.comments + 1 } : post)));
+    return;
+  }
+
+  if (payload.kind === "comment.created" && payload.comment.targetType === "status") {
+    updateFeedStatuses((current) =>
+      current.map((status) =>
+        status.id === payload.comment.targetId
+          ? { ...status, commentsCount: status.commentsCount + 1 }
+          : status
+      )
+    );
     return;
   }
 
@@ -414,6 +502,41 @@ async function loadFeedStore(accessToken: string, options?: { force?: boolean; s
         error: "",
         lastLoadedAt: Date.now()
       }));
+      void Promise.all([
+        hydrateFeedStoriesMedia(accessToken, stories),
+        hydrateStatusesMedia(accessToken, statuses)
+      ]).then(([hydratedStories, hydratedStatuses]) => {
+        const hydratedPosts = hydratedStories.map((story) => toFeedStoryRecord(story));
+        setFeedStoreState((current) => ({
+          ...current,
+          feedPosts: hydratedPosts.map((post) => {
+            const existing = current.feedPosts.find((entry) => entry.id === post.id);
+            return existing
+              ? {
+                  ...post,
+                  likes: existing.likes,
+                  saves: existing.saves,
+                  comments: existing.comments,
+                  shares: existing.shares,
+                  liked: existing.liked,
+                  bookmarked: existing.bookmarked,
+                  following: existing.following
+                }
+              : post;
+          }),
+          feedStatuses: hydratedStatuses.map((status) => {
+            const existing = current.feedStatuses.find((entry) => entry.id === status.id);
+            return existing
+              ? {
+                  ...status,
+                  commentsCount: existing.commentsCount,
+                  likesCount: existing.likesCount,
+                  bookmarksCount: existing.bookmarksCount
+                }
+              : status;
+          })
+        }));
+      });
     })
     .catch((error) => {
       setFeedStoreState((current) => ({
@@ -452,7 +575,7 @@ export function FeedRealtimeBridge({
       ["feed", "anonymous:public", `user:${currentUserId}`],
       (rawMessage) => {
         try {
-          applyRealtimeMessage(rawMessage as RealtimeEventMessage, currentUserId);
+          applyRealtimeMessage(rawMessage as RealtimeEventMessage, currentUserId, accessToken);
         } catch {
           return;
         }

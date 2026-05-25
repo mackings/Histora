@@ -102,6 +102,25 @@ func (s *Service) List(ctx context.Context, targetType string, targetID string) 
 	return out, nil
 }
 
+func (s *Service) RealtimeChannels(ctx context.Context, comment Response) []string {
+	switch comment.TargetType {
+	case "storyChapter":
+		story, err := s.repo.StoryAudience(ctx, comment.TargetID)
+		if err != nil || story == nil || story.Status != "published" || story.Visibility != "public" {
+			return nil
+		}
+		return []string{"feed", "story:" + story.ID.Hex()}
+	case "status":
+		status, err := s.repo.StatusAudience(ctx, comment.TargetID)
+		if err != nil || status == nil || status.Visibility != "public" {
+			return nil
+		}
+		return []string{"feed"}
+	default:
+		return nil
+	}
+}
+
 func (s *Service) assertTarget(ctx context.Context, targetType string, targetID string) error {
 	var ok bool
 	var err error

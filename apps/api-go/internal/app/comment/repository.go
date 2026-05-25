@@ -19,6 +19,17 @@ type Repository struct {
 	anonymousMessages *mongo.Collection
 }
 
+type StoryAudience struct {
+	ID         bson.ObjectID `bson:"_id"`
+	Status     string        `bson:"status"`
+	Visibility string        `bson:"visibility"`
+}
+
+type StatusAudience struct {
+	ID         bson.ObjectID `bson:"_id"`
+	Visibility string        `bson:"visibility"`
+}
+
 func NewRepository(db *mongo.Database) *Repository {
 	return &Repository{
 		comments:          db.Collection("comments"),
@@ -77,6 +88,23 @@ func (r *Repository) IncrementStoryComments(ctx context.Context, targetID string
 	}
 }
 
+func (r *Repository) StoryAudience(ctx context.Context, targetID string) (*StoryAudience, error) {
+	storyID, _ := splitStoryTarget(targetID)
+	if storyID.IsZero() {
+		return nil, nil
+	}
+	var story StoryAudience
+	err := r.stories.FindOne(
+		ctx,
+		bson.M{"_id": storyID},
+		options.FindOne().SetProjection(bson.M{"status": 1, "visibility": 1}),
+	).Decode(&story)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	return &story, err
+}
+
 func (r *Repository) StatusExists(ctx context.Context, statusID string) (bool, error) {
 	id, err := bson.ObjectIDFromHex(statusID)
 	if err != nil {
@@ -90,6 +118,23 @@ func (r *Repository) IncrementStatusComments(ctx context.Context, statusID strin
 	if id, err := bson.ObjectIDFromHex(statusID); err == nil {
 		_, _ = r.statuses.UpdateOne(ctx, bson.M{"_id": id}, bson.M{"$inc": bson.M{"commentsCount": 1}})
 	}
+}
+
+func (r *Repository) StatusAudience(ctx context.Context, statusID string) (*StatusAudience, error) {
+	id, err := bson.ObjectIDFromHex(statusID)
+	if err != nil {
+		return nil, nil
+	}
+	var status StatusAudience
+	err = r.statuses.FindOne(
+		ctx,
+		bson.M{"_id": id},
+		options.FindOne().SetProjection(bson.M{"visibility": 1}),
+	).Decode(&status)
+	if err == mongo.ErrNoDocuments {
+		return nil, nil
+	}
+	return &status, err
 }
 
 func (r *Repository) AnonymousMessageExists(ctx context.Context, messageID string) (bool, error) {

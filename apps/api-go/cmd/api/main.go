@@ -73,7 +73,7 @@ func main() {
 		StoryService:         storyapp.NewService(cfg, storyapp.NewRepository(mongoStore.DB)),
 		CommentService:       commentapp.NewService(cfg, commentapp.NewRepository(mongoStore.DB)),
 		StatusService:        statusapp.NewService(cfg, statusapp.NewRepository(mongoStore.DB)),
-		MediaService:         mediaapp.NewService(cfg),
+		MediaService:         mediaapp.NewService(cfg, mongoStore.DB),
 		ProfileService:       profileapp.NewService(cfg, mongoStore.DB),
 		AnonymousService:     anonymousapp.NewService(cfg, mongoStore.DB),
 		TranscriptionService: transcriptionapp.NewService(cfg),

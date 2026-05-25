@@ -15,12 +15,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/mackings/histora/apps/api-go/internal/config"
 	"github.com/mackings/histora/apps/api-go/internal/shared/apperror"
+	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 type Service struct {
 	cfg     config.Config
 	s3      *s3.Client
 	presign *s3.PresignClient
+	db      *mongo.Database
 }
 
 type SignedUploadInput struct {
@@ -28,14 +32,14 @@ type SignedUploadInput struct {
 	ContentType string `json:"contentType"`
 }
 
-func NewService(cfg config.Config) *Service {
+func NewService(cfg config.Config, db *mongo.Database) *Service {
 	options := s3.Options{
 		Region:       "auto",
 		Credentials:  aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(cfg.R2AccessKeyID, cfg.R2SecretAccessKey, "")),
 		BaseEndpoint: aws.String("https://" + cfg.R2AccountID + ".r2.cloudflarestorage.com"),
 	}
 	client := s3.New(options)
-	return &Service{cfg: cfg, s3: client, presign: s3.NewPresignClient(client)}
+	return &Service{cfg: cfg, s3: client, presign: s3.NewPresignClient(client), db: db}
 }
 
 func (s *Service) SignedUpload(ctx context.Context, userID string, input SignedUploadInput) (map[string]any, error) {
@@ -57,11 +61,13 @@ func (s *Service) SignedUpload(ctx context.Context, userID string, input SignedU
 	return map[string]any{"uploadUrl": result.URL, "objectKey": objectKey, "publicUrl": s.publicURL(objectKey)}, nil
 }
 
-func (s *Service) SignedRead(ctx context.Context, userID string, objectKey string) (map[string]any, error) {
+func (s *Service) SignedRead(ctx context.Context, userID bson.ObjectID, objectKey string, storyID string, statusID string) (map[string]any, error) {
 	if err := s.assertConfigured(); err != nil {
 		return nil, err
 	}
-	if !strings.HasPrefix(objectKey, "users/"+userID+"/") {
+	if !strings.HasPrefix(objectKey, "users/"+userID.Hex()+"/") &&
+		!s.canReadStoryMedia(ctx, userID, objectKey, storyID) &&
+		!s.canReadStatusMedia(ctx, userID, objectKey, statusID) {
 		return nil, apperror.Forbidden("You do not have access to this media object.")
 	}
 	result, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
@@ -93,13 +99,138 @@ func (s *Service) UploadDirect(ctx context.Context, userID string, fileName stri
 	}
 	readURL := s.publicURL(objectKey)
 	if readURL == nil {
-		signed, err := s.SignedRead(ctx, userID, objectKey)
+		ownerID, err := bson.ObjectIDFromHex(userID)
+		if err != nil {
+			return nil, apperror.Forbidden("You do not have access to this media object.")
+		}
+		signed, err := s.SignedRead(ctx, ownerID, objectKey, "", "")
 		if err != nil {
 			return nil, err
 		}
 		readURL = signed["readUrl"]
 	}
 	return map[string]any{"objectKey": objectKey, "readUrl": readURL}, nil
+}
+
+func (s *Service) canReadStatusMedia(ctx context.Context, userID bson.ObjectID, objectKey string, statusID string) bool {
+	if s.db == nil || objectKey == "" || statusID == "" {
+		return false
+	}
+	id, err := bson.ObjectIDFromHex(strings.TrimSpace(statusID))
+	if err != nil {
+		return false
+	}
+	var status struct {
+		AuthorID   bson.ObjectID `bson:"authorId"`
+		Visibility string        `bson:"visibility"`
+		ImageURL   string        `bson:"imageUrl"`
+		ImageKey   string        `bson:"imageKey"`
+	}
+	err = s.db.Collection("statuses").FindOne(
+		ctx,
+		bson.M{"_id": id},
+		options.FindOne().SetProjection(bson.M{"authorId": 1, "visibility": 1, "imageUrl": 1, "imageKey": 1}),
+	).Decode(&status)
+	if err != nil {
+		return false
+	}
+	if !storyReferencesObject(status.ImageURL, objectKey) && !storyReferencesObject(status.ImageKey, objectKey) {
+		return false
+	}
+	return status.Visibility == "public" || status.AuthorID == userID
+}
+
+func (s *Service) canReadStoryMedia(ctx context.Context, userID bson.ObjectID, objectKey string, storyID string) bool {
+	if s.db == nil || objectKey == "" || storyID == "" {
+		return false
+	}
+	id, err := bson.ObjectIDFromHex(strings.TrimSpace(storyID))
+	if err != nil {
+		return false
+	}
+	var story struct {
+		Status           string          `bson:"status"`
+		Visibility       string          `bson:"visibility"`
+		CoverImageURL    string          `bson:"coverImageUrl"`
+		AuthorID         bson.ObjectID   `bson:"authorId"`
+		AllowedViewerIDs []bson.ObjectID `bson:"allowedViewerIds"`
+		Collaborators    []struct {
+			UserID bson.ObjectID `bson:"userId"`
+		} `bson:"collaborators"`
+		Chapters []struct {
+			ImageURLs    []string `bson:"imageUrls"`
+			VoiceNoteURL string   `bson:"voiceNoteUrl"`
+			Moments      []struct {
+				ImageURLs    []string `bson:"imageUrls"`
+				VoiceNoteURL string   `bson:"voiceNoteUrl"`
+			} `bson:"moments"`
+		} `bson:"chapters"`
+	}
+	err = s.db.Collection("stories").FindOne(
+		ctx,
+		bson.M{"_id": id},
+		options.FindOne().SetProjection(bson.M{
+			"status": 1, "visibility": 1, "coverImageUrl": 1, "authorId": 1,
+			"allowedViewerIds": 1, "collaborators.userId": 1, "chapters.imageUrls": 1,
+			"chapters.voiceNoteUrl": 1, "chapters.moments.imageUrls": 1, "chapters.moments.voiceNoteUrl": 1,
+		}),
+	).Decode(&story)
+	if err != nil || !storyReferencesObject(story.CoverImageURL, objectKey) {
+		found := false
+		for _, chapter := range story.Chapters {
+			if storyReferencesAny(chapter.ImageURLs, objectKey) || storyReferencesObject(chapter.VoiceNoteURL, objectKey) {
+				found = true
+				break
+			}
+			for _, moment := range chapter.Moments {
+				if storyReferencesAny(moment.ImageURLs, objectKey) || storyReferencesObject(moment.VoiceNoteURL, objectKey) {
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if err != nil || !found {
+			return false
+		}
+	}
+	if story.Status == "published" && story.Visibility == "public" {
+		return true
+	}
+	if story.AuthorID == userID {
+		return true
+	}
+	for _, collaborator := range story.Collaborators {
+		if collaborator.UserID == userID {
+			return true
+		}
+	}
+	if story.Status == "published" {
+		for _, viewerID := range story.AllowedViewerIDs {
+			if viewerID == userID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func storyReferencesAny(values []string, objectKey string) bool {
+	for _, value := range values {
+		if storyReferencesObject(value, objectKey) {
+			return true
+		}
+	}
+	return false
+}
+
+func storyReferencesObject(value string, objectKey string) bool {
+	if value == objectKey {
+		return true
+	}
+	return strings.Contains(value, "/"+objectKey)
 }
 
 func (s *Service) assertConfigured() error {

@@ -12,10 +12,11 @@ import (
 
 type CommentHandler struct {
 	service *commentapp.Service
+	events  EventPublisher
 }
 
-func NewCommentHandler(service *commentapp.Service) *CommentHandler {
-	return &CommentHandler{service: service}
+func NewCommentHandler(service *commentapp.Service, events EventPublisher) *CommentHandler {
+	return &CommentHandler{service: service, events: events}
 }
 
 func (h *CommentHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -45,5 +46,25 @@ func (h *CommentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	h.publishCommentCreated(r, comment)
 	response.JSON(w, http.StatusCreated, comment)
+}
+
+func (h *CommentHandler) publishCommentCreated(r *http.Request, comment commentapp.Response) {
+	if h.events == nil {
+		return
+	}
+	channels := h.service.RealtimeChannels(r.Context(), comment)
+	if len(channels) == 0 {
+		return
+	}
+	payload := map[string]any{"kind": "comment.created", "comment": comment}
+	seen := map[string]bool{}
+	for _, channel := range channels {
+		if channel == "" || seen[channel] {
+			continue
+		}
+		seen[channel] = true
+		h.events.Publish(r.Context(), channel, payload)
+	}
 }

@@ -45,7 +45,13 @@ func (h *MediaHandler) SignedRead(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, apperror.Unauthorized("Authentication required"))
 		return
 	}
-	result, err := h.service.SignedRead(r.Context(), authUser.ID.Hex(), r.URL.Query().Get("objectKey"))
+	result, err := h.service.SignedRead(
+		r.Context(),
+		authUser.ID,
+		r.URL.Query().Get("objectKey"),
+		r.URL.Query().Get("storyId"),
+		r.URL.Query().Get("statusId"),
+	)
 	if err != nil {
 		response.Error(w, err)
 		return

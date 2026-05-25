@@ -71,7 +71,7 @@ func NewRouter(deps Deps) http.Handler {
 
 	authHandler := NewAuthHandler(deps.Config, deps.AuthService)
 	storyHandler := NewStoryHandler(deps.StoryService, deps.EventsPublisher)
-	commentHandler := NewCommentHandler(deps.CommentService)
+	commentHandler := NewCommentHandler(deps.CommentService, deps.EventsPublisher)
 	statusHandler := NewStatusHandler(deps.StatusService, deps.EventsPublisher)
 	mediaHandler := NewMediaHandler(deps.MediaService)
 	profileHandler := NewProfileHandler(deps.ProfileService)
