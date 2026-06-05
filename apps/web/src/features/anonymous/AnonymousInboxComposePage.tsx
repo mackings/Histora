@@ -16,9 +16,12 @@ export function AnonymousInboxComposePage({
 }) {
   const { recipientSlug = "kingsleyarchive" } = useParams();
   const navigate = useNavigate();
-  const [body, setBody] = useState("I need perspective before I decide what the next chapter should be.");
+  const [body, setBody] = useState("");
   const [feedback, setFeedback] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const normalizedRecipient = recipientSlug.toLowerCase();
+  const maxMessageLength = 300;
+  const remainingCharacters = maxMessageLength - body.length;
 
   const submitAnonymousMessage = async () => {
     if (isSending) {
@@ -39,12 +42,14 @@ export function AnonymousInboxComposePage({
         method: "POST",
         accessToken,
         body: {
-          recipientUsername: recipientSlug.toLowerCase(),
+          recipientUsername: normalizedRecipient,
           body: trimmedBody,
           distribution: "external"
         }
       });
-      navigate("/anonymous", { replace: true });
+      setBody("");
+      setFeedback("Sent. Your identity stays hidden.");
+      window.setTimeout(() => navigate("/anonymous", { replace: true }), 900);
     } catch (error) {
       setFeedback(getErrorMessage(error, "Could not send the anonymous message."));
       setIsSending(false);
@@ -52,50 +57,62 @@ export function AnonymousInboxComposePage({
   };
 
   return (
-    <main className="feed-reader-shell anonymous-hub-shell anonymous-compose-page">
-      <div className="profile-edit-back">
-        <button className="ghost-action" onClick={() => navigate("/anonymous")} type="button">
+    <main className="anonymous-ngl-shell anonymous-compose-page">
+      <div className="anonymous-ngl-topbar">
+        <button className="anonymous-ngl-back" onClick={() => navigate("/anonymous")} type="button">
           <IconComponent className="button-icon" name="arrow" />
           BACK
         </button>
+        <span>Histora anonymous</span>
       </div>
 
-      <section className="story-reader-stage card anonymous-hero">
-        <div className="anonymous-hero-copy">
-          <SectionLabelComponent>WRITE_ANONYMOUSLY</SectionLabelComponent>
-          <h1>Send an anonymous message to @{recipientSlug}.</h1>
-          <p>Your message stays anonymous. The recipient decides whether to keep it inside Histora or share it elsewhere.</p>
+      <section className="anonymous-ngl-stage">
+        <div className="anonymous-ngl-copy">
+          <SectionLabelComponent>WRITE ANONYMOUSLY</SectionLabelComponent>
+          <h1>Send @{normalizedRecipient} an anonymous message.</h1>
+          <p>Say what you want to say. The sender name is not shown to the recipient.</p>
         </div>
-      </section>
 
-      <section className="chapter-reader-card card anonymous-compose-card">
-        <div className="anonymous-panel-body">
-          <div className="profile-section-copy anonymous-section-copy">
-            <SectionLabelComponent>MESSAGE_FORM</SectionLabelComponent>
-            <h2>Write the anonymous message</h2>
+        <article className="anonymous-ngl-phone-card" aria-label={`Anonymous message form for ${normalizedRecipient}`}>
+          <div className="anonymous-ngl-question-card">
+            <div className="anonymous-ngl-avatar" aria-hidden="true">
+              {normalizedRecipient.slice(0, 1).toUpperCase()}
+            </div>
+            <div>
+              <span>@{normalizedRecipient}</span>
+              <strong>send me anonymous messages!</strong>
+            </div>
           </div>
-          <div className="profile-form-grid">
-            <label>
-              Message
-              <textarea
-                disabled={isSending}
-                onChange={(event) => setBody(event.target.value)}
-                placeholder="Write your anonymous message..."
-                value={body}
-              />
-            </label>
+
+          <label className="anonymous-ngl-message-box">
+            <span>Anonymous message</span>
+            <textarea
+              disabled={isSending}
+              maxLength={maxMessageLength}
+              onChange={(event) => setBody(event.target.value)}
+              placeholder="Type something honest..."
+              value={body}
+            />
+            <small className={remainingCharacters < 30 ? "is-low" : ""}>{remainingCharacters} characters left</small>
+          </label>
+
+          {feedback ? <p className="anonymous-ngl-feedback">{feedback}</p> : null}
+
+          <button className="anonymous-ngl-send" disabled={isSending || !body.trim()} onClick={() => void submitAnonymousMessage()} type="button">
+            {isSending ? "Sending..." : "Send anonymously"}
+            <IconComponent className="button-icon" name="arrow" />
+          </button>
+
+          <div className="anonymous-ngl-trust-grid">
+            <span>No sender name</span>
+            <span>Private inbox</span>
+            <span>Share-ready</span>
           </div>
-          {feedback ? <p className="status-feedback">{feedback}</p> : null}
-          <div className="chapter-controls">
-            <button className="ghost-action" disabled={isSending} onClick={() => navigate("/anonymous")} type="button">
-              CANCEL
-            </button>
-            <button className="primary-action" disabled={isSending} onClick={() => void submitAnonymousMessage()} type="button">
-              {isSending ? "SENDING..." : "SEND ANONYMOUS MESSAGE"}
-              <IconComponent className="button-icon" name="arrow" />
-            </button>
-          </div>
-        </div>
+
+          <button className="anonymous-ngl-create" onClick={() => navigate("/anonymous")} type="button">
+            Get your own anonymous link
+          </button>
+        </article>
       </section>
     </main>
   );

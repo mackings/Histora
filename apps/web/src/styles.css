@@ -4112,6 +4112,233 @@ textarea {
   gap: 0;
 }
 
+.anonymous-ngl-shell {
+  min-height: 100vh;
+  padding: 22px 16px 44px;
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.55), transparent 18%),
+    radial-gradient(circle at 82% 18%, rgba(255, 202, 66, 0.35), transparent 24%),
+    linear-gradient(145deg, #ff3b8f 0%, #ff7a45 45%, #ffb000 100%);
+  color: #fff;
+}
+
+.anonymous-ngl-topbar {
+  width: min(980px, 100%);
+  margin: 0 auto 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.anonymous-ngl-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 800;
+  backdrop-filter: blur(14px);
+}
+
+.anonymous-ngl-stage {
+  width: min(980px, 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(320px, 420px);
+  align-items: center;
+  gap: clamp(20px, 5vw, 56px);
+}
+
+.anonymous-ngl-copy {
+  display: grid;
+  gap: 14px;
+  text-shadow: 0 14px 36px rgba(91, 22, 64, 0.26);
+}
+
+.anonymous-ngl-copy .section-label {
+  width: fit-content;
+  border-color: rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.anonymous-ngl-copy h1 {
+  margin: 0;
+  max-width: 640px;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: clamp(2.45rem, 7vw, 5.6rem);
+  line-height: 0.95;
+  letter-spacing: -0.07em;
+}
+
+.anonymous-ngl-copy p {
+  margin: 0;
+  max-width: 520px;
+  color: rgba(255, 255, 255, 0.84);
+  font-size: 1.08rem;
+  line-height: 1.7;
+}
+
+.anonymous-ngl-phone-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.44);
+  border-radius: 34px;
+  background: rgba(255, 255, 255, 0.2);
+  box-shadow: 0 30px 80px rgba(95, 35, 68, 0.32);
+  backdrop-filter: blur(24px);
+}
+
+.anonymous-ngl-question-card,
+.anonymous-ngl-message-box,
+.anonymous-ngl-trust-grid span,
+.anonymous-ngl-create {
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.92);
+  color: #1f2333;
+}
+
+.anonymous-ngl-question-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border-radius: 24px;
+}
+
+.anonymous-ngl-question-card div:last-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.anonymous-ngl-question-card span {
+  color: #6b7280;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.anonymous-ngl-question-card strong {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.22rem;
+  line-height: 1.1;
+}
+
+.anonymous-ngl-avatar {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  background: linear-gradient(145deg, #ff2f92, #ff9b2f);
+  color: #fff;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 1.35rem;
+  font-weight: 800;
+}
+
+.anonymous-ngl-message-box {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 28px;
+}
+
+.anonymous-ngl-message-box > span,
+.anonymous-ngl-message-box small {
+  font-weight: 800;
+}
+
+.anonymous-ngl-message-box textarea {
+  min-height: 170px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #1f2333;
+  font-size: 1.18rem;
+  line-height: 1.55;
+  resize: none;
+}
+
+.anonymous-ngl-message-box textarea:focus {
+  outline: 0;
+}
+
+.anonymous-ngl-message-box small {
+  justify-self: end;
+  color: #8a92a6;
+}
+
+.anonymous-ngl-message-box small.is-low {
+  color: #e05252;
+}
+
+.anonymous-ngl-feedback {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-weight: 800;
+}
+
+.anonymous-ngl-send,
+.anonymous-ngl-create {
+  min-height: 56px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.anonymous-ngl-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #151827;
+  color: #fff;
+  box-shadow: 0 18px 36px rgba(21, 24, 39, 0.28);
+}
+
+.anonymous-ngl-send:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.anonymous-ngl-trust-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.anonymous-ngl-trust-grid span {
+  min-height: 42px;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  border-radius: 999px;
+  color: #5d6477;
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-align: center;
+}
+
+.anonymous-ngl-create {
+  color: #ff3b8f;
+}
+
 .status-composer-top,
 .status-composer-footer,
 .status-toolbar,
@@ -4434,6 +4661,15 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .anonymous-ngl-stage {
+    grid-template-columns: 1fr;
+  }
+
+  .anonymous-ngl-copy {
+    text-align: center;
+    justify-items: center;
+  }
+
   .auth-layout {
     gap: 16px;
   }
@@ -4710,6 +4946,32 @@ textarea {
 
   .anonymous-help-request-card {
     grid-template-columns: 1fr;
+  }
+
+  .anonymous-ngl-shell {
+    padding: 16px 12px 32px;
+  }
+
+  .anonymous-ngl-topbar {
+    margin-bottom: 20px;
+  }
+
+  .anonymous-ngl-stage {
+    gap: 18px;
+  }
+
+  .anonymous-ngl-copy h1 {
+    font-size: clamp(2.15rem, 13vw, 3.8rem);
+  }
+
+  .anonymous-ngl-copy p {
+    font-size: 0.98rem;
+  }
+
+  .anonymous-ngl-phone-card {
+    width: min(100%, 430px);
+    justify-self: center;
+    border-radius: 30px;
   }
 
   .anonymous-hero-copy h1 {
@@ -5331,6 +5593,38 @@ textarea {
   .story-comment-card {
     padding: 12px;
     border-radius: 16px;
+  }
+
+  .anonymous-ngl-topbar > span {
+    display: none;
+  }
+
+  .anonymous-ngl-back {
+    min-height: 38px;
+    padding: 0 12px;
+  }
+
+  .anonymous-ngl-phone-card {
+    padding: 12px;
+    border-radius: 26px;
+  }
+
+  .anonymous-ngl-question-card {
+    border-radius: 22px;
+  }
+
+  .anonymous-ngl-message-box {
+    padding: 14px;
+    border-radius: 24px;
+  }
+
+  .anonymous-ngl-message-box textarea {
+    min-height: 150px;
+    font-size: 1.08rem;
+  }
+
+  .anonymous-ngl-trust-grid {
+    grid-template-columns: 1fr;
   }
 
   .story-viewer-top {
