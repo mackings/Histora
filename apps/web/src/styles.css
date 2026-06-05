@@ -4026,6 +4026,13 @@ textarea {
   line-height: 1.7;
 }
 
+.anonymous-help-excerpt {
+  padding: 12px 14px;
+  border: 1px solid #e4ebf8;
+  border-radius: 16px;
+  background: #f8fbff;
+}
+
 .anonymous-helper-card {
   display: grid;
   gap: 4px;

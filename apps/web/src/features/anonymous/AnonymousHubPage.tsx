@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import { type ApiAnonymousMessage, type AuthUser, apiRequest, subscribeToAppEvents } from "../../lib/api-client";
 import { getErrorMessage } from "../../lib/browser-client";
-import { formatAnonymousMeta, wrapCanvasText } from "../feed/support";
+import { formatAnonymousMeta } from "../feed/support";
 import { type FeedIconComponent, type FeedSectionLabelComponent } from "../feed/ui-types";
 
 type AnonymousInboxEvent =
@@ -52,7 +52,7 @@ export function AnonymousHubPage({
   const navigate = useNavigate();
   const [messages, setMessages] = useState<ApiAnonymousMessage[]>([]);
   const [shareFeedback, setShareFeedback] = useState("");
-  const inboxLink =
+  const profileLink =
     typeof window === "undefined"
       ? `/anonymous/write/${currentUser.username}`
       : `${window.location.origin}/anonymous/write/${currentUser.username}`;
@@ -62,7 +62,6 @@ export function AnonymousHubPage({
       messages.flatMap((message) =>
         (message.helpRequests ?? []).map((request) => ({
           ...request,
-          shareSlug: message.shareSlug,
           messageId: message.id,
           excerpt: message.body
         }))
@@ -125,60 +124,17 @@ export function AnonymousHubPage({
     return unsubscribe;
   }, [accessToken, currentUser.id]);
 
-  const copyInboxLink = async () => {
+  const copyProfileLink = async () => {
     if (typeof navigator === "undefined") {
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(inboxLink);
-      setShareFeedback("Anonymous inbox link copied.");
+      await navigator.clipboard.writeText(profileLink);
+      setShareFeedback("Profile link copied. People can use it to send you anonymous messages.");
     } catch {
-      setShareFeedback("Could not copy the inbox link on this device.");
+      setShareFeedback("Could not copy the profile link on this device.");
     }
-  };
-
-  const downloadInboxPoster = (message: ApiAnonymousMessage) => {
-    if (typeof document === "undefined") {
-      return;
-    }
-
-    const canvas = document.createElement("canvas");
-    canvas.width = 1080;
-    canvas.height = 1350;
-    const context = canvas.getContext("2d");
-
-    if (!context) {
-      setShareFeedback("Could not prepare the anonymous message poster.");
-      return;
-    }
-
-    const gradient = context.createLinearGradient(0, 0, 1080, 1350);
-    gradient.addColorStop(0, "#f6f9ff");
-    gradient.addColorStop(1, "#fff0e7");
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, 1080, 1350);
-    context.fillStyle = "#1b2440";
-    context.font = "700 46px Space Grotesk, sans-serif";
-    context.fillText("HISTORA // ANONYMOUS MESSAGE", 80, 120);
-    context.font = "700 72px Space Grotesk, sans-serif";
-    context.fillText("Anonymous message", 80, 240);
-    context.font = "400 42px Manrope, sans-serif";
-
-    const lines = wrapCanvasText(context, message.body, 880);
-    lines.slice(0, 10).forEach((line, index) => {
-      context.fillText(line, 80, 360 + index * 60);
-    });
-
-    context.font = "700 36px Space Grotesk, sans-serif";
-    context.fillStyle = "#cc5a24";
-    context.fillText(`Replies stay anonymous // ${formatAnonymousMeta(message.createdAt)}`, 80, 1160);
-
-    const link = document.createElement("a");
-    link.href = canvas.toDataURL("image/png");
-    link.download = `${message.shareSlug}.png`;
-    link.click();
-    setShareFeedback("Anonymous message poster saved to your device.");
   };
 
   return (
@@ -193,15 +149,15 @@ export function AnonymousHubPage({
       <section className="story-reader-stage card anonymous-hero">
         <div className="anonymous-hero-copy">
           <SectionLabelComponent>ANONYMOUS_ARCHIVE</SectionLabelComponent>
-          <p>Share your inbox link so people can send you anonymous messages.</p>
+          <p>Share your profile link so people can paste anonymous messages into your inbox.</p>
         </div>
         <div className="anonymous-inbox-card">
-          <span className="story-tag">YOUR INBOX LINK</span>
-          <strong>Let people write to you anonymously</strong>
-          <p>{inboxLink}</p>
+          <span className="story-tag">YOUR PROFILE LINK</span>
+          <strong>One link for all anonymous messages</strong>
+          <p>{profileLink}</p>
           <div className="anonymous-hub-actions">
-            <button className="ghost-action" onClick={copyInboxLink} type="button">
-              COPY LINK
+            <button className="ghost-action" onClick={copyProfileLink} type="button">
+              COPY PROFILE LINK
             </button>
           </div>
         </div>
@@ -220,7 +176,7 @@ export function AnonymousHubPage({
             <div className="anonymous-hub-list">
               {messages.length ? (
                 messages.map((message) => (
-                  <article className="anonymous-hub-card" key={message.shareSlug}>
+                  <article className="anonymous-hub-card" key={message.id}>
                     <div className="anonymous-hub-card-top">
                       <div className="anonymous-hub-card-copy">
                         <strong>Anonymous message</strong>
@@ -228,24 +184,15 @@ export function AnonymousHubPage({
                       </div>
                     </div>
                     <p>{message.body}</p>
-                    <div className="anonymous-hub-actions">
-                      <button className="ghost-action" onClick={() => downloadInboxPoster(message)} type="button">
-                        SAVE POSTER
-                      </button>
-                      <button className="primary-action" onClick={() => navigate(`/anonymous/${message.shareSlug}`)} type="button">
-                        OPEN MESSAGE
-                        <IconComponent className="button-icon" name="arrow" />
-                      </button>
-                    </div>
                   </article>
                 ))
               ) : (
                 <article className="anonymous-empty">
                   <strong>No anonymous messages yet</strong>
-                  <p>Copy your inbox link and share it to start receiving anonymous messages.</p>
+                  <p>Copy your profile link and share it to start receiving anonymous messages.</p>
                   <div className="anonymous-hub-actions">
-                    <button className="ghost-action" onClick={copyInboxLink} type="button">
-                      COPY INBOX LINK
+                    <button className="ghost-action" onClick={copyProfileLink} type="button">
+                      COPY PROFILE LINK
                     </button>
                   </div>
                 </article>
@@ -274,14 +221,9 @@ export function AnonymousHubPage({
                     <p>
                       {request.accepted
                         ? `${request.helperName} (@${request.helperUsername}) was accepted to help on this anonymous message.`
-                        : "A reader requested to help on this anonymous message. Open the thread to review or accept the request."}
+                        : `${request.helperName ?? "A reader"}${request.helperUsername ? ` (@${request.helperUsername})` : ""} wants to help with this anonymous message.`}
                     </p>
-                    <div className="anonymous-hub-actions">
-                      <button className="primary-action" onClick={() => navigate(`/anonymous/${request.shareSlug}`)} type="button">
-                        OPEN MESSAGE
-                        <IconComponent className="button-icon" name="arrow" />
-                      </button>
-                    </div>
+                    <p className="anonymous-help-excerpt">{request.excerpt}</p>
                   </article>
                 ))
               ) : (
