@@ -16,6 +16,7 @@ import type { FeedIconComponent, FeedSectionLabelComponent } from "../feed/ui-ty
 import {
   createEmptyTimelineEntry,
   createInitialStudioChapter,
+  createStudioChapterId,
   type StudioChapter,
   type StudioExternalLink,
   type StudioMediaAttachment,
@@ -433,6 +434,13 @@ export function StudioPage({
       };
     });
   };
+  const ensureStudioChapterIds = (sourceChapters: StudioChapter[]) =>
+    sourceChapters.map((chapter) => ({
+      ...chapter,
+      id: chapter.id || createStudioChapterId()
+    }));
+  const normalizeStudioChapters = (sourceChapters: StudioChapter[]) =>
+    ensureUniqueStudioChapterTitles(ensureStudioChapterIds(sourceChapters));
   const getPlainTextFromHtml = (html: string) => {
     if (typeof document === "undefined") {
       return html.replace(/<[^>]+>/g, " ");
@@ -526,6 +534,7 @@ export function StudioPage({
         liveChapterIndexes: Array.isArray(savedDraft.liveChapterIndexes)
           ? savedDraft.liveChapterIndexes.filter((value) => Number.isInteger(value) && value >= 0)
           : [],
+        activeChapterId: typeof savedDraft.activeChapterId === "string" ? savedDraft.activeChapterId : undefined,
         activeChapter: typeof savedDraft.activeChapter === "string" ? savedDraft.activeChapter : "",
         isPremium: typeof savedDraft.isPremium === "boolean" ? savedDraft.isPremium : false,
         visibility:
@@ -538,7 +547,7 @@ export function StudioPage({
         storyLinks,
         chapterType: typeof savedDraft.chapterType === "string" ? savedDraft.chapterType : "memory",
         allowComments: typeof savedDraft.allowComments === "boolean" ? savedDraft.allowComments : currentUser.allowCommentsByDefault,
-        chapters,
+        chapters: normalizeStudioChapters(chapters),
         timelineEntries: Array.isArray(savedDraft.timelineEntries) ? savedDraft.timelineEntries : [createEmptyTimelineEntry()],
         draftHistory: Array.isArray(savedDraft.draftHistory) ? savedDraft.draftHistory : [],
         transcriptionLanguage: typeof savedDraft.transcriptionLanguage === "string" ? savedDraft.transcriptionLanguage : "en-US"
@@ -576,6 +585,7 @@ export function StudioPage({
     currentStoryId,
     currentStoryStatus,
     liveChapterIndexes,
+    activeChapterId,
     activeChapter,
     isPremium,
     visibility,
@@ -632,6 +642,7 @@ export function StudioPage({
     currentStoryId: string | null;
     currentStoryStatus: "draft" | "published";
     liveChapterIndexes: number[];
+    activeChapterId?: string;
     activeChapter: string;
     isPremium: boolean;
     visibility: "private" | "selected" | "public";
@@ -988,7 +999,7 @@ export function StudioPage({
       links: story.links ?? [],
       visibility: story.visibility as "private" | "selected" | "public",
       anonymous: story.anonymous,
-      chapters: fetchedChapters
+      chapters: normalizeStudioChapters(fetchedChapters)
     };
   };
   const createCurrentStudioStorySnapshot = (): StudioStorySnapshot => ({
@@ -1166,6 +1177,7 @@ export function StudioPage({
 
     const latestBody = getLatestChapterBody();
     const targetIndex = Math.max(
+      chaptersRef.current.findIndex((chapter) => chapter.id && chapter.id === activeChapterIdRef.current),
       chaptersRef.current.findIndex((chapter) => chapter.title === activeChapterRef.current),
       0
     );
@@ -1190,9 +1202,9 @@ export function StudioPage({
       )
     };
     const activeChapterIndex = findCollaborativeChapterIndex(currentSnapshot.chapters, {
-      activeChapterId: undefined,
+      activeChapterId: activeChapterIdRef.current,
       activeChapterTitle: activeChapterRef.current,
-      activeChapterIndex: currentSnapshot.chapters.findIndex((chapter) => chapter.title === activeChapterRef.current)
+      activeChapterIndex: targetIndex
     });
     const safeChapterIndex = activeChapterIndex >= 0 ? activeChapterIndex : 0;
     const activeChapterSnapshot = currentSnapshot.chapters[safeChapterIndex];
@@ -1348,6 +1360,7 @@ export function StudioPage({
   const studioOpenEditorOnceKey = "histora-studio-open-editor-once";
   const [isEnteringStudio, setIsEnteringStudio] = useState(true);
   const [isStudioEditorOpen, setIsStudioEditorOpen] = useState(false);
+  const [activeChapterId, setActiveChapterId] = useState("");
   const [activeChapter, setActiveChapter] = useState("Chapter 1");
   const [isPremium, setIsPremium] = useState(currentUser.subscriptionTier === "premium");
   const [visibility, setVisibility] = useState<"private" | "selected" | "public">("selected");
@@ -1369,7 +1382,7 @@ export function StudioPage({
   const [chapterTitleDraft, setChapterTitleDraft] = useState("");
   const [draftHistory, setDraftHistory] = useState<string[]>(["Studio opened."]);
   const [studioNotice, setStudioNotice] = useState<StudioNoticeState | null>(null);
-  const [chapterSwitchPrompt, setChapterSwitchPrompt] = useState<{ title: string; isNew?: boolean } | null>(null);
+  const [chapterSwitchPrompt, setChapterSwitchPrompt] = useState<{ id?: string; title: string; isNew?: boolean } | null>(null);
   const [storyLibrary, setStoryLibrary] = useState<ApiStory[]>([]);
   const [collaborationLibrary, setCollaborationLibrary] = useState<ApiStory[]>([]);
   const [isStoryLibraryLoading, setIsStoryLibraryLoading] = useState(false);
@@ -1410,7 +1423,7 @@ export function StudioPage({
   const [transcriptionLanguage, setTranscriptionLanguage] = useState("en-US");
   const [mediaError, setMediaError] = useState<string | null>(null);
   const chapterBodyRef = useRef<HTMLDivElement | null>(null);
-  const editorChapterTitleRef = useRef("Chapter 1");
+  const editorChapterIdRef = useRef("");
   const chapterEditorSectionRef = useRef<HTMLElement | null>(null);
   const mediaSectionRef = useRef<HTMLElement | null>(null);
   const publishSectionRef = useRef<HTMLElement | null>(null);
@@ -1445,6 +1458,7 @@ export function StudioPage({
   const lastAutoSavedSignatureRef = useRef("");
   const restoredLocalDraftRef = useRef(false);
   const chaptersRef = useRef<StudioChapter[]>([]);
+  const activeChapterIdRef = useRef("");
   const activeChapterRef = useRef("Chapter 1");
   const currentStoryIdRef = useRef<string | null>(null);
   const currentStoryRevisionRef = useRef(0);
@@ -1471,13 +1485,16 @@ export function StudioPage({
   const imageLimit = isPremium ? 12 : 2;
   const voiceLimit = isPremium ? 6 : 1;
   const chapterLimit = isPremium ? 8 : 2;
-  const activeChapterIndex = chapters.findIndex((chapter) => chapter.title === activeChapter);
+  const activeChapterIndexById = activeChapterId ? chapters.findIndex((chapter) => chapter.id === activeChapterId) : -1;
+  const activeChapterIndexByTitle = chapters.findIndex((chapter) => chapter.title === activeChapter);
+  const activeChapterIndex = activeChapterIndexById >= 0 ? activeChapterIndexById : activeChapterIndexByTitle;
   const activeChapterEntry = chapters[activeChapterIndex] ?? chapters[0];
+  const activeChapterEntryId = activeChapterEntry?.id ?? activeChapterId;
   const activeChapterLabel = activeChapterEntry?.title ?? activeChapter;
   const chapterBody = activeChapterEntry?.body ?? "";
   const getLatestChapterBody = () => {
     const editorHtml = chapterBodyRef.current?.innerHTML;
-    if (typeof editorHtml === "string" && editorChapterTitleRef.current === activeChapterRef.current) {
+    if (typeof editorHtml === "string" && editorChapterIdRef.current === activeChapterIdRef.current) {
       return editorHtml;
     }
 
@@ -1589,6 +1606,7 @@ export function StudioPage({
     }
   ];
   const autoSaveSignature = JSON.stringify({
+    activeChapterId,
     activeChapter,
     anonymous,
     chapterType,
@@ -1740,6 +1758,17 @@ export function StudioPage({
   }, [activeChapter]);
 
   useEffect(() => {
+    activeChapterIdRef.current = activeChapterId;
+  }, [activeChapterId]);
+
+  useEffect(() => {
+    if (!activeChapterId && activeChapterEntry?.id) {
+      activeChapterIdRef.current = activeChapterEntry.id;
+      setActiveChapterId(activeChapterEntry.id);
+    }
+  }, [activeChapterId, activeChapterEntry?.id]);
+
+  useEffect(() => {
     currentStoryIdRef.current = currentStoryId;
   }, [currentStoryId]);
 
@@ -1832,7 +1861,7 @@ export function StudioPage({
     const remoteSnapshot = createStudioStorySnapshotFromStory(story);
     const fetchedChapters = remoteSnapshot.chapters;
     const storedDraft = readStoredStudioDraft({ storyId: story.id });
-    const restoredDraftChapters = storedDraft?.chapters.length ? ensureUniqueStudioChapterTitles(storedDraft.chapters) : null;
+    const restoredDraftChapters = storedDraft?.chapters.length ? normalizeStudioChapters(storedDraft.chapters) : null;
     const restoredDraftActiveChapter = storedDraft?.activeChapter?.trim() || "";
 
     const storedDraftSavedAtMs = storedDraft?.savedAt ? new Date(storedDraft.savedAt).getTime() : 0;
@@ -1850,11 +1879,13 @@ export function StudioPage({
     const nextChapters = storedDraftMediaIsStale
       ? replaceStaleDraftMediaWithFetchedMedia(mergedNextChapters, fetchedChapters)
       : mergedNextChapters;
-    const uniqueChapters = ensureUniqueStudioChapterTitles(nextChapters.length ? nextChapters : [createInitialStudioChapter(0)]);
-    const resolvedActiveChapter =
-      restoredDraftActiveChapter && uniqueChapters.some((chapter) => chapter.title === restoredDraftActiveChapter)
-        ? restoredDraftActiveChapter
-        : uniqueChapters[0]?.title ?? "Chapter 1";
+    const uniqueChapters = normalizeStudioChapters(nextChapters.length ? nextChapters : [createInitialStudioChapter(0)]);
+    const resolvedActiveChapterEntry =
+      (storedDraft?.activeChapterId ? uniqueChapters.find((chapter) => chapter.id === storedDraft.activeChapterId) : undefined) ??
+      (restoredDraftActiveChapter ? uniqueChapters.find((chapter) => chapter.title === restoredDraftActiveChapter) : undefined) ??
+      uniqueChapters[0];
+    const resolvedActiveChapter = resolvedActiveChapterEntry?.title ?? "Chapter 1";
+    const resolvedActiveChapterId = resolvedActiveChapterEntry?.id ?? "";
 
     suppressAutoSavePassesRef.current += 4;
     restoredLocalDraftRef.current = Boolean(storedDraft);
@@ -1878,6 +1909,8 @@ export function StudioPage({
     setVisibility(storedDraft?.visibility ?? (story.visibility as "private" | "selected" | "public"));
     setAnonymous(storedDraft?.anonymous ?? story.anonymous);
     setChapters(uniqueChapters);
+    activeChapterIdRef.current = resolvedActiveChapterId;
+    setActiveChapterId(resolvedActiveChapterId);
     setActiveChapter(resolvedActiveChapter);
     setIsStudioEditorOpen(true);
     setStudioMessage(`Loaded ${story.title}.`);
@@ -1886,7 +1919,7 @@ export function StudioPage({
     void hydrateStudioChaptersForMedia(accessToken, uniqueChapters, { storyId: story.id })
       .then((hydratedChapters) => {
         suppressAutoSavePassesRef.current += 2;
-        setChapters(ensureUniqueStudioChapterTitles(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)]));
+        setChapters(normalizeStudioChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)]));
       })
       .catch(() => undefined);
   };
@@ -1907,7 +1940,8 @@ export function StudioPage({
     currentStoryRevisionRef.current = 0;
     currentStoryStatusRef.current = "draft";
     currentStoryIdRef.current = null;
-    editorChapterTitleRef.current = initialChapter.title;
+    editorChapterIdRef.current = initialChapter.id ?? "";
+    activeChapterIdRef.current = initialChapter.id ?? "";
     chaptersRef.current = [initialChapter];
     imageAttachmentsRef.current = [];
     voiceNotesRef.current = [];
@@ -1934,6 +1968,7 @@ export function StudioPage({
     setChapterType("memory");
     setAllowComments(currentUser.allowCommentsByDefault);
     setChapters([initialChapter]);
+    setActiveChapterId(initialChapter.id ?? "");
     setActiveChapter("Chapter 1");
     setImageAttachments([]);
     setVoiceNotes([]);
@@ -2033,9 +2068,6 @@ export function StudioPage({
         return;
       }
 
-      if (restoredDraft.activeChapter) {
-        setActiveChapter(restoredDraft.activeChapter);
-      }
       if (restoredDraft.currentStoryId) {
         setCurrentStoryId(restoredDraft.currentStoryId);
       }
@@ -2051,13 +2083,23 @@ export function StudioPage({
       setAllowComments(restoredDraft.allowComments);
       if (restoredDraft.chapters.length > 0) {
         restoredLocalDraftRef.current = true;
-        const restoredChapters = restoredDraft.chapters;
+        const restoredChapters = normalizeStudioChapters(restoredDraft.chapters);
+        const restoredActiveChapter =
+          (restoredDraft.activeChapterId ? restoredChapters.find((chapter) => chapter.id === restoredDraft.activeChapterId) : undefined) ??
+          (restoredDraft.activeChapter ? restoredChapters.find((chapter) => chapter.title === restoredDraft.activeChapter) : undefined) ??
+          restoredChapters[0];
 
-        setChapters(ensureUniqueStudioChapterTitles(restoredChapters));
+        if (restoredActiveChapter) {
+          activeChapterIdRef.current = restoredActiveChapter.id ?? "";
+          activeChapterRef.current = restoredActiveChapter.title;
+          setActiveChapterId(restoredActiveChapter.id ?? "");
+          setActiveChapter(restoredActiveChapter.title);
+        }
+        setChapters(restoredChapters);
         void hydrateStudioChaptersForMedia(accessToken, restoredChapters, { storyId: restoredDraft.currentStoryId ?? null })
           .then((hydratedChapters) => {
             if (!cancelled) {
-              setChapters(ensureUniqueStudioChapterTitles(hydratedChapters));
+              setChapters(normalizeStudioChapters(hydratedChapters));
             }
           })
           .catch(() => undefined);
@@ -2100,6 +2142,7 @@ export function StudioPage({
     persistStudioDraftToStorage(snapshotChapters);
   }, [
     activeChapter,
+    activeChapterId,
     anonymous,
     chapterType,
     allowComments,
@@ -2143,7 +2186,7 @@ export function StudioPage({
         editor.innerHTML = sanitizedChapterBody;
       }
       if (editor.innerHTML === sanitizedChapterBody) {
-        editorChapterTitleRef.current = activeChapter;
+        editorChapterIdRef.current = activeChapterEntryId;
       }
     }
   }, [chapterBody, activeChapter, isEnteringStudio, isStudioEditorOpen]);
@@ -2526,7 +2569,11 @@ export function StudioPage({
   };
 
   const snapshotActiveChapterEdits = (sourceChapters: StudioChapter[] = chaptersRef.current) => {
-    const activeIndex = sourceChapters.findIndex((chapter) => chapter.title === activeChapterRef.current);
+    const activeIndexById = activeChapterIdRef.current
+      ? sourceChapters.findIndex((chapter) => chapter.id === activeChapterIdRef.current)
+      : -1;
+    const activeIndexByTitle = sourceChapters.findIndex((chapter) => chapter.title === activeChapterRef.current);
+    const activeIndex = activeIndexById >= 0 ? activeIndexById : activeIndexByTitle;
     const safeIndex = activeIndex >= 0 ? activeIndex : 0;
     const latestBody = getLatestChapterBody();
     const latestText = getPlainTextFromHtml(latestBody);
@@ -2545,11 +2592,17 @@ export function StudioPage({
     );
   };
 
-  const applyChapterSelection = (chapterTitle: string, sourceChapters: StudioChapter[]) => {
-    const targetChapter = sourceChapters.find((chapter) => chapter.title === chapterTitle);
-    activeChapterRef.current = chapterTitle;
-    editorChapterTitleRef.current = chapterTitle;
-    setActiveChapter(chapterTitle);
+  const applyChapterSelection = (chapterIdentity: { id?: string; title: string }, sourceChapters: StudioChapter[]) => {
+    const targetChapter =
+      (chapterIdentity.id ? sourceChapters.find((chapter) => chapter.id === chapterIdentity.id) : undefined) ??
+      sourceChapters.find((chapter) => chapter.title === chapterIdentity.title);
+    const targetTitle = targetChapter?.title ?? chapterIdentity.title;
+    const targetId = targetChapter?.id ?? chapterIdentity.id ?? "";
+    activeChapterIdRef.current = targetId;
+    activeChapterRef.current = targetTitle;
+    editorChapterIdRef.current = targetId;
+    setActiveChapterId(targetId);
+    setActiveChapter(targetTitle);
     setChapterType(targetChapter?.type ?? "memory");
     setImageAttachments(sanitizeStudioAttachments(targetChapter?.imageAttachments ?? []));
     setVoiceNotes(sanitizeStudioAttachments(targetChapter?.voiceNotes ?? [], "Recorded in studio"));
@@ -2560,12 +2613,12 @@ export function StudioPage({
     setIsStudioEditorOpen(true);
   };
 
-  const switchToChapter = (chapterTitle: string) => {
+  const switchToChapter = (chapterIdentity: { id?: string; title: string }) => {
     const snapshot = snapshotActiveChapterEdits();
     chaptersRef.current = snapshot;
     setChapters(snapshot);
-    applyChapterSelection(chapterTitle, snapshot);
-    setStudioMessage(`Now writing ${chapterTitle}.`);
+    applyChapterSelection(chapterIdentity, snapshot);
+    setStudioMessage(`Now writing ${chapterIdentity.title}.`);
   };
 
   const updateActiveChapterTitle = (nextTitle: string) => {
@@ -2582,7 +2635,6 @@ export function StudioPage({
           : chapter
       );
       activeChapterRef.current = uniqueTitle;
-      editorChapterTitleRef.current = uniqueTitle;
       setActiveChapter(uniqueTitle);
       return updatedChapters;
     });
@@ -3308,7 +3360,9 @@ export function StudioPage({
     const snapshot = buildChaptersSnapshot();
     setChapters((current) =>
       current.map((chapter) =>
-        chapter.title === activeChapter ? { ...chapter, status: "Draft saved", words: wordCount } : chapter
+        (activeChapterIdRef.current ? chapter.id === activeChapterIdRef.current : chapter.title === activeChapterRef.current)
+          ? { ...chapter, status: "Draft saved", words: wordCount }
+          : chapter
       )
     );
 
@@ -3893,6 +3947,7 @@ export function StudioPage({
           });
 
           const latestActiveIndex = Math.max(
+            chaptersRef.current.findIndex((chapter) => chapter.id && chapter.id === activeChapterIdRef.current),
             chaptersRef.current.findIndex((chapter) => chapter.title === activeChapterRef.current),
             0
           );
@@ -3940,9 +3995,10 @@ export function StudioPage({
     mergedSnapshot: StudioStorySnapshot,
     message: string
   ) => {
-    const mergedChapters = ensureUniqueStudioChapterTitles(
+    const mergedChapters = normalizeStudioChapters(
       mergedSnapshot.chapters.length ? mergedSnapshot.chapters : [createInitialStudioChapter(0)]
     );
+    const nextActiveChapter = mergedChapters[0];
 
     suppressAutoSavePassesRef.current += 1;
     setCurrentStoryId(story.id);
@@ -3965,7 +4021,10 @@ export function StudioPage({
     setVisibility(mergedSnapshot.visibility);
     setAnonymous(mergedSnapshot.anonymous);
     setChapters(mergedChapters);
-    setActiveChapter(mergedChapters[0]?.title ?? "Chapter 1");
+    activeChapterIdRef.current = nextActiveChapter?.id ?? "";
+    activeChapterRef.current = nextActiveChapter?.title ?? "Chapter 1";
+    setActiveChapterId(nextActiveChapter?.id ?? "");
+    setActiveChapter(nextActiveChapter?.title ?? "Chapter 1");
     setIsStudioEditorOpen(true);
     setStudioMessage(message);
     setStudioNotice(null);
@@ -3975,7 +4034,7 @@ export function StudioPage({
       .then((hydratedChapters) => {
         suppressAutoSavePassesRef.current += 2;
         setChapters(
-          ensureUniqueStudioChapterTitles(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)])
+          normalizeStudioChapters(hydratedChapters.length ? hydratedChapters : [createInitialStudioChapter(0)])
         );
       })
       .catch(() => undefined);
@@ -4151,6 +4210,7 @@ export function StudioPage({
 
     const latestBody = overrides?.latestBody ?? getLatestChapterBody();
     const targetIndex = Math.max(
+      chaptersRef.current.findIndex((chapter) => chapter.id && chapter.id === activeChapterIdRef.current),
       chaptersRef.current.findIndex((chapter) => chapter.title === activeChapterRef.current),
       0
     );
@@ -4333,10 +4393,10 @@ export function StudioPage({
       ...createInitialStudioChapter(snapshot.length),
       title: getUniqueChapterTitle(`Chapter ${snapshot.length + 1}`, snapshot)
     };
-    const nextChapters = ensureUniqueStudioChapterTitles([...snapshot, nextChapter]);
+    const nextChapters = normalizeStudioChapters([...snapshot, nextChapter]);
     chaptersRef.current = nextChapters;
     setChapters(nextChapters);
-    applyChapterSelection(nextChapter.title, nextChapters);
+    applyChapterSelection({ id: nextChapter.id, title: nextChapter.title }, nextChapters);
     setStudioMessage(`${nextChapter.title} added. Start fresh in this chapter.`);
     setDraftHistory((current) => [`${nextChapter.title} added.`, ...current].slice(0, 6));
     invalidatePreviewReview();
@@ -4480,18 +4540,18 @@ export function StudioPage({
     }
   };
 
-  const handleChapterSwitch = (chapterTitle: string, isLocked: boolean) => {
+  const handleChapterSwitch = (chapter: Pick<StudioChapter, "id" | "title">, isLocked: boolean) => {
     if (isLocked) {
       setStudioMessage("This chapter slot is premium. Subscribe to unlock more than 2 chapters.");
       setDraftHistory((current) => ["Premium chapter slot tapped.", ...current].slice(0, 6));
       return;
     }
 
-    if (chapterTitle === activeChapterRef.current) {
+    if ((chapter.id && chapter.id === activeChapterIdRef.current) || (!chapter.id && chapter.title === activeChapterRef.current)) {
       return;
     }
 
-    setChapterSwitchPrompt({ title: chapterTitle });
+    setChapterSwitchPrompt({ id: chapter.id, title: chapter.title });
   };
 
   const confirmChapterSwitch = () => {
@@ -4499,7 +4559,7 @@ export function StudioPage({
       return;
     }
 
-    switchToChapter(chapterSwitchPrompt.title);
+    switchToChapter(chapterSwitchPrompt);
     setChapterSwitchPrompt(null);
   };
 
@@ -4868,12 +4928,12 @@ export function StudioPage({
                   className={
                     chapter.isLocked
                       ? "chapter-pill chapter-pill-locked"
-                      : activeChapter === chapter.title
+                      : activeChapterEntryId && chapter.id === activeChapterEntryId
                         ? "chapter-pill active-chapter-pill"
                         : "chapter-pill"
                   }
-                  key={chapter.chapterLabel}
-                  onClick={() => handleChapterSwitch(chapter.title, chapter.isLocked)}
+                  key={chapter.id ?? chapter.chapterLabel}
+                  onClick={() => handleChapterSwitch({ id: chapter.id, title: chapter.title }, chapter.isLocked)}
                   type="button"
                 >
                   <small>{chapter.chapterLabel}</small>
@@ -4946,7 +5006,7 @@ export function StudioPage({
                 <SectionLabelComponent>CURRENT_CHAPTER</SectionLabelComponent>
                 <span className="studio-section-step">Step 2</span>
                 <span className="current-chapter-kicker">
-                  Working on {chapterSlots.find((chapter) => chapter.title === activeChapter)?.chapterLabel ?? "Current chapter"}
+                  Working on {chapterSlots.find((chapter) => chapter.id === activeChapterEntryId)?.chapterLabel ?? "Current chapter"}
                 </span>
                 <p className="studio-section-helper">Write the chapter body here. Finish one strong chapter before worrying about the rest.</p>
                 <div className="chapter-heading-row">

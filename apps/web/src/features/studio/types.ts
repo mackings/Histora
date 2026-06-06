@@ -37,6 +37,14 @@ export const createEmptyTimelineEntry = (): StudioTimelineEntry => ({
   body: ""
 });
 
+export const createStudioChapterId = () => {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `chapter-${crypto.randomUUID()}`;
+  }
+
+  return `chapter-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+};
+
 export type StudioChapter = {
   id?: string;
   title: string;
@@ -57,6 +65,7 @@ export type StudioChapter = {
 };
 
 export const createInitialStudioChapter = (index: number): StudioChapter => ({
+  id: createStudioChapterId(),
   title: `Chapter ${index + 1}`,
   type: "MEMORY",
   words: 0,

@@ -260,15 +260,15 @@ function normalizeCollaborativeChapters(
   actor: StoryEditorIdentity,
   occurredAt: Date
 ) {
-  return input.chapters.map((chapter, chapterIndex) => {
-    const existingChapter =
-      existingStory?.chapters.find((entry) => entry.id === chapter.id) ??
-      existingStory?.chapters[chapterIndex];
+  return input.chapters.map((chapter) => {
+    const existingChapter = chapter.id
+      ? existingStory?.chapters.find((entry) => entry.id === chapter.id)
+      : undefined;
     const normalizedChapterId = chapter.id || existingChapter?.id || buildStoryPartId("chapter");
-    const normalizedMoments = chapter.moments.map((moment, momentIndex) => {
-      const existingMoment =
-        existingChapter?.moments.find((entry) => entry.id === moment.id) ??
-        existingChapter?.moments[momentIndex];
+    const normalizedMoments = chapter.moments.map((moment) => {
+      const existingMoment = moment.id
+        ? existingChapter?.moments.find((entry) => entry.id === moment.id)
+        : undefined;
       const normalizedMomentId = moment.id || existingMoment?.id || buildStoryPartId("moment");
       const momentChanged =
         !existingMoment ||

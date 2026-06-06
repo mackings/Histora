@@ -699,31 +699,16 @@ func momentTextContent(moments []MomentInput) []MomentContent {
 
 func (s *Service) storedChapter(input ChapterInput, existing *storydomain.Story, index int, editorName string, editorUsername string, occurredAt time.Time) storydomain.Chapter {
 	chapterID := input.ID
-	var existingChapter *storydomain.Chapter
-	if existing != nil {
-		for chapterIndex := range existing.Chapters {
-			if existing.Chapters[chapterIndex].ID == input.ID || chapterIndex == index {
-				existingChapter = &existing.Chapters[chapterIndex]
-				if chapterID == "" {
-					chapterID = existing.Chapters[chapterIndex].ID
-				}
-				break
-			}
-		}
-	}
 	if chapterID == "" {
 		chapterID = "chapter-" + bson.NewObjectID().Hex()
 	}
 	moments := make([]storydomain.Moment, 0, len(input.Moments))
-	for momentIndex, moment := range input.Moments {
+	for _, moment := range input.Moments {
 		happenedAt, _ := time.Parse(time.RFC3339, moment.HappenedAt)
 		if happenedAt.IsZero() {
 			happenedAt = occurredAt
 		}
 		momentID := moment.ID
-		if existingChapter != nil && momentIndex < len(existingChapter.Moments) && momentID == "" {
-			momentID = existingChapter.Moments[momentIndex].ID
-		}
 		if momentID == "" {
 			momentID = "moment-" + bson.NewObjectID().Hex()
 		}
