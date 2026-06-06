@@ -1410,6 +1410,7 @@ export function StudioPage({
   const [transcriptionLanguage, setTranscriptionLanguage] = useState("en-US");
   const [mediaError, setMediaError] = useState<string | null>(null);
   const chapterBodyRef = useRef<HTMLDivElement | null>(null);
+  const editorChapterTitleRef = useRef("Chapter 1");
   const chapterEditorSectionRef = useRef<HTMLElement | null>(null);
   const mediaSectionRef = useRef<HTMLElement | null>(null);
   const publishSectionRef = useRef<HTMLElement | null>(null);
@@ -1476,6 +1477,10 @@ export function StudioPage({
   const chapterBody = activeChapterEntry?.body ?? "";
   const getLatestChapterBody = () => {
     const editorHtml = chapterBodyRef.current?.innerHTML;
+    if (typeof editorHtml === "string" && editorChapterTitleRef.current === activeChapterRef.current) {
+      return editorHtml;
+    }
+
     if ((editorHtml ?? "") === "" && chapterBody) {
       return chapterBody;
     }
@@ -1902,6 +1907,7 @@ export function StudioPage({
     currentStoryRevisionRef.current = 0;
     currentStoryStatusRef.current = "draft";
     currentStoryIdRef.current = null;
+    editorChapterTitleRef.current = initialChapter.title;
     chaptersRef.current = [initialChapter];
     imageAttachmentsRef.current = [];
     voiceNotesRef.current = [];
@@ -2131,8 +2137,14 @@ export function StudioPage({
     }
 
     const editor = chapterBodyRef.current;
-    if (editor && editor.innerHTML !== chapterBody) {
-      editor.innerHTML = sanitizeStudioRichText(chapterBody);
+    if (editor) {
+      const sanitizedChapterBody = sanitizeStudioRichText(chapterBody);
+      if (editor.innerHTML !== sanitizedChapterBody) {
+        editor.innerHTML = sanitizedChapterBody;
+      }
+      if (editor.innerHTML === sanitizedChapterBody) {
+        editorChapterTitleRef.current = activeChapter;
+      }
     }
   }, [chapterBody, activeChapter, isEnteringStudio, isStudioEditorOpen]);
 
@@ -2535,6 +2547,8 @@ export function StudioPage({
 
   const applyChapterSelection = (chapterTitle: string, sourceChapters: StudioChapter[]) => {
     const targetChapter = sourceChapters.find((chapter) => chapter.title === chapterTitle);
+    activeChapterRef.current = chapterTitle;
+    editorChapterTitleRef.current = chapterTitle;
     setActiveChapter(chapterTitle);
     setChapterType(targetChapter?.type ?? "memory");
     setImageAttachments(sanitizeStudioAttachments(targetChapter?.imageAttachments ?? []));
@@ -2567,6 +2581,8 @@ export function StudioPage({
             }
           : chapter
       );
+      activeChapterRef.current = uniqueTitle;
+      editorChapterTitleRef.current = uniqueTitle;
       setActiveChapter(uniqueTitle);
       return updatedChapters;
     });
